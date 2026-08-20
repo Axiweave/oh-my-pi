@@ -741,6 +741,18 @@ export const SETTINGS_SCHEMA = {
 			options: "runtime",
 		},
 	},
+	"composerStyle.footerMode": {
+		type: "enum",
+		values: ["default", "claude3"] as const,
+		default: "default",
+		ui: {
+			tab: "appearance",
+			group: "Composer",
+			label: "Status Line Footer",
+			description:
+				"Render a Claude Code-style 3-line footer (model/context, git/cwd, hints) below the input, for every layout",
+		},
+	},
 
 	// Status line
 	"statusLine.preset": {

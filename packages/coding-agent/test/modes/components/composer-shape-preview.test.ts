@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { COMPOSER_SHAPE_VALUES, type ComposerShape } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import {
 	ComposerShapePreview,
@@ -81,6 +81,11 @@ describe("composer shape preview", () => {
 			},
 			renderBottomBar: (_width: number, groups: "left" | "full", previewTitle?: string) =>
 				`BOTTOM-${groups.toUpperCase()} ${previewTitle ?? ""}`,
+			renderClaudeFooter: (_width: number, previewTitle?: string) => [
+				`FOOTER-1 ${previewTitle ?? ""}`,
+				"FOOTER-2",
+				"FOOTER-3",
+			],
 		};
 
 		const box = renderComposerShapePreview("box", 80, status).join("\n");
@@ -159,6 +164,105 @@ describe("composer shape preview", () => {
 		}
 
 		expect(getComposerShapeOptions().some(option => option.value === "extension-dock")).toBe(false);
+	});
+
+	it("installs the claude-footer shape and renders its 3-line footer", async () => {
+		await setTheme("dark");
+		// Echo mock: the stand-in title must be forwarded to the footer, not
+		// glued onto the rendered content.
+		const status = {
+			getTopBorder: (_width: number, previewTitle?: string) => {
+				const content = `TOPBAR ${previewTitle ?? ""}`;
+				return { content, width: content.length };
+			},
+			getBandTopBorder: (_width: number, previewTitle?: string) => {
+				const content = `BAND ${previewTitle ?? ""}`;
+				return { content, width: content.length };
+			},
+			getStandaloneTopBorder: (_width: number, previewTitle?: string) => {
+				const content = `CHIP ${previewTitle ?? ""}`;
+				return { content, width: content.length };
+			},
+			renderBottomBar: (_width: number, groups: "left" | "full", previewTitle?: string) =>
+				`BOTTOM-${groups.toUpperCase()} ${previewTitle ?? ""}`,
+			renderClaudeFooter: (_width: number, previewTitle?: string) => [
+				`FOOTER-1 ${previewTitle ?? ""}`,
+				"FOOTER-2",
+				"FOOTER-3",
+			],
+		};
+		const dispose = installExtensionComposerShape({
+			label: "Claude Code (3-line footer)",
+			description: "Top rule with a 3-line model/context + git/cwd + hints footer",
+			style: {
+				id: "claude-footer",
+				sideBorders: false,
+				verticalChrome: 1,
+				statusAttachment: "none",
+				bottomBar: "full",
+				footerMode: "claude3",
+				bottomBarGap: false,
+				defaultPromptGutter: "❯ ",
+				defaultPaddingX: () => 0,
+				sideChromeWidth: p => p,
+				renderTop: context => context.borderColor(context.box.horizontal.repeat(context.width)),
+				renderRow: context => [context.gutter + context.text + context.pad],
+				renderBottom: () => undefined,
+			},
+		});
+
+		try {
+			const option = getComposerShapeOptions().find(entry => entry.value === "claude-footer");
+			expect(option).toEqual({
+				value: "claude-footer",
+				label: "Claude Code (3-line footer)",
+				description: "Top rule with a 3-line model/context + git/cwd + hints footer",
+			});
+			const rendered = renderComposerShapePreview("claude-footer", 80, status).join("\n");
+			expect(rendered).toContain("FOOTER-1"); // footer rows replace chip + bottom bar
+			expect(rendered).not.toContain("CHIP");
+			expect(rendered).not.toContain("BOTTOM-");
+		} finally {
+			dispose();
+		}
+
+		expect(getComposerShapeOptions().some(option => option.value === "claude-footer")).toBe(false);
+	});
+
+	it("renders the 3-line footer for any shape when composerStyle.footerMode is claude3", async () => {
+		await setTheme("dark");
+		const status = {
+			getTopBorder: (_width: number, previewTitle?: string) => {
+				const content = `TOPBAR ${previewTitle ?? ""}`;
+				return { content, width: content.length };
+			},
+			getBandTopBorder: (_width: number, previewTitle?: string) => {
+				const content = `BAND ${previewTitle ?? ""}`;
+				return { content, width: content.length };
+			},
+			getStandaloneTopBorder: (_width: number, previewTitle?: string) => {
+				const content = `CHIP ${previewTitle ?? ""}`;
+				return { content, width: content.length };
+			},
+			renderBottomBar: (_width: number, groups: "left" | "full", previewTitle?: string) =>
+				`BOTTOM-${groups.toUpperCase()} ${previewTitle ?? ""}`,
+			renderClaudeFooter: (_width: number, previewTitle?: string) => [
+				`FOOTER-1 ${previewTitle ?? ""}`,
+				"FOOTER-2",
+				"FOOTER-3",
+			],
+		};
+		settings.override("composerStyle.footerMode", "claude3");
+		try {
+			const claude = renderComposerShapePreview("claude", 80, status).join("\n");
+			expect(claude).toContain("FOOTER-1"); // config override: footer replaces the bottom bar
+			expect(claude).not.toContain("BOTTOM-");
+			const pi = renderComposerShapePreview("pi", 80, status).join("\n");
+			expect(pi).toContain("FOOTER-1");
+			expect(pi).not.toContain("BOTTOM-");
+		} finally {
+			settings.clearOverride("composerStyle.footerMode");
+		}
 	});
 
 	it("renders preview inside SettingsSelectorComponent submenu without crashing", async () => {

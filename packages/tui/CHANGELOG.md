@@ -179,6 +179,10 @@
 
 - Added optional `getNativeScrollbackLiveRegionPinnedStart()` hook to allow nested transcripts to pin a later dashboard without shifting the earliest live seam.
 
+### Changed
+
+- Composer styles can declare a multi-line plain footer layout via `footerMode: "claude3"`, which the host status area renders flush below the input; the `claude3-footer` example extension demonstrates it.
+
 ## [17.4.0] - 2026-08-20
 
 ### Added

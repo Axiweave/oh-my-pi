@@ -1,0 +1,7 @@
+{
+  "name": "claude3-footer",
+  "version": "0.0.0",
+  "omp": {
+    "extensions": ["./index.ts"]
+  }
+}

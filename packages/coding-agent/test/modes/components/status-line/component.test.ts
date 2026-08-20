@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { Settings } from "../../../../src/config/settings";
+import { Settings, settings } from "../../../../src/config/settings";
 import { StatusLineComponent } from "../../../../src/modes/components/status-line/component";
 import { loadTheme } from "../../../../src/modes/theme/loader";
 import { getThemeByName, setThemeInstance } from "../../../../src/modes/theme/theme";
@@ -103,6 +103,59 @@ describe("StatusLineComponent", () => {
 		// SGR codes might be included, so we check if the stripped content contains "Prewalk"
 		const stripped = border.content.replace(/\x1b\[[0-9;]*m/g, "");
 		expect(stripped).toContain("Prewalk");
+	});
+
+	it("renders the claude 3-line footer with model/ctx, git/cwd and hints", () => {
+		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+		statusLine.setComposerStyle({
+			statusAttachment: "none",
+			bottomBar: "full",
+			bottomBarGap: false,
+			footerMode: "claude3",
+		});
+		statusLine.setHookStatus("advisor", "advisor running");
+
+		const lines = statusLine.render(200);
+		const stripped = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+		expect(lines.length).toBe(3);
+		expect(stripped[0]).toContain("Model:");
+		expect(stripped[0]).toContain("Ctx:");
+		expect(stripped[1]).toContain("cwd:");
+		expect(stripped[2]).toContain("advisor running");
+	});
+
+	it("omits the claude footer hints row when no hints are active", () => {
+		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+		statusLine.setComposerStyle({
+			statusAttachment: "none",
+			bottomBar: "full",
+			bottomBarGap: false,
+			footerMode: "claude3",
+		});
+
+		const lines = statusLine.render(200);
+		expect(lines.length).toBe(2); // model/ctx + git/cwd only
+	});
+
+	it("renders the claude footer for any shape when composerStyle.footerMode is claude3", () => {
+		settings.override("composerStyle.footerMode", "claude3");
+		try {
+			const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+			// No footerMode on the style — the config override forces the footer.
+			statusLine.setComposerStyle({ statusAttachment: "none", bottomBar: "full", bottomBarGap: false });
+			statusLine.setHookStatus("advisor", "advisor running");
+
+			const lines = statusLine.render(200);
+			const stripped = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+			expect(lines.length).toBe(3);
+			expect(stripped[0]).toContain("Model:");
+			expect(stripped[1]).toContain("cwd:");
+			expect(stripped[2]).toContain("advisor running");
+		} finally {
+			settings.clearOverride("composerStyle.footerMode");
+		}
 	});
 	it("renders primary and advisor costs separately with subscription indicator in Unicode preset", () => {
 		const statusLine = new StatusLineComponent(

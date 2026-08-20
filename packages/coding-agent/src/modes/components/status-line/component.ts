@@ -19,6 +19,7 @@ import { settings } from "../../../config/settings";
 import type { AgentSession } from "../../../session/agent-session";
 import type { OAuthAccountIdentity } from "../../../session/auth-storage";
 import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
+import { shortenPath } from "../../../tools/render-utils";
 import { type ActiveRepoContext, resolveActiveRepoContextSync } from "../../../utils/active-repo-context";
 import { withTimeoutSignal } from "../../../utils/fetch-timeout";
 import { GH_COMMAND_TIMEOUT_MS, github } from "../../../utils/github";
@@ -360,6 +361,8 @@ export class StatusLineComponent implements Component {
 	#standalone: false | "full" | "left-only" = false;
 	#topAttachment: ComposerStyle["statusAttachment"] = "top-border";
 	#standaloneGap = false;
+	/** Multi-line plain footer layout (claude composer): model/ctx, git/cwd, hints. */
+	#claudeFooterMode = false;
 	#autocompleteActiveProbe: (() => boolean) | undefined;
 	#renderRevision = 0;
 	#settings: StatusLineSettings = {};
@@ -2347,10 +2350,13 @@ export class StatusLineComponent implements Component {
 	 * `bottomBarGap` inserts a blank spacer row above the bar for styles whose
 	 * editor has no bottom chrome.
 	 */
-	setComposerStyle(style: Pick<ComposerStyle, "statusAttachment" | "bottomBar" | "bottomBarGap">): void {
+	setComposerStyle(
+		style: Pick<ComposerStyle, "statusAttachment" | "bottomBar" | "bottomBarGap" | "footerMode">,
+	): void {
 		this.#standalone = style.bottomBar === "none" ? false : style.bottomBar === "left" ? "left-only" : "full";
 		this.#topAttachment = style.statusAttachment;
 		this.#standaloneGap = style.bottomBarGap;
+		this.#claudeFooterMode = style.footerMode === "claude3" || settings.get("composerStyle.footerMode") === "claude3";
 	}
 
 	/** While true, the standalone bar yields its row to the editor's autocomplete menu. */
@@ -2386,7 +2392,14 @@ export class StatusLineComponent implements Component {
 	 * active layout is used. Ignores the autocomplete probe: previews always
 	 * render.
 	 */
-	getPreviewLines(width: number, style?: Pick<ComposerStyle, "statusAttachment" | "bottomBar">): string[] {
+	getPreviewLines(
+		width: number,
+		style?: Pick<ComposerStyle, "statusAttachment" | "bottomBar" | "footerMode">,
+	): string[] {
+		const claudeFooter =
+			style === undefined
+				? this.#claudeFooterMode
+				: style.footerMode === "claude3" || settings.get("composerStyle.footerMode") === "claude3";
 		const attachment = style?.statusAttachment ?? this.#topAttachment;
 		const bottomBar =
 			style?.bottomBar ?? (this.#standalone === false ? "none" : this.#standalone === "left-only" ? "left" : "full");
@@ -2410,7 +2423,9 @@ export class StatusLineComponent implements Component {
 			});
 			if (rule !== undefined) lines.push(rule);
 		}
-		if (bottomBar !== "none") {
+		if (claudeFooter) {
+			lines.push(...this.renderClaudeFooter(width));
+		} else if (bottomBar !== "none") {
 			const main = this.renderBottomBar(width, bottomBar);
 			if (main) lines.push(main);
 		}
@@ -2419,20 +2434,72 @@ export class StatusLineComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const lines: string[] = [];
-		if (this.#standalone && !this.#autocompleteActiveProbe?.()) {
-			const content = this.renderBottomBar(width, this.#standalone === "left-only" ? "left" : "full");
-			if (content) {
-				if (this.#standaloneGap) lines.push("");
-				lines.push(content);
+		if (!this.#autocompleteActiveProbe?.()) {
+			if (this.#claudeFooterMode) {
+				lines.push(...this.renderClaudeFooter(width));
+			} else if (this.#standalone) {
+				const content = this.renderBottomBar(width, this.#standalone === "left-only" ? "left" : "full");
+				if (content) {
+					if (this.#standaloneGap) lines.push("");
+					lines.push(content);
+				}
 			}
 		}
 		const showHooks = this.#settings.showHookStatus ?? true;
-		if (showHooks && this.#hookStatuses.size > 0) {
+		if (!this.#claudeFooterMode && showHooks && this.#hookStatuses.size > 0) {
 			const hookLines = Array.from(this.#hookStatuses.entries())
 				.sort(([a], [b]) => a.localeCompare(b))
 				.map(([, text]) => truncateToWidth(sanitizeStatusText(text), width));
 			lines.push(...hookLines);
 		}
 		return lines;
+	}
+
+	/**
+	 * Claude Code-style 3-line footer: model + context, git branch + cwd, then
+	 * a hints row composed from active modes, subagents, collab and hook
+	 * statuses (omitted when nothing is active). Plain text, dimmed, truncated
+	 * to the terminal width. `previewTitle` is accepted for the composer
+	 * preview status-source contract and unused by the fixed footer lines.
+	 */
+	renderClaudeFooter(width: number, _previewTitle?: string): string[] {
+		const settings = this.#resolveSettings();
+		const ctx = this.#buildSegmentContext(width, settings.segmentOptions, true, true, false);
+
+		const state = this.session.state;
+		let modelName = state.model?.name || state.model?.id || "no-model";
+		if (modelName.startsWith("Claude ")) modelName = modelName.slice(7);
+
+		const ctxLabel =
+			ctx.contextPercent !== null ? `${Math.round(ctx.contextPercent)}%` : formatNumber(ctx.contextTokens);
+		const line1 = `Model: ${modelName} | Ctx: ${ctxLabel}`;
+
+		const branch = ctx.git.branch;
+		const gitPart = branch ? `${theme.icon.git} ${branch} | ` : "";
+		const cwd = shortenPath(ctx.activeRepo?.cwd ?? getProjectDir());
+		const line2 = `${gitPart}cwd: ${cwd}`;
+
+		const hints = this.#renderClaudeFooterHints(ctx);
+		const lines = [line1, line2];
+		if (hints) lines.push(hints);
+		return lines.map(line => theme.fg("dim", truncateToWidth(line, width)));
+	}
+
+	#renderClaudeFooterHints(ctx: SegmentContext): string {
+		const parts: string[] = [];
+		const mode = renderSegment("mode", ctx);
+		if (mode.visible && mode.content) parts.push(mode.content);
+		const subagentBadge = this.#subagentBadgeText();
+		if (subagentBadge) parts.push(subagentBadge);
+		if (this.#focusedAgentId) parts.push(`← ${this.#focusedAgentId}`);
+		const collab = renderSegment("collab", ctx);
+		if (collab.visible && collab.content) parts.push(collab.content);
+		if (this.#hookStatuses.size > 0) {
+			const hookParts = Array.from(this.#hookStatuses.entries())
+				.sort(([a], [b]) => a.localeCompare(b))
+				.map(([, text]) => sanitizeStatusText(text));
+			parts.push(...hookParts);
+		}
+		return parts.join(" · ");
 	}
 }

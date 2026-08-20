@@ -87,6 +87,9 @@ export interface ComposerStyle {
 	readonly statusAttachment: "top-border" | "top-band" | "top-rule-chip" | "none";
 	/** Which segment groups the standalone bottom status bar shows. */
 	readonly bottomBar: "none" | "left" | "full";
+	/** Multi-line plain footer layout for the standalone status bar (claude).
+	 * Absent, the status line renders its usual single-row segment bar. */
+	readonly footerMode?: "claude3";
 	/** Insert a blank spacer row between the editor and the standalone bottom
 	 * bar. Styles without bottom chrome need it so the bar doesn't sit flush
 	 * against the last input row. */

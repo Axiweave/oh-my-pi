@@ -572,6 +572,11 @@
 - Added `qwenTemplateReasoningEffort` to the `models.yml` `compat` schema, so the auto-enabled Qwen 3.8+ template effort dialect (`chat_template_kwargs.reasoning_effort`) can be switched off per provider/model for strict local servers that reject unknown `chat_template_kwargs`.
 - Extensions can provide a normalized `usage` provider through `pi.registerProvider()`. Its reports now flow through AuthStorage caching, history, and usage displays, and the override is removed when the extension provider is unregistered.
 
+### Changed
+
+- Composer shapes can opt into a Claude Code-style 3-line footer — model/context, git branch + cwd, then active-mode/hook hints — via `footerMode: "claude3"`; the new `claude3-footer` example extension registers it as the installable `claude-footer` shape.
+- `composerStyle.footerMode: claude3` — render the Claude Code-style 3-line footer below the input for any composer shape, straight from config.
+
 ## [17.4.0] - 2026-08-20
 
 ### Added

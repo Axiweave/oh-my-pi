@@ -480,6 +480,7 @@ export class SelectorController {
 				this.ctx.statusLine.setAutoCompactEnabled(value as boolean);
 				break;
 			case "composer.shape":
+			case "composerStyle.footerMode":
 				this.ctx.syncComposerShape();
 				break;
 			case "advisor.enabled":

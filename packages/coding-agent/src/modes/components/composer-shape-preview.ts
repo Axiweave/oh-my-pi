@@ -16,6 +16,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import { settings } from "../../config/settings";
 import type { ComposerShape } from "../../config/settings-schema";
 import { theme } from "../theme/theme";
 
@@ -33,6 +34,8 @@ export interface ComposerPreviewStatusSource {
 	getStandaloneTopBorder(width: number, previewTitle?: string): { content: string; width: number };
 	/** Plain standalone bottom bar carrying the given segment groups. */
 	renderBottomBar(width: number, groups: "left" | "full", previewTitle?: string): string;
+	/** Claude-style multi-line footer (model/ctx, git/cwd, hints). */
+	renderClaudeFooter?(width: number, previewTitle?: string): string[];
 }
 
 export interface ComposerShapePreviewOptions {
@@ -100,7 +103,11 @@ export function renderComposerShapePreview(
 	const bottom = style.renderBottom(ctx);
 	if (bottom !== undefined) lines.push(bottom);
 
-	if (style.bottomBar !== "none" && status) {
+	if (style.footerMode === "claude3" || settings.get("composerStyle.footerMode") === "claude3") {
+		if (status?.renderClaudeFooter) {
+			lines.push(...status.renderClaudeFooter(previewWidth, PREVIEW_TITLE));
+		}
+	} else if (style.bottomBar !== "none" && status) {
 		const bar = status.renderBottomBar(previewWidth, style.bottomBar, PREVIEW_TITLE);
 		if (bar) {
 			if (style.bottomBarGap) lines.push("");
