@@ -33,6 +33,10 @@ export interface ComposerPreferences {
 	readonly spellingTypoDetection: boolean;
 	readonly spellingAutocomplete: boolean;
 	readonly spellingAutocorrect: boolean;
+	// Dock the composer group (hook widgets + editor + status line) to the
+	// viewport bottom so collapsing tool output cannot pull the prompt up; the
+	// transcript above absorbs the slack.
+	readonly pinBottom: boolean;
 }
 
 /** Settings-schema-compatible defaults used when constructing a dependency-free composer. */
@@ -47,6 +51,7 @@ export const COMPOSER_DEFAULTS: ComposerPreferences = {
 	spellingTypoDetection: true,
 	spellingAutocomplete: true,
 	spellingAutocorrect: false,
+	pinBottom: true,
 };
 
 /** Welcome data that can be supplied initially or patched as startup resolves it. */
@@ -154,6 +159,13 @@ export class Composer implements TerminalFrameProvider {
 	// frame may pull part of it down before the normal buffer is borrowed.
 	#retiredHeaderStart = 0;
 	#resizeRetiredHeaderStart: number | undefined;
+	// Cumulative rows ever committed to native terminal history. Bounds how
+	// far pinBottom padding may inflate the viewport: the terminal's anchor
+	// (tracked writer-side, not visible here) only ever advances by exactly
+	// this many rows, so a padded viewport must never claim more of the
+	// screen than `height - #committedHistoryRows` or the writer's anchor
+	// math clamps backward over already-committed rows, overwriting them.
+	#committedHistoryRows = 0;
 	#lastNormalRows = 0;
 	#lastInterruptAt = 0;
 	#started = false;
@@ -221,7 +233,11 @@ export class Composer implements TerminalFrameProvider {
 			: [this.#header, this.#bootstrapInputGap, this.editor, this.#statusHost];
 		const transcriptIndex = roots.findIndex(root => root instanceof TranscriptContainer);
 		if (transcriptIndex < 0) {
-			return { viewport: this.#renderRoots(roots, width).slice(-rows) };
+			const rendered = this.#renderRoots(roots, width);
+			if (this.#preferences.pinBottom && rendered.length < rows) {
+				return { viewport: [...new Array(rows - rendered.length).fill(""), ...rendered] };
+			}
+			return { viewport: rendered.slice(-rows) };
 		}
 		const transcript = roots[transcriptIndex] as TranscriptContainer;
 		const preRoots = this.#renderRoots(roots.slice(0, transcriptIndex), width);
@@ -236,12 +252,34 @@ export class Composer implements TerminalFrameProvider {
 		const before = [...headerRows, ...preRoots];
 		const now = performance.now();
 		const frame: AnimationFrame = { now, tick: Math.floor(now / 80) };
-		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - after.length), frame);
-		const composed = [...before, ...active, ...after];
+		const capacity = Math.max(0, rows - before.length - after.length);
+		let active = transcript.renderViewport(width, capacity, frame);
 		if (history !== undefined && this.#offeredHistory?.source === "header") {
-			const visibleHeaderRows = Math.max(0, rows - composed.length);
+			const visibleHeaderRows = Math.max(0, rows - before.length - active.length - after.length);
 			this.#retiredHeaderStart = Math.max(0, history.rows.length - visibleHeaderRows);
 		}
+		// Pad the live tail with blank rows so the composer group (`after`) stays
+		// glued to the viewport bottom instead of floating up when the
+		// transcript is shorter than the available space. Applied after the
+		// header-retirement bookkeeping above, which must see the real
+		// (unpadded) content extent to know how much of a retired header still
+		// peeks into the bottom of the viewport. Only while nothing has ever
+		// committed to native history (and this frame isn't about to commit
+		// either): once real history exists, the terminal's own reflow makes
+		// the composer's row accounting unreliable for anchor purposes (a wider
+		// resize rewraps committed rows into fewer physical lines than this
+		// process ever tracked), so padding there risks the writer's anchor
+		// clamping back over already-committed rows instead of staying below
+		// them.
+		if (
+			this.#preferences.pinBottom &&
+			this.#committedHistoryRows === 0 &&
+			history === undefined &&
+			active.length < capacity
+		) {
+			active = active.concat(new Array(capacity - active.length).fill(""));
+		}
+		const composed = [...before, ...active, ...after];
 		return {
 			history,
 			viewport: composed.length <= rows ? composed : composed.slice(-rows),
@@ -264,6 +302,7 @@ export class Composer implements TerminalFrameProvider {
 				if (offered.source.headerRows !== undefined) this.#retiredHeaderRows = offered.source.headerRows;
 			}
 		}
+		this.#committedHistoryRows += offered.rows.length;
 		this.#offeredHistory = undefined;
 		if (this.#historyReplayRequested) this.#startHistoryReplay();
 	}
@@ -285,6 +324,13 @@ export class Composer implements TerminalFrameProvider {
 			header = this.#reflowRetiredHeader(width, this.#resizeRetiredHeaderStart);
 		} else {
 			header = this.#header.render(width);
+		}
+		// Matches renderFrame's pin-bottom gate: once the header has retired,
+		// this reflow is only an approximation of the real (fixed-width)
+		// committed rows, so padding here would drift out of sync with the
+		// settled frame's anchor position by the reflow delta.
+		if (this.#preferences.pinBottom && !this.#headerRetired && header.length + tail.length < rows) {
+			return [...header, ...new Array(rows - header.length - tail.length).fill(""), ...tail];
 		}
 		const rendered = [...header, ...tail];
 		return rendered.length <= rows ? rendered : rendered.slice(rendered.length - rows);
@@ -308,6 +354,16 @@ export class Composer implements TerminalFrameProvider {
 		// stays valid and is accepted by the flush loop.
 		this.#historyReplayRequested = false;
 		this.#headerReplayPending = false;
+	}
+
+	/** Re-offer the complete finalized prefix after a display reset or resize replay. */
+	resetHistory(): void {
+		this.#offeredHistory = undefined;
+		this.#headerRetired = false;
+		this.#retiredHeaderRows = undefined;
+		this.#retiredHeaderStart = 0;
+		this.#resizeRetiredHeaderStart = undefined;
+		this.#committedHistoryRows = 0;
 		for (const child of this.#runtimeChildren) {
 			if (child instanceof TranscriptContainer) child.cancelReplay();
 		}

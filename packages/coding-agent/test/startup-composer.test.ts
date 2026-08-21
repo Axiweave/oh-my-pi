@@ -73,6 +73,7 @@ describe("Composer prepaint", () => {
 			spellingTypoDetection: settings.get("spelling.typoDetection"),
 			spellingAutocomplete: settings.get("spelling.autocomplete"),
 			spellingAutocorrect: settings.get("spelling.autocorrect"),
+			pinBottom: settings.get("tui.pinComposerBottom"),
 		};
 	});
 
@@ -360,6 +361,7 @@ describe("Composer prepaint", () => {
 			spellingTypoDetection: getDefault("spelling.typoDetection"),
 			spellingAutocomplete: getDefault("spelling.autocomplete"),
 			spellingAutocorrect: getDefault("spelling.autocorrect"),
+			pinBottom: getDefault("tui.pinComposerBottom"),
 		});
 	});
 	it("renders the complete interactive welcome scene on the first frame", async () => {
@@ -512,6 +514,7 @@ describe("Composer prepaint", () => {
 			spellingTypoDetection: settings.get("spelling.typoDetection"),
 			spellingAutocomplete: settings.get("spelling.autocomplete"),
 			spellingAutocorrect: settings.get("spelling.autocorrect"),
+			pinBottom: config.pinBottom,
 			theme: {},
 		});
 		await terminal.waitForRender();

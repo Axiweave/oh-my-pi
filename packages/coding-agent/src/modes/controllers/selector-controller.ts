@@ -622,6 +622,10 @@ export class SelectorController {
 				this.ctx.ui.invalidate();
 				this.ctx.ui.requestRender();
 				break;
+
+			case "tui.pinComposerBottom":
+				this.ctx.composer.setPreferences({ pinBottom: value as boolean });
+				break;
 			case "tui.resizeScrollback":
 				this.ctx.ui.setResizeScrollback(value as ResizeScrollbackMode);
 				break;

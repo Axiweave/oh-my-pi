@@ -865,6 +865,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			spellingTypoDetection: settings.get("spelling.typoDetection"),
 			spellingAutocomplete: settings.get("spelling.autocomplete"),
 			spellingAutocorrect: settings.get("spelling.autocorrect"),
+			pinBottom: settings.get("tui.pinComposerBottom"),
 		};
 		const wasStarted = composer?.started ?? false;
 		this.composer =

@@ -1370,6 +1370,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"tui.pinComposerBottom": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Pin Composer to Bottom",
+			description:
+				"Keep the input editor and status line docked to the bottom of the screen; when the transcript is short, blank space sits between them instead of the composer floating up",
+		},
+	},
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Model
 	// ────────────────────────────────────────────────────────────────────────
