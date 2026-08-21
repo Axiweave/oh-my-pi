@@ -105,7 +105,7 @@ import type { EffectiveExtensionRoots } from "../capability/types";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import type { ResolvedModelRoleValue } from "../config/model-resolver";
-import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
+import { expandPromptTemplate, type PromptTemplate, resolvePromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
 import {
@@ -5744,8 +5744,11 @@ export class AgentSession {
 			}
 		}
 
-		// Expand file-based prompt templates if requested
-		const expandedText = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
+		// Expand file-based prompt templates if requested; remember the match so the
+		// TUI can collapse the expanded body to a one-line card.
+		const templates = expandPromptTemplates ? [...this.#promptTemplates] : [];
+		const matchedPromptTemplate = resolvePromptTemplate(text, templates);
+		const expandedText = matchedPromptTemplate ? expandPromptTemplate(text, templates) : text;
 
 		// Magic keywords ("ultrathink", "orchestrate"): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
@@ -5825,7 +5828,13 @@ export class AgentSession {
 					synthetic: true,
 					userInitiated: options?.userInitiated === true ? true : undefined,
 				}
-			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
+			: {
+					role: "user" as const,
+					content: userContent,
+					attribution: promptAttribution,
+					timestamp: submittedAt,
+					...(matchedPromptTemplate ? { promptTemplate: matchedPromptTemplate.name } : {}),
+				};
 
 		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {

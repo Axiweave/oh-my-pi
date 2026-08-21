@@ -181,25 +181,31 @@ export async function loadPromptTemplates(options: LoadPromptTemplatesOptions = 
 }
 
 /**
+ * Match input text against a prompt template name (`/name [args]`).
+ * Returns the matching template, or undefined when the text is not a template invocation.
+ */
+export function resolvePromptTemplate(text: string, templates: PromptTemplate[]): PromptTemplate | undefined {
+	if (!text.startsWith("/")) return undefined;
+
+	const spaceIndex = text.indexOf(" ");
+	const templateName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+	return templates.find(t => t.name === templateName);
+}
+
+/**
  * Expand a prompt template if it matches a template name.
  * Returns the expanded content or the original text if not a template.
  */
 export function expandPromptTemplate(text: string, templates: PromptTemplate[]): string {
-	if (!text.startsWith("/")) return text;
+	const template = resolvePromptTemplate(text, templates);
+	if (!template) return text;
 
 	const spaceIndex = text.indexOf(" ");
-	const templateName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 	const argsString = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
-
-	const template = templates.find(t => t.name === templateName);
-	if (template) {
-		const args = parseCommandArgs(argsString);
-		const argsText = args.join(" ");
-		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(template.content);
-		const substituted = substituteArgs(template.content, args);
-		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
-		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
-	}
-
-	return text;
+	const args = parseCommandArgs(argsString);
+	const argsText = args.join(" ");
+	const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(template.content);
+	const substituted = substituteArgs(template.content, args);
+	const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+	return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
 }

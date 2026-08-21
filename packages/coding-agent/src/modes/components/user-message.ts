@@ -115,8 +115,9 @@ export class CollapsedSyntheticMessageComponent implements Component {
 	constructor(
 		private readonly text: string,
 		private readonly imageLinks?: readonly (string | undefined)[],
+		label?: string,
 	) {
-		this.#summary = summarizeSyntheticInput(text);
+		this.#summary = summarizeSyntheticInput(text, label);
 	}
 
 	/** ctrl+o toggle: reveal/hide the full Markdown body. */
@@ -167,17 +168,12 @@ function truncateSummary(text: string, maxWidth: number): string {
 	}
 	return `${out}…`;
 }
-
-/**
- * One-line summary for a collapsed synthetic input: `<label> · <size> · <n>
- * lines`. The label is the first Markdown heading's text (e.g. `Session
- * update`), falling back to `Synthetic input` when the body opens with none.
- */
-function summarizeSyntheticInput(text: string): string {
+/** One-line summary for a collapsed input: `<label> · <size> · <n> lines`. */
+function summarizeSyntheticInput(text: string, label?: string): string {
 	const size = formatBytes(Buffer.byteLength(text, "utf-8"));
 	const lineCount = text === "" ? 0 : text.split("\n").length;
 	const dot = theme.sep.dot.trim();
-	return `${syntheticInputLabel(text)} ${dot} ${size} ${dot} ${lineCount} line${lineCount === 1 ? "" : "s"}`;
+	return `${label ?? syntheticInputLabel(text)} ${dot} ${size} ${dot} ${lineCount} line${lineCount === 1 ? "" : "s"}`;
 }
 
 /** First Markdown heading text in `text`, else `Synthetic input`. */

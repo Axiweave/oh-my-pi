@@ -37,7 +37,7 @@ import { ToolActivityContainer } from "../../modes/components/tool-activity";
 import { ToolExecutionComponent, type ToolExecutionHandle } from "../../modes/components/tool-execution";
 import { TranscriptBlock, TranscriptContainer } from "../../modes/components/transcript-container";
 import { createUsageRowBlock, turnElapsedMs } from "../../modes/components/usage-row";
-import { UserMessageComponent } from "../../modes/components/user-message";
+import { CollapsedSyntheticMessageComponent, UserMessageComponent } from "../../modes/components/user-message";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../modes/controllers/tool-args-reveal";
 import { materializeImageReferenceLinksSync } from "../../modes/image-references";
 import { theme } from "../../modes/theme/theme";
@@ -276,16 +276,20 @@ export class UiHelpers {
 					const cached = options?.reuseSettledComponent
 						? this.ctx.transcriptMessageComponents.get(message)
 						: undefined;
-					let userComponent: UserMessageComponent;
-					if (cached instanceof UserMessageComponent) {
+					const templateName = message.role === "user" ? message.promptTemplate : undefined;
+					const imageLinks =
+						options?.imageLinks ??
+						imageLinksForMessage(
+							message,
+							this.ctx.viewSession.sessionManager.putBlobSync.bind(this.ctx.viewSession.sessionManager),
+						);
+					let userComponent: UserMessageComponent | CollapsedSyntheticMessageComponent;
+					if (templateName && !isSynthetic) {
+						userComponent = new CollapsedSyntheticMessageComponent(textContent, imageLinks, `/${templateName}`);
+						userComponent.setExpanded(this.ctx.toolOutputExpanded);
+					} else if (cached instanceof UserMessageComponent) {
 						userComponent = cached;
 					} else {
-						const imageLinks =
-							options?.imageLinks ??
-							imageLinksForMessage(
-								message,
-								this.ctx.viewSession.sessionManager.putBlobSync.bind(this.ctx.viewSession.sessionManager),
-							);
 						userComponent = new UserMessageComponent(textContent, isSynthetic, imageLinks);
 						this.ctx.transcriptMessageComponents.set(message, userComponent);
 					}
