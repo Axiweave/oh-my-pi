@@ -33,6 +33,7 @@ import "./cursor";
 import "./gemini";
 import "./opencode";
 import "./github";
+import "./ide";
 import "./mcp-json";
 import "./omp-plugins";
 import "./ssh";

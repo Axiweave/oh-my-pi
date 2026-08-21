@@ -43,6 +43,7 @@ function createContext(loopMode: SegmentContext["loopMode"]): SegmentContext {
 		compactionSpeculation: "idle",
 		speculationBlinkOn: true,
 		subagentCount: 0,
+		ideSelection: null,
 		activeMs: 0,
 		turnElapsedMs: null,
 		activeRepo: null,

@@ -243,6 +243,7 @@ export type StatusLineSegmentId =
 	| "path"
 	| "git"
 	| "pr"
+	| "ide_selection"
 	| "subagents"
 	| "token_in"
 	| "token_out"

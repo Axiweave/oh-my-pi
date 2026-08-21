@@ -132,6 +132,7 @@ import {
 	type MCPToolsLoadResult,
 	parseMCPToolName,
 } from "./mcp";
+import { getCurrentIdeSelection, subscribeIdeSelection } from "./mcp/ide-selection";
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
@@ -153,6 +154,7 @@ import { discoverAuthStorage as discoverAuthStorageFromConfig } from "./session/
 import type { AuthStorage } from "./session/auth-storage";
 import { withDateCwdReminder } from "./session/date-cwd-reminder";
 import { createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
+import { withIdeSelectionReminder } from "./session/ide-selection-reminder";
 import {
 	type CustomMessage,
 	convertToLlm,
@@ -3371,11 +3373,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (blobBroker) transformed = await blobBroker.decorateContext(transformed, transformModel);
 			// Keep per-request volatility out of the system prompt: the date/cwd
 			// reminder rides on the first user turn so open-weight providers keep
-			// their tool-schema prefix cache (#7404).
-			return withDateCwdReminder(
-				transformed,
-				formatLocalCalendarDate(),
-				normalizePromptPath(sessionManager.getCwd()),
+			// their tool-schema prefix cache (#7404). The IDE selection reminder
+			// rides the same path.
+			return withIdeSelectionReminder(
+				withDateCwdReminder(transformed, formatLocalCalendarDate(), normalizePromptPath(sessionManager.getCwd())),
+				getCurrentIdeSelection(),
 			);
 		};
 		const onPayload = async (payload: unknown, model?: Model) => {
@@ -3879,6 +3881,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// process-global postmortem list.
 		let unsubscribeMcpNotifications: (() => void) | undefined;
 		let unregisterMcpPostmortem: (() => void) | undefined;
+		let unsubscribeIdeSelection: (() => void) | undefined;
 
 		{
 			const originalDispose = session.dispose.bind(session);
@@ -3912,12 +3915,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					unsubscribeCredentialDisabled?.();
 					unsubscribeMcpNotifications?.();
 					unregisterMcpPostmortem?.();
+					unsubscribeIdeSelection?.();
 					for (const callback of disposeCallbacks) callback();
 					disposeCallbacks.clear();
 					// Drop refs so the process-global postmortem list doesn't retain
 					// the bridge closure past explicit dispose.
 					unsubscribeMcpNotifications = undefined;
 					unregisterMcpPostmortem = undefined;
+					unsubscribeIdeSelection = undefined;
 				}
 			};
 		}
@@ -4042,11 +4047,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
 						transformed = clampProviderContextImages(transformed, transformModel);
 						transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);
-						if (blobBroker) transformed = await blobBroker.decorateContext(transformed, transformModel);
-						return withDateCwdReminder(
-							transformed,
-							formatLocalCalendarDate(),
-							normalizePromptPath(sessionManager.getCwd()),
+					if (blobBroker) transformed = await blobBroker.decorateContext(transformed, transformModel);
+						return withIdeSelectionReminder(
+							withDateCwdReminder(
+								transformed,
+								formatLocalCalendarDate(),
+								normalizePromptPath(sessionManager.getCwd()),
+							),
+							getCurrentIdeSelection(),
 						);
 					},
 					thinkingBudgets: agent.thinkingBudgets,
@@ -4172,6 +4180,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			unsubscribeMcpNotifications = mcpManager.addNotificationListener((server, method, params) => {
 				void extensionRunner.emitMcpNotification({ server, method, params });
 			});
+			// Track the IDE selection (registered after the extension-runner
+			// listener so that one stays the first subscriber draining the
+			// startup notification buffer).
+			unsubscribeIdeSelection = subscribeIdeSelection(mcpManager);
 			// postmortem.register returns a cancel function; capture it so explicit
 			// session.dispose can remove this from the global list (see finally above).
 			unregisterMcpPostmortem = postmortem.register("mcp-notification-listener-cleanup", () =>

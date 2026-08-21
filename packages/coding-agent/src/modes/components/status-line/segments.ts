@@ -436,6 +436,23 @@ const prSegment: StatusLineSegment = {
 	},
 };
 
+const ideSelectionSegment: StatusLineSegment = {
+	id: "ide_selection",
+	render(ctx) {
+		const selection = ctx.ideSelection;
+		if (!selection || !selection.filePath) {
+			return { content: "", visible: false };
+		}
+		const filename = path.basename(selection.filePath);
+		const lineLabel =
+			selection.lineStart === selection.lineEnd
+				? `${selection.lineStart}`
+				: `${selection.lineStart}-${selection.lineEnd}`;
+		const content = withIcon(theme.icon.file, `${filename}:${lineLabel}`);
+		return { content: theme.fg("statusLinePath", content), visible: true };
+	},
+};
+
 const subagentsSegment: StatusLineSegment = {
 	id: "subagents",
 	render(ctx) {
@@ -789,6 +806,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	path: pathSegment,
 	git: gitSegment,
 	pr: prSegment,
+	ide_selection: ideSelectionSegment,
 	subagents: subagentsSegment,
 	token_in: tokenInSegment,
 	token_out: tokenOutSegment,
