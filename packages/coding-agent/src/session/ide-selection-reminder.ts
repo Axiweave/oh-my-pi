@@ -13,9 +13,11 @@
  * no region), a lighter "user opened file X" reminder fires instead. Claude
  * Code also triggers nested CLAUDE.md loading for the opened file's
  * directory on that path — omp has no per-file nested-memory-file loader to
- * hook into, so that part isn't ported.
+ * hook into, so that part isn't ported. Like Claude Code, the reminder
+ * carries the full IDE-reported path (not a basename) — the model needs to
+ * disambiguate same-named files in different directories; UI surfaces (the
+ * status line badge) basename it separately for display.
  */
-import * as path from "node:path";
 import type { Context } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { IDESelection } from "../mcp/ide-selection";
@@ -35,7 +37,7 @@ export function renderIdeSelectionReminder(selection: IDESelection): string {
 		.render(ideSelectionTemplate, {
 			lineStart: selection.lineStart,
 			lineEnd: selection.lineEnd,
-			filename: path.basename(selection.filePath),
+			filename: selection.filePath,
 			content,
 		})
 		.trim();
@@ -43,9 +45,7 @@ export function renderIdeSelectionReminder(selection: IDESelection): string {
 
 /** Renders the "user opened file X" reminder text for a file with no active selection. */
 export function renderIdeOpenedFileReminder(filePath: string): string {
-	return prompt
-		.render(ideOpenedFileTemplate, { filename: path.basename(filePath) })
-		.trim();
+	return prompt.render(ideOpenedFileTemplate, { filename: filePath }).trim();
 }
 
 /**

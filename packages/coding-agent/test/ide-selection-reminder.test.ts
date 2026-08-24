@@ -9,7 +9,7 @@ import {
 
 describe("ide-selection-reminder", () => {
 	describe("renderIdeSelectionReminder", () => {
-		it("renders a system-reminder block with line range, filename and selection text", () => {
+		it("renders a system-reminder block with line range, full path and selection text", () => {
 			const rendered = renderIdeSelectionReminder({
 				lineStart: 42,
 				lineEnd: 42,
@@ -17,7 +17,7 @@ describe("ide-selection-reminder", () => {
 				filePath: "/a/b/foo.el",
 			});
 			expect(rendered).toContain("<system-reminder>");
-			expect(rendered).toContain("The user selected the lines 42 to 42 from foo.el:");
+			expect(rendered).toContain("The user selected the lines 42 to 42 from /a/b/foo.el:");
 			expect(rendered).toContain("hello");
 			expect(rendered).toContain("This may or may not be related to the current task.");
 			expect(rendered).toContain("</system-reminder>");
@@ -38,10 +38,10 @@ describe("ide-selection-reminder", () => {
 	});
 
 	describe("renderIdeOpenedFileReminder", () => {
-		it("renders a system-reminder block naming the basename of the opened file", () => {
+		it("renders a system-reminder block naming the full path of the opened file", () => {
 			const rendered = renderIdeOpenedFileReminder("/a/b/foo.el");
 			expect(rendered).toContain("<system-reminder>");
-			expect(rendered).toContain("The user opened the file foo.el in the IDE.");
+			expect(rendered).toContain("The user opened the file /a/b/foo.el in the IDE.");
 			expect(rendered).toContain("This may or may not be related to the current task.");
 			expect(rendered).toContain("</system-reminder>");
 		});
