@@ -280,6 +280,7 @@
 - Fixed the IDE-selection status line badge staying blank when the cursor moves without an active text selection, and going stale while idle instead of updating immediately.
 - Fixed the `claude3` composer footer (`composerStyle.footerMode: claude3`) rendering every line in a single flat muted gray; each value (model, context usage, git branch, cwd) now uses the same per-segment colors as the regular status line.
 - Fixed the IDE selection/opened-file `<system-reminder>` sent to the model naming only the file's basename instead of its full path, making same-named files in different directories indistinguishable to the model. Matches Claude Code's behavior; the status line badge still displays the basename.
+- Fixed `tui.pinComposerBottom` only holding the composer to the viewport bottom until the first history batch (welcome header or a finalized tool block) committed to native scrollback, after which it floated up for the rest of the session; the TUI writer now reports its live history anchor to the frame provider each frame, so pinning stays bounded and correct after every commit.
 
 ## [18.0.4] - 2026-08-24
 

@@ -108,6 +108,15 @@ export interface TUIOptions {
 export interface ViewportSize {
 	readonly columns: number;
 	readonly rows: number;
+	/**
+	 * Screen rows already occupied by anchored native history above the
+	 * mutable viewport (see `#providerViewportTop`), 0 before anything has
+	 * committed. Only populated for the main `renderFrame` call — a provider
+	 * padding its returned viewport must keep `viewport.length` within
+	 * `rows - historyRows` or the writer's anchor math clamps backward over
+	 * already-committed rows on the next write, overwriting them.
+	 */
+	readonly historyRows?: number;
 }
 
 /** Immutable append or complete replay offered until the terminal accepts this identifier. */
@@ -2263,7 +2272,7 @@ export class TUI extends Container {
 		if (!provider || width <= 0 || height <= 0) return;
 		this.#debugNextWindowTop = 0;
 		this.#imageBudget.beginPass();
-		const plan = provider.renderFrame({ columns: width, rows: height });
+		const plan = provider.renderFrame({ columns: width, rows: height, historyRows: this.#providerViewportTop });
 		this.#imageBudget.endPass();
 		let viewport = Array.from(plan.viewport);
 		if (viewport.length > height) {

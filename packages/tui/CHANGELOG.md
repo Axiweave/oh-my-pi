@@ -78,6 +78,10 @@
 - Fixed terminal scrollback corruption during shutdown, tmux pane zoom and resize, and destructive screen resets, preventing duplicated frames, lost history, and stale transcript re-streaming.
 - Fixed streaming Markdown rendering at chunk boundaries to preserve CommonMark emphasis behavior for Unicode text and correctly recognize GFM tables as they are completed.
 
+### Added
+
+- Added `ViewportSize.historyRows` to `renderFrame`, reporting how many screen rows the writer has already anchored as native history above the mutable viewport, so a frame provider can pad its viewport toward the bottom without overrunning that anchor.
+
 ## [18.0.4] - 2026-08-24
 
 ### Changed

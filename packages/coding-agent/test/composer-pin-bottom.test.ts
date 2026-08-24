@@ -87,4 +87,33 @@ describe("Composer#renderFrame pinBottom", () => {
 		const grown = composer.renderFrame({ columns: 40, rows: 8 });
 		expect(grown.viewport).toEqual(["line-a", "line-b", "line-c", "line-d", "line-e", "line-f", "", "> prompt"]);
 	});
+	it("still pins the footer after history has committed, bounded by historyRows", () => {
+		// Regression for the composer floating up once tool output collapses
+		// and a batch retires to native scrollback: the writer reports how
+		// many rows it already anchored above the viewport via
+		// `viewport.historyRows`, and padding must respect that budget instead
+		// of shutting off entirely the first time anything commits.
+		const composer = makeComposer(true);
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Block(["line-a", "line-b"]));
+		composer.setRuntimeChildren([transcript, new Footer(["> prompt"])]);
+
+		// 3 rows already anchored as history above this 8-row viewport: only 5
+		// rows remain, so the footer lands on row 5 (index 4), not row 8.
+		const plan = composer.renderFrame({ columns: 40, rows: 8, historyRows: 3 });
+		expect(plan.viewport).toEqual(["line-a", "line-b", "", "", "> prompt"]);
+	});
+
+	it("never pads past the remaining budget once history nearly fills the screen", () => {
+		const composer = makeComposer(true);
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Block(["line-a"]));
+		composer.setRuntimeChildren([transcript, new Footer(["> prompt"])]);
+
+		// 6 rows of history already anchored: only 2 rows remain for the live
+		// tail (transcript row + footer) — no filler must be inserted, and the
+		// returned viewport must never claim more than the 2 remaining rows.
+		const plan = composer.renderFrame({ columns: 40, rows: 8, historyRows: 6 });
+		expect(plan.viewport).toEqual(["line-a", "> prompt"]);
+	});
 });

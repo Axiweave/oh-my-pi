@@ -159,13 +159,6 @@ export class Composer implements TerminalFrameProvider {
 	// frame may pull part of it down before the normal buffer is borrowed.
 	#retiredHeaderStart = 0;
 	#resizeRetiredHeaderStart: number | undefined;
-	// Cumulative rows ever committed to native terminal history. Bounds how
-	// far pinBottom padding may inflate the viewport: the terminal's anchor
-	// (tracked writer-side, not visible here) only ever advances by exactly
-	// this many rows, so a padded viewport must never claim more of the
-	// screen than `height - #committedHistoryRows` or the writer's anchor
-	// math clamps backward over already-committed rows, overwriting them.
-	#committedHistoryRows = 0;
 	#lastNormalRows = 0;
 	#lastInterruptAt = 0;
 	#started = false;
@@ -223,6 +216,11 @@ export class Composer implements TerminalFrameProvider {
 		if (!this.#started || this.#stopped) return { viewport: [] };
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
+		// Rows the writer has already anchored above the mutable viewport as
+		// native history; a padded frame must keep `viewport.length` within
+		// `rows - historyTop` or the writer's anchor clamps backward over
+		// those rows on the next write, overwriting them (see ViewportSize).
+		const historyTop = viewport.historyRows ?? 0;
 		if (this.#resizeRetiredHeaderStart !== undefined) {
 			this.#retiredHeaderStart = this.#resizeRetiredHeaderStart;
 			this.#resizeRetiredHeaderStart = undefined;
@@ -234,8 +232,9 @@ export class Composer implements TerminalFrameProvider {
 		const transcriptIndex = roots.findIndex(root => root instanceof TranscriptContainer);
 		if (transcriptIndex < 0) {
 			const rendered = this.#renderRoots(roots, width);
-			if (this.#preferences.pinBottom && rendered.length < rows) {
-				return { viewport: [...new Array(rows - rendered.length).fill(""), ...rendered] };
+			const spare = Math.max(0, rows - historyTop - rendered.length);
+			if (this.#preferences.pinBottom && spare > 0) {
+				return { viewport: [...new Array(spare).fill(""), ...rendered] };
 			}
 			return { viewport: rendered.slice(-rows) };
 		}
@@ -263,21 +262,13 @@ export class Composer implements TerminalFrameProvider {
 		// transcript is shorter than the available space. Applied after the
 		// header-retirement bookkeeping above, which must see the real
 		// (unpadded) content extent to know how much of a retired header still
-		// peeks into the bottom of the viewport. Only while nothing has ever
-		// committed to native history (and this frame isn't about to commit
-		// either): once real history exists, the terminal's own reflow makes
-		// the composer's row accounting unreliable for anchor purposes (a wider
-		// resize rewraps committed rows into fewer physical lines than this
-		// process ever tracked), so padding there risks the writer's anchor
-		// clamping back over already-committed rows instead of staying below
-		// them.
-		if (
-			this.#preferences.pinBottom &&
-			this.#committedHistoryRows === 0 &&
-			history === undefined &&
-			active.length < capacity
-		) {
-			active = active.concat(new Array(capacity - active.length).fill(""));
+		// peeks into the bottom of the viewport. Skipped when this frame is
+		// itself offering history: `capacity` (and `historyTop`) describe the
+		// pre-offer geometry, not the anchor the writer will settle on after
+		// appending it.
+		if (this.#preferences.pinBottom && history === undefined) {
+			const spareCapacity = Math.max(0, capacity - historyTop);
+			if (active.length < spareCapacity) active = active.concat(new Array(spareCapacity - active.length).fill(""));
 		}
 		const composed = [...before, ...active, ...after];
 		return {
@@ -302,7 +293,6 @@ export class Composer implements TerminalFrameProvider {
 				if (offered.source.headerRows !== undefined) this.#retiredHeaderRows = offered.source.headerRows;
 			}
 		}
-		this.#committedHistoryRows += offered.rows.length;
 		this.#offeredHistory = undefined;
 		if (this.#historyReplayRequested) this.#startHistoryReplay();
 	}
@@ -363,7 +353,6 @@ export class Composer implements TerminalFrameProvider {
 		this.#retiredHeaderRows = undefined;
 		this.#retiredHeaderStart = 0;
 		this.#resizeRetiredHeaderStart = undefined;
-		this.#committedHistoryRows = 0;
 		for (const child of this.#runtimeChildren) {
 			if (child instanceof TranscriptContainer) child.cancelReplay();
 		}
