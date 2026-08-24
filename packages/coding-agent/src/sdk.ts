@@ -132,7 +132,7 @@ import {
 	type MCPToolsLoadResult,
 	parseMCPToolName,
 } from "./mcp";
-import { getCurrentIdeSelection, subscribeIdeSelection } from "./mcp/ide-selection";
+import { getCurrentIdeFile, getCurrentIdeSelection, subscribeIdeSelection } from "./mcp/ide-selection";
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
@@ -3378,6 +3378,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			return withIdeSelectionReminder(
 				withDateCwdReminder(transformed, formatLocalCalendarDate(), normalizePromptPath(sessionManager.getCwd())),
 				getCurrentIdeSelection(),
+				getCurrentIdeFile(),
 			);
 		};
 		const onPayload = async (payload: unknown, model?: Model) => {
@@ -4055,6 +4056,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 								normalizePromptPath(sessionManager.getCwd()),
 							),
 							getCurrentIdeSelection(),
+							getCurrentIdeFile(),
 						);
 					},
 					thinkingBudgets: agent.thinkingBudgets,
