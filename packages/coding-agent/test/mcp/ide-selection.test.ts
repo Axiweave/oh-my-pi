@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
 	clearIdeSelection,
+	getCurrentIdeFile,
 	getCurrentIdeSelection,
 	subscribeIdeSelection,
 } from "@oh-my-pi/pi-coding-agent/mcp/ide-selection";
@@ -49,6 +50,44 @@ describe("IDE selection listener", () => {
 			filePath: "/a/foo.el",
 		});
 		expect(getCurrentIdeSelection()).toBeNull();
+	});
+
+	it("keeps the current file when the selection is empty (cursor position, no region)", () => {
+		const { manager, fire } = fakeManager();
+		subscribeIdeSelection(manager);
+		fire("ide", "selection_changed", {
+			selection: { start: { line: 3, character: 1 }, end: { line: 3, character: 1 }, isEmpty: true },
+			text: "",
+			filePath: "/a/foo.el",
+		});
+		expect(getCurrentIdeFile()).toBe("/a/foo.el");
+	});
+
+	it("updates the current file as the cursor moves between files, still without a selection", () => {
+		const { manager, fire } = fakeManager();
+		subscribeIdeSelection(manager);
+		fire("ide", "selection_changed", {
+			selection: { start: { line: 1, character: 0 }, end: { line: 1, character: 0 }, isEmpty: true },
+			text: "",
+			filePath: "/a/foo.el",
+		});
+		fire("ide", "selection_changed", {
+			selection: { start: { line: 5, character: 0 }, end: { line: 5, character: 0 }, isEmpty: true },
+			text: "",
+			filePath: "/a/bar.el",
+		});
+		expect(getCurrentIdeFile()).toBe("/a/bar.el");
+	});
+
+	it("clears the current file for an empty filePath (no-file buffer)", () => {
+		const { manager, fire } = fakeManager();
+		subscribeIdeSelection(manager);
+		fire("ide", "selection_changed", {
+			selection: { start: { line: 1, character: 0 }, end: { line: 1, character: 0 }, isEmpty: true },
+			text: "",
+			filePath: "",
+		});
+		expect(getCurrentIdeFile()).toBeNull();
 	});
 
 	it("clears on a null selection (VS Code shape)", () => {

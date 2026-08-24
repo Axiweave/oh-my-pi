@@ -116,6 +116,8 @@ export interface SegmentContext {
 	subagentCount: number;
 	/** Latest IDE text selection (Emacs/VS Code), or null when none is active. */
 	ideSelection: IDESelection | null;
+	/** Current file path from the IDE, even without an active selection (cursor-only). */
+	ideFile: string | null;
 	/**
 	 * Active processing time accumulated this session, in ms — the union of
 	 * every `agent_start`→`agent_end` window plus the currently-streaming

@@ -17,20 +17,29 @@ export interface IDESelection {
 }
 
 let currentSelection: IDESelection | null = null;
+/** Path of the file the cursor is currently in, independent of whether there's a selection. */
+let currentFile: string | null = null;
 
 /** The latest IDE selection, or null when no selection is active. */
 export function getCurrentIdeSelection(): IDESelection | null {
 	return currentSelection;
 }
 
+/** The file path backing the latest notification, even when there's no active selection. */
+export function getCurrentIdeFile(): string | null {
+	return currentFile;
+}
+
 /** Clear the stored selection (used by tests and on teardown). */
 export function clearIdeSelection(): void {
 	currentSelection = null;
+	currentFile = null;
 }
 
 function applySelectionChanged(params: unknown): void {
 	if (typeof params !== "object" || params === null) {
 		currentSelection = null;
+		currentFile = null;
 		return;
 	}
 	const p = params as {
@@ -42,6 +51,9 @@ function applySelectionChanged(params: unknown): void {
 		text?: string;
 		filePath?: string;
 	};
+	if (typeof p.filePath === "string") {
+		currentFile = p.filePath.length > 0 ? p.filePath : null;
+	}
 	const sel = p.selection;
 	if (!sel || sel.isEmpty === true || typeof sel.start?.line !== "number" || typeof sel.end?.line !== "number") {
 		// Emacs `isEmpty: true` and VS Code `selection: null` both mean "no selection".

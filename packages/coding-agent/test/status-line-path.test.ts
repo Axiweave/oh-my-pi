@@ -64,6 +64,7 @@ function createPathContext(): SegmentContext {
 		speculationBlinkOn: true,
 		subagentCount: 0,
 		ideSelection: null,
+		ideFile: null,
 		activeMs: 0,
 		turnElapsedMs: null,
 		activeRepo: null,

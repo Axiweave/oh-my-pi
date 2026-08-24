@@ -267,6 +267,10 @@
 - Accelerated SHA-2 and SHA-3 checksums on supported ARM64 hardware.
 - Fixed large MCP tool payloads being stored redundantly on disk.
 
+### Fixed
+
+- Fixed the IDE-selection status line badge staying blank when the cursor moves without an active text selection, and going stale while idle instead of updating immediately.
+
 ## [18.0.4] - 2026-08-24
 
 ### Added

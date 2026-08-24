@@ -66,6 +66,7 @@ function createCtx(activeMs: number): SegmentContext {
 		speculationBlinkOn: true,
 		subagentCount: 0,
 		ideSelection: null,
+		ideFile: null,
 		activeMs,
 		turnElapsedMs: null,
 		activeRepo: null,

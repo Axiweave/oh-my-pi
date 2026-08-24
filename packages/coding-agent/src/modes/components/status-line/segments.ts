@@ -440,15 +440,19 @@ const ideSelectionSegment: StatusLineSegment = {
 	id: "ide_selection",
 	render(ctx) {
 		const selection = ctx.ideSelection;
-		if (!selection || !selection.filePath) {
+		const filePath = selection?.filePath || ctx.ideFile;
+		if (!filePath) {
 			return { content: "", visible: false };
 		}
-		const filename = path.basename(selection.filePath);
-		const lineLabel =
-			selection.lineStart === selection.lineEnd
-				? `${selection.lineStart}`
-				: `${selection.lineStart}-${selection.lineEnd}`;
-		const content = withIcon(theme.icon.file, `${filename}:${lineLabel}`);
+		const filename = path.basename(filePath);
+		const label = selection
+			? `${filename}:${
+					selection.lineStart === selection.lineEnd
+						? selection.lineStart
+						: `${selection.lineStart}-${selection.lineEnd}`
+				}`
+			: filename;
+		const content = withIcon(theme.icon.file, label);
 		return { content: theme.fg("statusLinePath", content), visible: true };
 	},
 };

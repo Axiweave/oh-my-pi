@@ -994,6 +994,23 @@ export class InteractiveMode implements InteractiveModeContext {
 			aggregateVibeWorkerTokensPerSecond(this.session.getAgentId() ?? MAIN_AGENT_ID),
 		);
 
+		// `subscribeIdeSelection` (sdk.ts) updates the IDE-selection module state on
+		// every `selection_changed` notification, but that SDK layer has no `ui`
+		// handle to repaint with. While a turn is streaming, the status line picks
+		// up the new selection on the next incidental repaint anyway; while idle,
+		// nothing repaints until the next keystroke, so the selection badge looks
+		// stuck. Request a render directly off the same notification here.
+		if (this.mcpManager) {
+			this.#eventBusUnsubscribers.push(
+				this.mcpManager.addNotificationListener((serverName, method) => {
+					if (serverName === "ide" && method === "selection_changed") {
+						this.statusLine.invalidate();
+						this.ui.requestRender();
+					}
+				}),
+			);
+		}
+
 		this.hideToolActivity = settings.get("display.hideToolActivity");
 		this.chatContainer.setToolActivityVisible(!this.hideToolActivity);
 		this.hideThinkingBlock = settings.get("hideThinkingBlock");

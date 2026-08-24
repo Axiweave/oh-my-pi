@@ -8,7 +8,10 @@ beforeAll(async () => {
 	await initTheme();
 });
 
-function createContext(ideSelection: SegmentContext["ideSelection"]): SegmentContext {
+function createContext(
+	ideSelection: SegmentContext["ideSelection"],
+	ideFile: SegmentContext["ideFile"] = null,
+): SegmentContext {
 	return {
 		session: {
 			state: {},
@@ -46,6 +49,7 @@ function createContext(ideSelection: SegmentContext["ideSelection"]): SegmentCon
 		speculationBlinkOn: false,
 		subagentCount: 0,
 		ideSelection,
+		ideFile,
 		activeMs: 0,
 		turnElapsedMs: null,
 		activeRepo: null,
@@ -86,6 +90,18 @@ describe("ide_selection status line segment", () => {
 			"ide_selection",
 			createContext({ lineStart: 1, lineEnd: 2, text: "x", filePath: "" }),
 		);
+		expect(rendered.visible).toBe(false);
+		expect(rendered.content).toBe("");
+	});
+
+	it("renders bare filename when there is no selection but a current file is known", () => {
+		const rendered = renderSegment("ide_selection", createContext(null, "/a/b/foo.el"));
+		expect(rendered.visible).toBe(true);
+		expect(Bun.stripANSI(rendered.content)).toBe(`${theme.icon.file} foo.el`);
+	});
+
+	it("is invisible when there is no selection and no current file", () => {
+		const rendered = renderSegment("ide_selection", createContext(null, null));
 		expect(rendered.visible).toBe(false);
 		expect(rendered.content).toBe("");
 	});
