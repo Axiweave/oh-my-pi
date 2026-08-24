@@ -34,6 +34,7 @@ import {
 	type CodexResetUsageSnapshot,
 	detectCodexResetFireworks,
 } from "../codex-reset-fireworks";
+import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
 import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
 import { getPreset } from "./presets";
 import { renderSegment, type SegmentContext } from "./segments";
@@ -2461,9 +2462,12 @@ export class StatusLineComponent implements Component {
 	/**
 	 * Claude Code-style 3-line footer: model + context, git branch + cwd, then
 	 * a hints row composed from active modes, subagents, collab and hook
-	 * statuses (omitted when nothing is active). Plain text, dimmed, truncated
-	 * to the terminal width. `previewTitle` is accepted for the composer
-	 * preview status-source contract and unused by the fixed footer lines.
+	 * statuses (omitted when nothing is active). Each value is colored with
+	 * the same statusLine* theme tokens the regular segments use (model,
+	 * git dirty/clean, path, context usage level); labels and separators stay
+	 * muted. Truncated to the terminal width. `previewTitle` is accepted for
+	 * the composer preview status-source contract and unused by the fixed
+	 * footer lines.
 	 */
 	renderClaudeFooter(width: number, _previewTitle?: string): string[] {
 		const settings = this.#resolveSettings();
@@ -2475,17 +2479,28 @@ export class StatusLineComponent implements Component {
 
 		const ctxLabel =
 			ctx.contextPercent !== null ? `${Math.round(ctx.contextPercent)}%` : formatNumber(ctx.contextTokens);
-		const line1 = `Model: ${modelName} | Ctx: ${ctxLabel}`;
+		const ctxColor = getContextUsageThemeColor(getContextUsageLevel(ctx.contextPercent ?? 0, ctx.contextWindow));
+		const sep = theme.fg("statusLineSep", " | ");
+		const line1 =
+			theme.fg("muted", "Model: ") +
+			theme.fg("statusLineModel", modelName) +
+			sep +
+			theme.fg("muted", "Ctx: ") +
+			theme.fg(ctxColor, ctxLabel);
 
 		const branch = ctx.git.branch;
-		const gitPart = branch ? `${theme.icon.git} ${branch} | ` : "";
+		const gitStatus = ctx.git.status;
+		const isDirty = !!gitStatus && (gitStatus.staged > 0 || gitStatus.unstaged > 0 || gitStatus.untracked > 0);
+		const gitPart = branch
+			? theme.fg(isDirty ? "statusLineGitDirty" : "statusLineGitClean", `${theme.icon.branch} ${branch}`) + sep
+			: "";
 		const cwd = shortenPath(ctx.activeRepo?.cwd ?? getProjectDir());
-		const line2 = `${gitPart}cwd: ${cwd}`;
+		const line2 = gitPart + theme.fg("muted", "cwd: ") + theme.fg("statusLinePath", cwd);
 
 		const hints = this.#renderClaudeFooterHints(ctx);
 		const lines = [line1, line2];
-		if (hints) lines.push(hints);
-		return lines.map(line => theme.fg("dim", truncateToWidth(line, width)));
+		if (hints) lines.push(theme.fg("muted", hints));
+		return lines.map(line => truncateToWidth(line, width));
 	}
 
 	#renderClaudeFooterHints(ctx: SegmentContext): string {

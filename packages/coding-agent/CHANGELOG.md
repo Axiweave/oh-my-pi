@@ -270,6 +270,7 @@
 ### Fixed
 
 - Fixed the IDE-selection status line badge staying blank when the cursor moves without an active text selection, and going stale while idle instead of updating immediately.
+- Fixed the `claude3` composer footer (`composerStyle.footerMode: claude3`) rendering every line in a single flat muted gray; each value (model, context usage, git branch, cwd) now uses the same per-segment colors as the regular status line.
 
 ## [18.0.4] - 2026-08-24
 
