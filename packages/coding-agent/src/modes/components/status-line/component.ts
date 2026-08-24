@@ -34,7 +34,6 @@ import {
 	type CodexResetUsageSnapshot,
 	detectCodexResetFireworks,
 } from "../codex-reset-fireworks";
-import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
 import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
 import { getPreset } from "./presets";
 import { renderSegment, type SegmentContext } from "./segments";
@@ -2460,34 +2459,23 @@ export class StatusLineComponent implements Component {
 	}
 
 	/**
-	 * Claude Code-style 3-line footer: model + context (with the open IDE
-	 * file/selection right-aligned on that line when known), git branch +
-	 * cwd, then a hints row composed from active modes, subagents, collab and
-	 * hook statuses (omitted when nothing is active). Each value is colored
-	 * with the same statusLine* theme tokens the regular segments use (model,
-	 * git dirty/clean, path, context usage level); labels and separators stay
-	 * muted. Truncated to the terminal width. `previewTitle` is accepted for
-	 * the composer preview status-source contract and unused by the fixed
-	 * footer lines.
+	 * Claude Code-style 3-line footer: model (icon, name, thinking level) with
+	 * the open IDE file/selection right-aligned on that line when known, git
+	 * branch + cwd, then a hints row composed from active modes, subagents,
+	 * collab and hook statuses (omitted when nothing is active). Context
+	 * usage isn't repeated here — the composer's own top-border gauge already
+	 * shows it. Each value is colored with the same statusLine* theme tokens
+	 * the regular segments use; labels and separators stay muted. Truncated
+	 * to the terminal width. `previewTitle` is accepted for the composer
+	 * preview status-source contract and unused by the fixed footer lines.
 	 */
 	renderClaudeFooter(width: number, _previewTitle?: string): string[] {
 		const settings = this.#resolveSettings();
 		const ctx = this.#buildSegmentContext(width, settings.segmentOptions, true, true, false);
 
-		const state = this.session.state;
-		let modelName = state.model?.name || state.model?.id || "no-model";
-		if (modelName.startsWith("Claude ")) modelName = modelName.slice(7);
-
-		const ctxLabel =
-			ctx.contextPercent !== null ? `${Math.round(ctx.contextPercent)}%` : formatNumber(ctx.contextTokens);
-		const ctxColor = getContextUsageThemeColor(getContextUsageLevel(ctx.contextPercent ?? 0, ctx.contextWindow));
 		const sep = theme.fg("statusLineSep", " | ");
-		const line1Left =
-			theme.fg("muted", "Model: ") +
-			theme.fg("statusLineModel", modelName) +
-			sep +
-			theme.fg("muted", "Ctx: ") +
-			theme.fg(ctxColor, ctxLabel);
+		const modelSeg = renderSegment("model", ctx);
+		const line1Left = modelSeg.visible ? modelSeg.content : "";
 		const ideSelection = renderSegment("ide_selection", ctx);
 		let line1 = line1Left;
 		if (ideSelection.visible && ideSelection.content) {
@@ -2502,7 +2490,7 @@ export class StatusLineComponent implements Component {
 			? theme.fg(isDirty ? "statusLineGitDirty" : "statusLineGitClean", `${theme.icon.branch} ${branch}`) + sep
 			: "";
 		const cwd = shortenPath(ctx.activeRepo?.cwd ?? getProjectDir());
-		const line2 = gitPart + theme.fg("muted", "cwd: ") + theme.fg("statusLinePath", cwd);
+		const line2 = gitPart + theme.fg("muted", `${theme.icon.folder} `) + theme.fg("statusLinePath", cwd);
 
 		const hints = this.#renderClaudeFooterHints(ctx);
 		const lines = [line1, line2];

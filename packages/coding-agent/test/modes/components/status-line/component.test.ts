@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import { Settings, settings } from "../../../../src/config/settings";
 import { clearIdeSelection, subscribeIdeSelection } from "../../../../src/mcp/ide-selection";
 import type { MCPManager } from "../../../../src/mcp/manager";
@@ -41,7 +42,7 @@ function makeSessionWithLastMessage(
 ) {
 	return {
 		messages: lastMessage ? [lastMessage] : [],
-		model: { contextWindow: 128000 },
+		model: { id: "test-model", contextWindow: 128000 },
 		contextUsageRevision: 0,
 		systemPrompt: [],
 		agent: { state: { tools: [] } },
@@ -49,7 +50,7 @@ function makeSessionWithLastMessage(
 		getContextUsage: () => ({ tokens: 42, contextWindow: 128000 }),
 		state: {
 			messages: lastMessage ? [lastMessage] : [],
-			model: { contextWindow: 128000 },
+			model: { id: "test-model", contextWindow: 128000 },
 		},
 		sessionManager: {
 			getUsageStatistics: () => ({
@@ -121,7 +122,7 @@ describe("StatusLineComponent", () => {
 		expect(stripped).toContain("Prewalk");
 	});
 
-	it("renders the claude 3-line footer with model/ctx, git/cwd and hints", () => {
+	it("renders the claude 3-line footer with model, git/cwd, and hints", () => {
 		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
 		statusLine.setComposerStyle({
 			statusAttachment: "none",
@@ -135,9 +136,8 @@ describe("StatusLineComponent", () => {
 		const stripped = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
 
 		expect(lines.length).toBe(3);
-		expect(stripped[0]).toContain("Model:");
-		expect(stripped[0]).toContain("Ctx:");
-		expect(stripped[1]).toContain("cwd:");
+		expect(stripped[0]).toContain("test-model");
+		expect(stripped[1]).toContain(path.basename(process.cwd()));
 		expect(stripped[2]).toContain("advisor running");
 	});
 
@@ -151,7 +151,7 @@ describe("StatusLineComponent", () => {
 		});
 
 		const lines = statusLine.render(200);
-		expect(lines.length).toBe(2); // model/ctx + git/cwd only
+		expect(lines.length).toBe(2); // model + git/cwd only
 	});
 
 	it("renders the claude footer for any shape when composerStyle.footerMode is claude3", () => {
@@ -166,15 +166,15 @@ describe("StatusLineComponent", () => {
 			const stripped = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
 
 			expect(lines.length).toBe(3);
-			expect(stripped[0]).toContain("Model:");
-			expect(stripped[1]).toContain("cwd:");
+			expect(stripped[0]).toContain("test-model");
+			expect(stripped[1]).toContain(path.basename(process.cwd()));
 			expect(stripped[2]).toContain("advisor running");
 		} finally {
 			settings.clearOverride("composerStyle.footerMode");
 		}
 	});
 
-	it("right-aligns the open IDE file on the claude footer's model/ctx line", () => {
+	it("right-aligns the open IDE file on the claude footer's model line", () => {
 		const { manager, fire } = fakeIdeManager();
 		const unsubscribe = subscribeIdeSelection(manager);
 		try {
@@ -191,10 +191,10 @@ describe("StatusLineComponent", () => {
 			const lines = statusLine.render(200);
 			const stripped = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
 
-			expect(stripped[0]).toContain("Ctx:");
+			expect(stripped[0]).toContain("test-model");
 			expect(stripped[0]).toContain("In foo.ts");
-			// hfill: the file marker sits well to the right of Model/Ctx, separated by a gap.
-			expect(stripped[0].indexOf("In foo.ts")).toBeGreaterThan(stripped[0].indexOf("Ctx:") + 10);
+			// hfill: the file marker sits well to the right of the model, separated by a gap.
+			expect(stripped[0].indexOf("In foo.ts")).toBeGreaterThan(stripped[0].indexOf("test-model") + 10);
 		} finally {
 			unsubscribe();
 			clearIdeSelection();
