@@ -1,9 +1,25 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings, settings } from "../../../../src/config/settings";
+import { clearIdeSelection, subscribeIdeSelection } from "../../../../src/mcp/ide-selection";
+import type { MCPManager } from "../../../../src/mcp/manager";
 import { StatusLineComponent } from "../../../../src/modes/components/status-line/component";
 import { loadTheme } from "../../../../src/modes/theme/loader";
 import { getThemeByName, setThemeInstance } from "../../../../src/modes/theme/theme";
 import type { AgentSession } from "../../../../src/session/agent-session";
+
+/** Minimal stand-in for MCPManager that captures the registered listener. */
+function fakeIdeManager(): { manager: MCPManager; fire: (server: string, method: string, params: unknown) => void } {
+	let listener: ((server: string, method: string, params: unknown) => void) | undefined;
+	const manager = {
+		addNotificationListener: (fn: (server: string, method: string, params: unknown) => void) => {
+			listener = fn;
+			return () => {
+				listener = undefined;
+			};
+		},
+	} as unknown as MCPManager;
+	return { manager, fire: (server, method, params) => listener?.(server, method, params) };
+}
 
 // The cost assertions below care about how the two costs are rendered, not about
 // terminal width. The status line also shows the cwd and git branch, so a long
@@ -155,6 +171,33 @@ describe("StatusLineComponent", () => {
 			expect(stripped[2]).toContain("advisor running");
 		} finally {
 			settings.clearOverride("composerStyle.footerMode");
+		}
+	});
+
+	it("right-aligns the open IDE file on the claude footer's model/ctx line", () => {
+		const { manager, fire } = fakeIdeManager();
+		const unsubscribe = subscribeIdeSelection(manager);
+		try {
+			fire("ide", "selection_changed", { filePath: "/a/b/foo.ts", selection: { isEmpty: true } });
+
+			const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+			statusLine.setComposerStyle({
+				statusAttachment: "none",
+				bottomBar: "full",
+				bottomBarGap: false,
+				footerMode: "claude3",
+			});
+
+			const lines = statusLine.render(200);
+			const stripped = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+			expect(stripped[0]).toContain("Ctx:");
+			expect(stripped[0]).toContain("In foo.ts");
+			// hfill: the file marker sits well to the right of Model/Ctx, separated by a gap.
+			expect(stripped[0].indexOf("In foo.ts")).toBeGreaterThan(stripped[0].indexOf("Ctx:") + 10);
+		} finally {
+			unsubscribe();
+			clearIdeSelection();
 		}
 	});
 	it("renders primary and advisor costs separately with subscription indicator in Unicode preset", () => {

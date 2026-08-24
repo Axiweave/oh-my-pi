@@ -267,6 +267,14 @@
 - Accelerated SHA-2 and SHA-3 checksums on supported ARM64 hardware.
 - Fixed large MCP tool payloads being stored redundantly on disk.
 
+### Added
+
+- Added the open IDE file/selection as a right-aligned badge on the `claude3` composer footer's model/context line.
+
+### Changed
+
+- Changed the `ide_selection` status line segment's wording from a bare `file.ts:42` label to `N line(s) selected` for an active selection and `In file.ts` for a cursor-only position, matching Claude Code's phrasing.
+
 ### Fixed
 
 - Fixed the IDE-selection status line badge staying blank when the cursor moves without an active text selection, and going stale while idle instead of updating immediately.

@@ -1,5 +1,4 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import * as path from "node:path";
 import type { SegmentContext } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
 import { renderSegment } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -60,23 +59,23 @@ function createContext(
 }
 
 describe("ide_selection status line segment", () => {
-	it("renders basename with a single line number for a single-line selection", () => {
+	it("renders '1 line selected' for a single-line selection", () => {
 		const rendered = renderSegment(
 			"ide_selection",
 			createContext({ lineStart: 42, lineEnd: 42, text: "x", filePath: "/a/b/foo.el" }),
 		);
 		expect(rendered.visible).toBe(true);
 		const stripped = Bun.stripANSI(rendered.content);
-		expect(stripped).toBe(`${theme.icon.file} ${path.basename("/a/b/foo.el")}:42`);
+		expect(stripped).toBe(`${theme.icon.file} 1 line selected`);
 	});
 
-	it("renders a line range for a multi-line selection", () => {
+	it("renders 'N lines selected' for a multi-line selection", () => {
 		const rendered = renderSegment(
 			"ide_selection",
 			createContext({ lineStart: 10, lineEnd: 13, text: "x", filePath: "/a/b/foo.ts" }),
 		);
 		expect(rendered.visible).toBe(true);
-		expect(Bun.stripANSI(rendered.content)).toContain("foo.ts:10-13");
+		expect(Bun.stripANSI(rendered.content)).toBe(`${theme.icon.file} 4 lines selected`);
 	});
 
 	it("is invisible when there is no selection", () => {
@@ -94,10 +93,10 @@ describe("ide_selection status line segment", () => {
 		expect(rendered.content).toBe("");
 	});
 
-	it("renders bare filename when there is no selection but a current file is known", () => {
+	it("renders 'In <file>' when there is no selection but a current file is known", () => {
 		const rendered = renderSegment("ide_selection", createContext(null, "/a/b/foo.el"));
 		expect(rendered.visible).toBe(true);
-		expect(Bun.stripANSI(rendered.content)).toBe(`${theme.icon.file} foo.el`);
+		expect(Bun.stripANSI(rendered.content)).toBe(`${theme.icon.file} In foo.el`);
 	});
 
 	it("is invisible when there is no selection and no current file", () => {

@@ -445,13 +445,13 @@ const ideSelectionSegment: StatusLineSegment = {
 			return { content: "", visible: false };
 		}
 		const filename = path.basename(filePath);
-		const label = selection
-			? `${filename}:${
-					selection.lineStart === selection.lineEnd
-						? selection.lineStart
-						: `${selection.lineStart}-${selection.lineEnd}`
-				}`
-			: filename;
+		let label: string;
+		if (selection) {
+			const lineCount = selection.lineEnd - selection.lineStart + 1;
+			label = `${lineCount} ${lineCount === 1 ? "line" : "lines"} selected`;
+		} else {
+			label = `In ${filename}`;
+		}
 		const content = withIcon(theme.icon.file, label);
 		return { content: theme.fg("statusLinePath", content), visible: true };
 	},

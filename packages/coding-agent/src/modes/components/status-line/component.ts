@@ -2460,10 +2460,11 @@ export class StatusLineComponent implements Component {
 	}
 
 	/**
-	 * Claude Code-style 3-line footer: model + context, git branch + cwd, then
-	 * a hints row composed from active modes, subagents, collab and hook
-	 * statuses (omitted when nothing is active). Each value is colored with
-	 * the same statusLine* theme tokens the regular segments use (model,
+	 * Claude Code-style 3-line footer: model + context (with the open IDE
+	 * file/selection right-aligned on that line when known), git branch +
+	 * cwd, then a hints row composed from active modes, subagents, collab and
+	 * hook statuses (omitted when nothing is active). Each value is colored
+	 * with the same statusLine* theme tokens the regular segments use (model,
 	 * git dirty/clean, path, context usage level); labels and separators stay
 	 * muted. Truncated to the terminal width. `previewTitle` is accepted for
 	 * the composer preview status-source contract and unused by the fixed
@@ -2481,12 +2482,18 @@ export class StatusLineComponent implements Component {
 			ctx.contextPercent !== null ? `${Math.round(ctx.contextPercent)}%` : formatNumber(ctx.contextTokens);
 		const ctxColor = getContextUsageThemeColor(getContextUsageLevel(ctx.contextPercent ?? 0, ctx.contextWindow));
 		const sep = theme.fg("statusLineSep", " | ");
-		const line1 =
+		const line1Left =
 			theme.fg("muted", "Model: ") +
 			theme.fg("statusLineModel", modelName) +
 			sep +
 			theme.fg("muted", "Ctx: ") +
 			theme.fg(ctxColor, ctxLabel);
+		const ideSelection = renderSegment("ide_selection", ctx);
+		let line1 = line1Left;
+		if (ideSelection.visible && ideSelection.content) {
+			const gap = Math.max(1, width - visibleWidth(line1Left) - visibleWidth(ideSelection.content));
+			line1 = line1Left + padding(gap) + ideSelection.content;
+		}
 
 		const branch = ctx.git.branch;
 		const gitStatus = ctx.git.status;
