@@ -34,7 +34,7 @@ import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/t
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import writeDeviceOnlyDescription from "../prompts/tools/write-device-only.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
-import { fileHyperlink, framedBlock, renderStatusLine } from "../tui";
+import { fileHyperlink, framedBlock, outputBlockContentWidth, renderStatusLine } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { routeWriteThroughBridge } from "./acp-bridge";
 import { resolveToolTier, truncateForPrompt } from "./approval";
@@ -74,11 +74,13 @@ import {
 	formatMoreItems,
 	formatStatusIcon,
 	getLspBatchRequest,
+	previewWindowRows,
 	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
+	wrapTextWithAnsi,
 } from "./render-utils";
 import type { ToolActivityContext, ToolActivitySummary } from "./renderers";
 import { dispatchReportIssueDevice, REPORT_ISSUE_DEVICE_NAME, renderReportIssueDeviceCall } from "./report-tool-issue";
@@ -1373,7 +1375,6 @@ interface WriteRenderArgs {
 	content?: unknown;
 }
 
-const WRITE_PREVIEW_LINES = 6;
 const WRITE_STREAMING_PREVIEW_LINES = 12;
 
 function countLines(text: string): number {
@@ -1483,21 +1484,101 @@ function streamingTotalLines(streamKey: object | undefined, content: string): nu
 }
 
 /**
- * Raw offset just after the (totalLines - previewLines)-th newline — i.e. the
- * start of the last `previewLines` logical lines — scanning back from the end.
- * Returns 0 when the whole content fits in the window. Equivalent to
- * `content.split("\n").slice(-previewLines).join("\n")` without materializing
- * the full line array.
+ * Total body rows a collapsed write preview occupies once its content overflows
+ * the window. Both the streaming preview and the finished result pad to exactly
+ * this many rows, so the frame's height is constant from the first overflowing
+ * tick through the final render — no per-tick flicker, no collapse on settle.
  */
-function tailWindowStart(content: string, previewLines: number): number {
-	let newlinesSeen = 0;
-	for (let i = content.length - 1; i >= 0; i--) {
-		if (content.charCodeAt(i) === 10) {
-			newlinesSeen++;
-			if (newlinesSeen === previewLines) return i + 1;
-		}
+function writePreviewRowBudget(): number {
+	return Math.max(1, Math.min(WRITE_STREAMING_PREVIEW_LINES, previewWindowRows()));
+}
+
+/**
+ * Select the trailing logical lines whose wrapped-row count fits `rowBudget`
+ * visual rows at `innerWidth`, walking backward from the end so cost is
+ * proportional to the visible suffix, not the whole payload.
+ *
+ * A window sized in logical lines (the prior behavior) makes the frame's
+ * height jitter every tick: lines vary in length, and `renderOutputBlock`
+ * wraps each one to the frame's inner width, so a fixed line count still
+ * yields a wildly different row count depending on which lines happen to be
+ * in the window. Mirrors `sliceStreamingDiffTail` in edit/renderer.ts, which
+ * solves the same problem for the edit tool's streaming diff preview.
+ *
+ * Packing whole lines still leaves a remainder (a 2-row line cannot fill a
+ * 1-row gap), so `visualRows` is reported and callers pad the shortfall to keep
+ * the emitted row count constant.
+ */
+function sliceStreamingContentTail(
+	content: string,
+	innerWidth: number,
+	rowBudget: number,
+): { start: number; end: number; consumedLines: number; visualRows: number; stripped: number } {
+	if (content.length === 0) return { start: 0, end: 0, consumedLines: 0, visualRows: 0, stripped: 0 };
+	// Drop the one conventional file-ending newline so the window spends its rows
+	// on real content instead of the empty line past it. Everything below measures
+	// and slices against this same `end`: the earlier mismatch (measure stripped,
+	// render unstripped) is what made the frame gain a row on exactly those ticks
+	// where content ended on a newline. `stripped` lets the caller keep gutter
+	// numbering aligned with the file.
+	const stripped = content.charCodeAt(content.length - 1) === 10 ? 1 : 0;
+	const end = content.length - stripped;
+	const rowLimit = Math.max(1, rowBudget);
+	let start = end;
+	let cursor = end;
+	let visualRows = 0;
+	let consumedLines = 0;
+	while (cursor >= 0) {
+		const newline = cursor > 0 ? content.lastIndexOf("\n", cursor - 1) : -1;
+		const lineStart = newline + 1;
+		const lineRows = Math.max(1, wrapTextWithAnsi(replaceTabs(content.slice(lineStart, cursor)), innerWidth).length);
+		if (visualRows > 0 && visualRows + lineRows > rowLimit) break;
+		visualRows += lineRows;
+		start = lineStart;
+		consumedLines++;
+		if (newline < 0) break;
+		cursor = newline;
 	}
-	return 0;
+	return { start, end, consumedLines, visualRows, stripped };
+}
+
+/**
+ * Emit collapsed-preview body rows already wrapped to `innerWidth`, so the row
+ * count the caller budgeted is the row count the frame actually draws.
+ *
+ * Measuring rows one way and letting `renderOutputBlock` wrap another way is
+ * what made this frame change size for so long. Emitting pre-wrapped rows keeps
+ * a single source of truth: every row here already fits the frame, so the block
+ * re-wraps nothing. Continuation rows carry no gutter, matching how the block's
+ * own wrapping rendered them.
+ *
+ * Over-budget rows are cut from the far end — `tail` keeps the newest rows (the
+ * streaming edge), `head` keeps the first. Only a single line taller than the
+ * whole budget can trigger that: the fitters admit an over-budget line solely
+ * as the first one, so the cut trims that one line instead of dropping lines the
+ * caller already counted as visible.
+ */
+function previewBodyRows(
+	highlighted: readonly string[],
+	firstLineNumber: number,
+	lineNumberWidth: number,
+	innerWidth: number,
+	targetRows: number,
+	anchor: "head" | "tail",
+	uiTheme: Theme,
+): string[] {
+	const rows: string[] = [];
+	for (let i = 0; i < highlighted.length; i++) {
+		const gutter = uiTheme.fg("dim", `${String(firstLineNumber + i).padStart(lineNumberWidth, " ")} `);
+		const wrapped = wrapTextWithAnsi(replaceTabs(highlighted[i] ?? ""), innerWidth);
+		if (wrapped.length === 0) {
+			rows.push(gutter);
+			continue;
+		}
+		for (let r = 0; r < wrapped.length; r++) rows.push(r === 0 ? `${gutter}${wrapped[r]}` : (wrapped[r] ?? ""));
+	}
+	if (rows.length <= targetRows) return rows;
+	return anchor === "tail" ? rows.slice(rows.length - targetRows) : rows.slice(0, targetRows);
 }
 
 function formatStreamingContent(
@@ -1505,12 +1586,13 @@ function formatStreamingContent(
 	expanded: boolean,
 	language: string | undefined,
 	uiTheme: Theme,
+	width: number,
 	spinnerFrame?: number,
 	cache?: RenderedStringCache,
 	streamKey?: object,
 ): string {
 	if (!content) return "";
-	const bodyText = cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
+	const bodyText = cachedRenderedString(cache, uiTheme, expanded, `${language ?? ""}:${width}`, content, () => {
 		// Collapsed: follow the streaming edge with a bounded tail window so the box
 		// stays short enough not to strand its scrolled-off head above the viewport
 		// while the block is volatile. `Ctrl+O` (expanded) lifts the cap for a
@@ -1518,33 +1600,81 @@ function formatStreamingContent(
 		let totalLines: number;
 		let startIndex: number;
 		let visibleText: string;
+		let lineNumberWidth: number;
+		let markerShown = false;
+		let contentTarget = 0;
 		if (expanded) {
 			visibleText = normalizeDisplayText(content);
 			totalLines = 1;
 			for (let i = 0; i < visibleText.length; i++) if (visibleText.charCodeAt(i) === 10) totalLines++;
 			startIndex = 0;
+			lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
 		} else {
 			totalLines = streamingTotalLines(streamKey, content);
-			startIndex = Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
-			const tail =
-				startIndex === 0 ? content : content.slice(tailWindowStart(content, WRITE_STREAMING_PREVIEW_LINES));
-			visibleText = tail.replace(/\r/g, "");
+			lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
+			// Row budget in on-screen rows, not logical lines — see
+			// sliceStreamingContentTail for why. innerWidth subtracts the gutter
+			// (`NNN `) since the gutter and its first wrapped row share a line.
+			const innerWidth = Math.max(1, outputBlockContentWidth(width) - lineNumberWidth - 1);
+			const budget = writePreviewRowBudget();
+			// Reserve the trailing "(streaming)" row, plus the "(N earlier lines)"
+			// row while the head is capped, so the body totals `budget` rows.
+			let fit = sliceStreamingContentTail(content, innerWidth, Math.max(1, budget - 2));
+			const measuredTotal = totalLines - fit.stripped;
+			if (fit.consumedLines >= measuredTotal && fit.visualRows <= budget - 2) {
+				// Whole file already fits: no earlier-lines marker is needed, so the
+				// content may claim the row that marker would have taken.
+				fit = sliceStreamingContentTail(content, innerWidth, Math.max(1, budget - 1));
+			}
+			startIndex = measuredTotal - fit.consumedLines;
+			// The marker row is shown either because lines are hidden, or because a
+			// single over-budget line had its rows cut. Decided before emission so
+			// the reservation and the emitted rows cannot disagree.
+			markerShown = startIndex > 0 || fit.visualRows > budget - 2;
+			contentTarget = Math.max(1, budget - (markerShown ? 2 : 1));
+			// Slice to the measured `end`, never to `content.length`: measuring one
+			// span and rendering another is the mismatch this whole path exists to
+			// avoid.
+			visibleText = content.slice(fit.start, fit.end).replace(/\r/g, "");
 		}
-		if (visibleText.length === 0) return "";
 		const hidden = startIndex;
-		const highlighted = highlightCode(visibleText, language);
-		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
+		// An empty window is legitimate (a budget that fits only the file-ending
+		// newline): emit zero content rows and let the padding hold the height,
+		// rather than bailing out and collapsing the frame to its borders.
+		const highlighted = visibleText.length > 0 ? highlightCode(visibleText, language) : [];
 
 		let text = "\n\n";
-		if (hidden > 0) {
-			text += `${uiTheme.fg("dim", `… (${hidden} earlier line${hidden === 1 ? "" : "s"})`)}\n`;
+		if (expanded) {
+			for (let i = 0; i < highlighted.length; i++) {
+				const gutter = uiTheme.fg("dim", `${String(i + 1).padStart(lineNumberWidth, " ")} `);
+				text += `${gutter}${replaceTabs(highlighted[i] ?? "")}\n`;
+			}
+			return text;
 		}
-		for (let i = 0; i < highlighted.length; i++) {
-			const lineNum = startIndex + i + 1;
-			const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
-			const body = replaceTabs(highlighted[i] ?? "");
-			text += `${gutter}${body}\n`;
+		const innerWidth = Math.max(1, outputBlockContentWidth(width) - lineNumberWidth - 1);
+		const rows = previewBodyRows(
+			highlighted,
+			startIndex + 1,
+			lineNumberWidth,
+			innerWidth,
+			contentTarget,
+			"tail",
+			uiTheme,
+		);
+		// Nothing visible and nothing hidden means the payload carries no renderable
+		// line yet (carriage returns only): render no preview at all, exactly as an
+		// empty payload does. When lines *are* hidden the frame stays, padded, so a
+		// window that fits only the file-ending newline cannot collapse it.
+		if (rows.length === 0 && hidden === 0) return "";
+		if (markerShown) {
+			const label = hidden > 0 ? `… (${hidden} earlier line${hidden === 1 ? "" : "s"})` : "…";
+			text += `${uiTheme.fg("dim", label)}\n`;
+			// Filler sits below the marker, never at the head: callers strip leading
+			// blank body rows, which would silently eat the padding and restore the
+			// jitter this is here to remove.
+			for (let i = rows.length; i < contentTarget; i++) text += "\n";
 		}
+		for (const row of rows) text += `${row}\n`;
 		return text;
 	});
 	if (bodyText.length === 0) return "";
@@ -1561,28 +1691,57 @@ function renderContentPreview(
 	expanded: boolean,
 	language: string | undefined,
 	uiTheme: Theme,
+	width: number,
 	cache?: RenderedStringCache,
 ): string {
 	if (!content) return "";
-	return cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
+	return cachedRenderedString(cache, uiTheme, expanded, `${language ?? ""}:${width}`, content, () => {
 		const rawLines = normalizeDisplayText(content).split("\n");
 		const totalLines = rawLines.length;
-		const maxLines = expanded ? totalLines : Math.min(totalLines, WRITE_PREVIEW_LINES);
-		const visibleLines = rawLines.slice(0, maxLines);
-		const highlighted = highlightCode(visibleLines.join("\n"), language);
 		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
-		const hidden = totalLines - maxLines;
+		if (expanded) {
+			const highlighted = highlightCode(rawLines.join("\n"), language);
+			let full = "\n\n";
+			for (let i = 0; i < highlighted.length; i++) {
+				const gutter = uiTheme.fg("dim", `${String(i + 1).padStart(lineNumberWidth, " ")} `);
+				full += `${gutter}${replaceTabs(highlighted[i] ?? "")}\n`;
+			}
+			return full.trimEnd();
+		}
+		// Cap by on-screen ROWS, not logical lines: a fixed line count yields a
+		// wildly different rendered height depending on how many of those lines
+		// wrap at the frame's inner width. Shares `previewBodyRows` with the
+		// streaming path so the finished box lands on the same height as the last
+		// streaming frame instead of jumping.
+		const innerWidth = Math.max(1, outputBlockContentWidth(width) - lineNumberWidth - 1);
+		const budget = writePreviewRowBudget();
+		// One row reserved for the trailing "N more lines" chrome, mirroring the
+		// streaming path's reservation so both settle at `budget` body rows.
+		const rowLimit = Math.max(1, budget - 1);
+		let visualRows = 0;
+		let consumed = 0;
+		for (const line of rawLines) {
+			const lineRows = Math.max(1, wrapTextWithAnsi(replaceTabs(line), innerWidth).length);
+			if (consumed > 0 && visualRows + lineRows > rowLimit) break;
+			visualRows += lineRows;
+			consumed++;
+		}
+		const hidden = totalLines - consumed;
+		// Chrome shows either because lines are hidden, or because a single
+		// over-budget line had its rows cut. Decided before emission so the
+		// reservation and the emitted rows cannot disagree.
+		const chromeShown = hidden > 0 || visualRows > rowLimit;
+		const contentTarget = chromeShown ? rowLimit : budget;
+		const highlighted = highlightCode(rawLines.slice(0, consumed).join("\n"), language);
+		const rows = previewBodyRows(highlighted, 1, lineNumberWidth, innerWidth, contentTarget, "head", uiTheme);
 
 		let text = "\n\n";
-		for (let i = 0; i < highlighted.length; i++) {
-			const lineNum = i + 1;
-			const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
-			const body = replaceTabs(highlighted[i] ?? "");
-			text += `${gutter}${body}\n`;
-		}
-		if (!expanded && hidden > 0) {
-			const hint = formatExpandHint(uiTheme, expanded, hidden > 0);
-			const moreLine = `${formatMoreItems(hidden, "line")}${hint ? ` ${hint}` : ""}`;
+		for (const row of rows) text += `${row}\n`;
+		if (chromeShown) {
+			// Filler precedes the chrome row so `trimEnd()` below cannot strip it.
+			for (let i = rows.length; i < contentTarget; i++) text += "\n";
+			const hint = formatExpandHint(uiTheme, expanded, true);
+			const moreLine = hidden > 0 ? `${formatMoreItems(hidden, "line")}${hint ? ` ${hint}` : ""}` : `… ${hint}`;
 			text += uiTheme.fg("dim", moreLine);
 		}
 		return text.trimEnd();
@@ -1664,6 +1823,7 @@ export const writeToolRenderer = {
 						Boolean(options?.expanded),
 						lang,
 						uiTheme,
+						width,
 						options?.spinnerFrame,
 						streamingCache,
 						// `options` is the ToolExecutionComponent's persistent
@@ -1749,7 +1909,7 @@ export const writeToolRenderer = {
 		const previewCache = createRenderedStringCache();
 		return framedBlock(uiTheme, width => {
 			const { expanded } = options;
-			let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);
+			let body = renderContentPreview(fileContent, expanded, lang, uiTheme, width, previewCache);
 			if (isPartial && progressText) {
 				const safeProgressText = truncateToWidth(
 					replaceTabs(progressText),

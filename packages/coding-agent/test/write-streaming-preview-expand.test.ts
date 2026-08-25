@@ -4,6 +4,7 @@ import {
 	decodeStreamedToolArgs,
 	streamingStringKeysForTool,
 } from "@oh-my-pi/pi-coding-agent/modes/controllers/tool-args-reveal";
+import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { writeToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/write";
 import type { TUI } from "@oh-my-pi/pi-tui";
@@ -91,13 +92,18 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		);
 		if (!component) throw new Error("expected a rendered component for a non-xdev write path");
 
+		// Width now sits in the cache salt: the collapsed tail window is sized in
+		// on-screen rows (wrap-width dependent), so a width change must re-highlight.
 		component.render(80);
 		component.render(120);
-		expect(highlightSpy).toHaveBeenCalledTimes(1);
+		expect(highlightSpy).toHaveBeenCalledTimes(2);
+
+		component.render(120);
+		expect(highlightSpy).toHaveBeenCalledTimes(2);
 
 		options.spinnerFrame = 1;
 		component.render(120);
-		expect(highlightSpy).toHaveBeenCalledTimes(1);
+		expect(highlightSpy).toHaveBeenCalledTimes(2);
 	});
 
 	it("coerces truthy non-string content for pending write previews", async () => {
@@ -204,5 +210,101 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 
 		const rendered = stripAnsi(comp.render(100).join("\n"));
 		expect(rendered).toContain("GROWN_TAIL_SENTINEL");
+	});
+});
+
+describe("collapsed write preview height is stable", () => {
+	let uiTheme: Theme | undefined;
+
+	async function theme(): Promise<Theme> {
+		if (!uiTheme) {
+			await themeModule.initTheme();
+			uiTheme = (await themeModule.getThemeByName("dark")) ?? (await themeModule.getThemeByName("light"));
+		}
+		if (!uiTheme) throw new Error("no theme available");
+		return uiTheme;
+	}
+
+	/** Rendered row counts for every streaming prefix, plus the finished render. */
+	async function heights(lines: readonly string[], width: number): Promise<{ streaming: number[]; finished: number }> {
+		const ui = await theme();
+		const path = "/tmp/height.md";
+		const streaming = lines.map((_, i) => {
+			const component = writeToolRenderer.renderCall(
+				{ path, content: lines.slice(0, i + 1).join("\n") },
+				{ expanded: false, isPartial: true, spinnerFrame: 0 },
+				ui,
+			);
+			if (!component) throw new Error("expected a rendered streaming component");
+			return component.render(width).length;
+		});
+		const finished = writeToolRenderer
+			.renderResult(
+				{ content: [{ type: "text", text: "wrote" }], details: { resolvedPath: path } },
+				{ expanded: false, isPartial: false },
+				ui,
+				{ path, content: lines.join("\n") },
+			)
+			.render(width).length;
+		return { streaming, finished };
+	}
+
+	// A fixed logical-line cap made the box height track *which* lines happened to
+	// be in the window: mixing short lines with lines that wrap re-quantized the
+	// rendered row count on nearly every tick, so the frame flickered as content
+	// scrolled through it (and jumped again on completion).
+	it("keeps one height once wrapping content overflows the window", async () => {
+		const lines = Array.from({ length: 60 }, (_, i) =>
+			i % 2 === 0
+				? `- short ${i}`
+				: `**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/readme-outline.md ${i}`,
+		);
+		const { streaming, finished } = await heights(lines, 80);
+		const peak = Math.max(...streaming);
+		const settled = streaming.slice(streaming.indexOf(peak));
+		expect(settled.every(rowCount => rowCount === peak)).toBe(true);
+		expect(finished).toBe(peak);
+	});
+
+	// A single logical line taller than the whole budget is admitted by the "at
+	// least one line" rule; the tail slicer and the head slicer cut it at
+	// different points, so streaming and finished disagreed on height.
+	it("bounds a single line taller than the whole window", async () => {
+		const { streaming, finished } = await heights(["x".repeat(4000), "short", "tail"], 80);
+		const settled = streaming.slice(1);
+		expect(settled.every(rowCount => rowCount === settled[0])).toBe(true);
+		expect(finished).toBe(settled[0]);
+	});
+
+	// The window is budgeted in on-screen rows, so a shorter viewport must yield a
+	// shorter box - and still a constant one.
+	it("tracks the viewport row budget", async () => {
+		const rows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		const lines = Array.from({ length: 40 }, (_, i) => `- line ${i}`);
+		try {
+			Object.defineProperty(process.stdout, "rows", { value: 24, configurable: true });
+			const short = await heights(lines, 80);
+			Object.defineProperty(process.stdout, "rows", { value: 50, configurable: true });
+			const tall = await heights(lines, 80);
+			expect(Math.max(...short.streaming)).toBeLessThan(Math.max(...tall.streaming));
+			expect(short.finished).toBe(Math.max(...short.streaming));
+			expect(tall.finished).toBe(Math.max(...tall.streaming));
+		} finally {
+			if (rows) Object.defineProperty(process.stdout, "rows", rows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
+	});
+
+	// A budget that fits only the file-ending newline once left the tail window
+	// empty, and the renderer bailed out - collapsing the frame to its borders.
+	it("never collapses to a bare frame when the window fits only the trailing newline", async () => {
+		const ui = await theme();
+		const component = writeToolRenderer.renderCall(
+			{ path: "/tmp/height.md", content: `${"z".repeat(600)}\n` },
+			{ expanded: false, isPartial: true, spinnerFrame: 0 },
+			ui,
+		);
+		if (!component) throw new Error("expected a rendered streaming component");
+		expect(component.render(40).length).toBeGreaterThan(3);
 	});
 });

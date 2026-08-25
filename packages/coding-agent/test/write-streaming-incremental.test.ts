@@ -7,15 +7,24 @@ const hasLine = (lines: readonly string[], n: number): boolean =>
 	new RegExp(`\\bline ${n}\\b`).test(stripAnsi(lines.join("\n")));
 
 /**
- * Reference algorithm: the pre-incremental formatter normalized the whole
- * payload, split every line, and sliced the tail window. The incremental
- * collapsed path must produce byte-identical rows for the same content.
+ * Parse the rendered collapsed preview back into the window it drew: the gutter
+ * numbers it showed and the hidden count it claimed.
+ *
+ * The window is budgeted in *on-screen rows* (viewport-derived, chrome
+ * inclusive), not in logical lines, so a test cannot restate its size without
+ * simply reimplementing the formatter. Asserting the rendered window against
+ * the payload keeps the real contract: contiguous numbering, a tail anchored on
+ * the newest line, and a hidden count that accounts for every line not shown.
  */
-function referenceWindow(content: string): { total: number; start: number; visible: string[] } {
-	const lines = content.replace(/\r/g, "").split("\n");
-	const total = lines.length;
-	const start = Math.max(0, total - 12);
-	return { total, start, visible: lines.slice(start) };
+function renderedWindow(rendered: readonly string[]): { numbers: number[]; hidden: number } {
+	const text = stripAnsi(rendered.join("\n"));
+	const numbers: number[] = [];
+	for (const row of text.split("\n")) {
+		const gutter = /^\s*│\s*(\d+) /.exec(row);
+		if (gutter) numbers.push(Number(gutter[1]));
+	}
+	const marker = /… \((\d+) earlier lines?\)/.exec(text);
+	return { numbers, hidden: marker ? Number(marker[1]) : 0 };
 }
 
 describe("write streaming preview incremental line tracking", () => {
@@ -42,41 +51,39 @@ describe("write streaming preview incremental line tracking", () => {
 	it("tracks an append-only stream through one shared render-state object", async () => {
 		// The reveal loop rebuilds via renderCall once per tick with the SAME
 		// persistent options object; simulate growth 5 → 12 → 13 → 25 → 40 lines.
+		// The incremental line index must keep gutter numbers absolute across every
+		// tick, so a stale index shows up as a shifted or discontiguous window.
 		const options = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const allLines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
 
 		for (const count of [5, 12, 13, 25, 40]) {
 			const content = allLines.slice(0, count).join("\n");
 			const rendered = await renderCollapsed(content, options);
-			const { total, start } = referenceWindow(content);
-			expect(total).toBe(count);
-			// Window shows exactly lines start+1..total with correct numbering.
-			expect(hasLine(rendered, total)).toBe(true);
-			if (start > 0) {
-				expect(hasLine(rendered, start)).toBe(false);
-				expect(hasLine(rendered, start + 1)).toBe(true);
-				expect(stripAnsi(rendered.join("\n"))).toContain(`${start} earlier line`);
-			} else {
-				expect(hasLine(rendered, 1)).toBe(true);
-				expect(stripAnsi(rendered.join("\n"))).not.toContain("earlier line");
-			}
+			const { numbers, hidden } = renderedWindow(rendered);
+			// Tail anchored on the newest line, contiguous, and every line not shown
+			// is accounted for by the marker.
+			expect(numbers.at(-1)).toBe(count);
+			expect(numbers).toEqual(Array.from({ length: numbers.length }, (_, i) => numbers[0]! + i));
+			expect(hidden).toBe(count - numbers.length);
+			expect(numbers[0]).toBe(hidden + 1);
+			for (const lineNum of numbers) expect(hasLine(rendered, lineNum)).toBe(true);
+			if (hidden > 0) expect(hasLine(rendered, hidden)).toBe(false);
 		}
 	});
 
-	it("matches the split-based reference window across a size battery", async () => {
+	it("windows the tail across a size battery", async () => {
 		const options = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		for (const count of [1, 2, 3, 11, 12, 13, 40, 41]) {
-			// Fresh options per size: each tool call gets its own render state.
 			const content = Array.from({ length: count }, (_, i) => `line ${i + 1}`).join("\n");
-			const rendered = stripAnsi((await renderCollapsed(content, options)).join("\n"));
-			const { total, start, visible } = referenceWindow(content);
-			expect(total).toBe(count);
-			for (let i = 0; i < visible.length; i++) {
-				const lineNum = start + i + 1;
-				expect(rendered).toContain(`${lineNum}`);
-				expect(rendered).toContain(visible[i]!);
-			}
-			if (start > 0) expect(rendered).toContain(`… (${start} earlier line${start === 1 ? "" : "s"})`);
+			const rendered = await renderCollapsed(content, options);
+			const text = stripAnsi(rendered.join("\n"));
+			const { numbers, hidden } = renderedWindow(rendered);
+			expect(numbers.at(-1)).toBe(count);
+			expect(hidden).toBe(count - numbers.length);
+			// Each shown gutter number carries its own line's text.
+			for (const lineNum of numbers) expect(text).toContain(`${lineNum} line ${lineNum}`);
+			if (hidden > 0) expect(text).toContain(`… (${hidden} earlier line${hidden === 1 ? "" : "s"})`);
+			else expect(text).not.toContain("earlier line");
 		}
 	});
 
@@ -108,25 +115,26 @@ describe("write streaming preview incremental line tracking", () => {
 		const content = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\r\n");
 		const rendered = await renderCollapsed(content, options);
 		const text = stripAnsi(rendered.join("\n"));
+		const { numbers, hidden } = renderedWindow(rendered);
 		expect(text).not.toContain("\r");
-		// 20 lines → window is lines 9..20.
-		expect(text).toContain("… (8 earlier lines)");
-		expect(hasLine(rendered, 8)).toBe(false);
-		expect(hasLine(rendered, 9)).toBe(true);
-		expect(hasLine(rendered, 20)).toBe(true);
+		expect(numbers.at(-1)).toBe(20);
+		expect(hidden).toBe(20 - numbers.length);
+		expect(hasLine(rendered, hidden)).toBe(false);
+		expect(hasLine(rendered, hidden + 1)).toBe(true);
 	});
 
-	it("counts a trailing newline as a final empty row, matching the reference", async () => {
+	// The file-ending newline is dropped from the window: it is not a line the
+	// user wrote, and spending the tail's last slot on it once left the window
+	// holding nothing but that empty line — collapsing the frame to its borders
+	// on exactly the ticks where content ended on a newline.
+	it("spends the window on real lines, not the file-ending newline", async () => {
 		const options = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const content = `${Array.from({ length: 13 }, (_, i) => `line ${i + 1}`).join("\n")}\n`;
 		const rendered = await renderCollapsed(content, options);
-		const { total, start } = referenceWindow(content);
-		expect(total).toBe(14);
-		expect(start).toBe(2);
-		const text = stripAnsi(rendered.join("\n"));
-		expect(text).toContain("… (2 earlier lines)");
+		const { numbers, hidden } = renderedWindow(rendered);
+		expect(numbers.at(-1)).toBe(13);
+		expect(hidden).toBe(13 - numbers.length);
 		expect(hasLine(rendered, 13)).toBe(true);
-		expect(hasLine(rendered, 2)).toBe(false);
 	});
 
 	it("renders carriage-return-only content like the previous normalized empty payload", async () => {
@@ -161,8 +169,7 @@ describe("write streaming preview incremental line tracking", () => {
 		const part2 = "line 1\r\nline 2\r\nline 3\r\nline 4";
 		await renderCollapsed(part1, options);
 		const rendered = await renderCollapsed(part2, options);
-		const { total } = referenceWindow(part2);
-		expect(total).toBe(4);
+		expect(renderedWindow(rendered).numbers).toEqual([1, 2, 3, 4]);
 		expect(hasLine(rendered, 4)).toBe(true);
 		expect(hasLine(rendered, 1)).toBe(true);
 		expect(stripAnsi(rendered.join("\n"))).not.toContain("earlier line");
