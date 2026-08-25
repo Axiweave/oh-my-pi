@@ -82,9 +82,10 @@ class ResizeScheduler {
 	}
 }
 
-// Every signal isInsideTerminalMultiplexer() recognizes; the suite itself may
-// run under tmux, screen, Zellij, CMUX, or Herdr, so direct-terminal describes
-// must clear them all (TERM prefixed tmux-/screen- also flags a multiplexer).
+// Every signal isInsideTerminalMultiplexer() recognizes, plus INSIDE_EMACS
+// (the Emacs-hosted resize gate); the suite itself may run under tmux, screen,
+// Zellij, CMUX, Herdr, or an Emacs terminal, so direct-terminal describes must
+// clear them all (TERM prefixed tmux-/screen- also flags a multiplexer).
 const MUX_SIGNALS = [
 	"TMUX",
 	"STY",
@@ -94,6 +95,7 @@ const MUX_SIGNALS = [
 	"CMUX_SURFACE_ID",
 	"CMUX_REMOTE_TRANSPORT",
 	"TERM",
+	"INSIDE_EMACS",
 ] as const;
 
 function useDirectTerminalEnv() {
@@ -115,15 +117,14 @@ function useDirectTerminalEnv() {
 }
 
 describe("resize anchoring inside a terminal multiplexer", () => {
-	let previousTmux: string | undefined;
+	useDirectTerminalEnv();
 
 	beforeEach(() => {
-		previousTmux = Bun.env.TMUX;
+		// A real multiplexer pane: the session var AND the pane-overridden
+		// TERM. TMUX alone is not authoritative — it also leaks into Emacs
+		// children when a multiplexer hosts Emacs itself.
 		Bun.env.TMUX = "/tmp/tmux-1000/default,1,0";
-	});
-	afterEach(() => {
-		if (previousTmux === undefined) delete Bun.env.TMUX;
-		else Bun.env.TMUX = previousTmux;
+		Bun.env.TERM = "tmux-256color";
 	});
 
 	it("skips the SIGWINCH-side erase so a racing re-layout cannot blank popped scrollback", () => {
@@ -477,6 +478,79 @@ describe("resize anchoring inside a terminal multiplexer", () => {
 		const cup = repaint.match(/\x1b\[(\d+);1H/);
 		expect(cup).not.toBeNull();
 		expect(Number(cup![1])).toBe(12);
+		tui.stop();
+	});
+});
+
+// Regression coverage for the alt-screen flicker in Emacs-hosted terminals
+// (ghostel/eat/vterm): an Emacs terminal buffer displays an alternate-screen
+// switch as a visible full-buffer swap — scrollback vanishes and the cursor
+// jumps to the end of a bare screen-sized grid until the borrow ends. The
+// resize transaction must park silently instead: no 1049 writes, no painting
+// until the CPR anchor resolves the settled repaint.
+describe("resize anchoring inside an Emacs-hosted terminal", () => {
+	useDirectTerminalEnv();
+	let previousInsideEmacs: string | undefined;
+
+	beforeEach(() => {
+		previousInsideEmacs = Bun.env.INSIDE_EMACS;
+		Bun.env.INSIDE_EMACS = "ghostel";
+	});
+	afterEach(() => {
+		if (previousInsideEmacs === undefined) delete Bun.env.INSIDE_EMACS;
+		else Bun.env.INSIDE_EMACS = previousInsideEmacs;
+	});
+
+	it("parks silently: no alt-screen borrow, no paint until the CPR reply anchors the repaint", () => {
+		const { terminal, tui, writes } = startRig();
+		writes.length = 0;
+		terminal.resize(40, 20);
+		const beforeReply = writes.join("");
+		// The alt borrow (visible buffer swap in Emacs) must not run, the erase
+		// must not blank the live region, and no stale-anchored frame may paint
+		// while the probe is pending; only the CPR request goes out.
+		expect(beforeReply.includes("\x1b[?1049h")).toBe(false);
+		expect(beforeReply.includes("\x1b[J")).toBe(false);
+		expect(beforeReply.includes("live-0")).toBe(false);
+		expect(beforeReply.includes("\x1b[6n")).toBe(true);
+		writes.length = 0;
+		terminal.sendInput("\x1b[4;17R"); // parked cursor: viewport top, screen row 3
+		const repaint = writes.join("");
+		// Direct-terminal CPR math still anchors the settled repaint: reported
+		// row 3 (0-based), park offset 0 -> viewport top 3 (CUP row 4).
+		const cup = repaint.match(/\x1b\[(\d+);1H/);
+		expect(cup).not.toBeNull();
+		expect(Number(cup![1])).toBe(4);
+		expect(repaint.includes("live-0")).toBe(true);
+		expect(repaint.includes("\x1b[?1049")).toBe(false);
+		tui.stop();
+	});
+
+	it("parks silently despite a TMUX leaked by a multiplexer hosting Emacs itself", () => {
+		// A tmux session hosting Emacs leaks TMUX into every Emacs child, but
+		// that layer never sees this process's output — ghostel is still the
+		// direct host (TERM stays non-multiplexer), so the borrow must stay
+		// skipped.
+		Bun.env.TMUX = "/tmp/tmux-1000/default,1,0";
+		const { terminal, tui, writes } = startRig();
+		writes.length = 0;
+		terminal.resize(40, 20);
+		expect(writes.join("").includes("\x1b[?1049h")).toBe(false);
+		tui.stop();
+	});
+
+	it("keeps the alt borrow inside a real multiplexer pane under Emacs", () => {
+		// A multiplexer pane always overrides TERM. tmux internalizes the
+		// pane's alternate screen, so the outer Emacs terminal never sees the
+		// flip — the multiplexer anchor model must stay on its own tested path.
+		Bun.env.TMUX = "/tmp/tmux-1000/default,1,0";
+		Bun.env.TERM = "tmux-256color";
+		const { terminal, tui, renderScheduler, writes } = startRig();
+		writes.length = 0;
+		terminal.resize(40, 20);
+		expect(writes.join("").includes("\x1b[?1049h")).toBe(true);
+		renderScheduler.settle();
+		renderScheduler.settle();
 		tui.stop();
 	});
 });

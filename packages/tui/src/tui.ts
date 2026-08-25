@@ -25,6 +25,7 @@ import {
 	encodeKittyDeleteImage,
 	encodeKittyPlacementLine,
 	ImageProtocol,
+	isEmacsHostedTerminal,
 	isImageProtocolForced,
 	isInsideTerminalMultiplexer,
 	parseKittyDirectPlacementLine,
@@ -1167,6 +1168,28 @@ export class TUI extends Container {
 		this.#resizeBurstLastHeight = this.terminal.rows;
 		this.#resizeBurstPull += Math.max(0, this.terminal.rows - burstLastHeight);
 		this.#geometryEpoch++;
+		if (isEmacsHostedTerminal()) {
+			// Emacs-hosted terminals (INSIDE_EMACS: ghostel/eat/vterm) display an
+			// alternate-screen switch as a visible full-buffer swap — the borrow
+			// costs far more than the drag jank it hides, and Emacs delivers
+			// discrete resizes, not drags. (The detector already yields to a real
+			// inner multiplexer via TERM; a TMUX/STY leaked by a multiplexer
+			// hosting Emacs itself does not veto it.) Park silently instead:
+			// stash the anchor window and go straight to the settled-anchor
+			// probe; #resizeProbe suppresses painting until the anchored
+			// repaint, and a resize arriving mid-probe restarts the transaction
+			// through the start() resize handler with the stash kept.
+			this.terminal.hideCursor();
+			this.#recordHardwareCursorHidden();
+			if (!restartingProbe) {
+				this.#resizeProbeWindow = this.#providerWindow;
+				this.#resizeProbeOffset = this.#parkedViewportOffset;
+			}
+			this.#providerWindow = [];
+			this.#parkedViewportOffset = 0;
+			this.#beginResizeAnchorProbe();
+			return;
+		}
 		if (!this.#resizeAltActive) {
 			this.#resizeAltActive = true;
 			setAltScreenActive(true);
@@ -1349,7 +1372,10 @@ export class TUI extends Container {
 				? this.#providerViewportTop
 				: reportedRow - this.#reflowedRowCount(probe.window, 0, probe.offset, width);
 		let top: number;
-		if (isInsideTerminalMultiplexer()) {
+		// A TMUX/STY leaked by a multiplexer hosting Emacs itself must not pick
+		// the clip model: the Emacs terminal is the direct host and reflows
+		// bottom-preserving like a direct terminal.
+		if (isInsideTerminalMultiplexer() && !isEmacsHostedTerminal()) {
 			if (reportedRow !== undefined) {
 				// The parked cursor's reply is exact under multiplexer clipping:
 				// discards leave the cursor in place, pushes only occur after

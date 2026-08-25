@@ -8,7 +8,10 @@ import { afterEach, beforeEach } from "bun:test";
  * authoritative, and `isMultiplexerSession()` then routes rendering down the
  * path that cannot rebuild scrollback. Tests that assert the destructive
  * full-paint behavior otherwise fail for anyone running the suite inside tmux,
- * screen, Zellij or CMUX. Restores whatever was set afterwards.
+ * screen, Zellij or CMUX. `INSIDE_EMACS` is cleared too: it routes resize
+ * transactions down the Emacs silent-park path (no alt-screen borrow), which
+ * would otherwise flip for anyone running the suite from an Emacs terminal.
+ * Restores whatever was set afterwards.
  */
 export function withoutTerminalMultiplexer(): void {
 	const KEYS = [
@@ -20,6 +23,7 @@ export function withoutTerminalMultiplexer(): void {
 		"CMUX_SURFACE_ID",
 		"CMUX_REMOTE_TRANSPORT",
 		"TERM",
+		"INSIDE_EMACS",
 	] as const;
 	const previous = new Map<string, string | undefined>();
 

@@ -206,6 +206,26 @@ export function isInsideTerminalMultiplexer(env: NodeJS.ProcessEnv = Bun.env): b
 }
 
 /**
+ * Detect that the process's DIRECT host is an Emacs terminal buffer
+ * (ghostel/eat/vterm/term all export INSIDE_EMACS). Emacs terminal buffers
+ * display an alternate-screen switch as a visible full-buffer swap, so
+ * transient alt-screen borrows that are invisible on real terminals flicker
+ * there.
+ *
+ * Multiplexer session vars (TMUX/STY) cannot veto this: a multiplexer hosting
+ * Emacs itself leaks them into every Emacs child, where they describe an
+ * outer layer this process never talks to. TERM is the honest signal for the
+ * innermost host — a real multiplexer pane always overrides it, so a
+ * tmux-/screen-prefixed TERM means a multiplexer sits between Emacs and us
+ * and its rendering rules apply instead.
+ */
+export function isEmacsHostedTerminal(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	if (!env.INSIDE_EMACS) return false;
+	const term = env.TERM?.toLowerCase() ?? "";
+	return !term.startsWith("tmux") && !term.startsWith("screen");
+}
+
+/**
  * Whether the agent process is running inside a Zellij session. Read fresh on
  * each call (like {@link isInsideTmux}) so a session attached/detached mid-run
  * is observed and tests can toggle `Bun.env.ZELLIJ` per case.

@@ -58,6 +58,10 @@
 
 - Added `Markdown.getLastRenderStableText()` to expose the stable prefix of streamed Markdown text for append-only transcript publication.
 
+### Fixed
+
+- Fixed a visible flicker on resize in Emacs-hosted terminals (ghostel/eat/vterm, detected via `INSIDE_EMACS`): the resize transaction borrowed the alternate screen, which Emacs terminal buffers display as a full buffer swap — scrollback vanished and the cursor jumped to the end of a bare screen-sized grid until the borrow ended. Emacs hosts now park silently and go straight to the settled-anchor CPR probe. A `TMUX`/`STY` leaked by a multiplexer hosting Emacs itself no longer vetoes this: `TERM` decides the direct host, so only a real inner multiplexer pane (`tmux-*`/`screen-*` `TERM`) keeps the alternate-screen borrow and the multiplexer anchor model.
+
 ## [18.0.5] - 2026-08-25
 
 ### Breaking Changes

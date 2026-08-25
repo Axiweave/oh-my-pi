@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { postmortem } from "@oh-my-pi/pi-utils";
+import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 import {
 	createProcessTerminalRenderHarness,
 	type ProcessTerminalRenderHarness,
 } from "./process-terminal-render-harness";
+
+// The resize flow branches on the hosting terminal (multiplexer pane vs
+// Emacs-hosted vs direct); these contracts assert the direct-terminal path.
+withoutTerminalMultiplexer();
 
 const PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, "platform");
 
