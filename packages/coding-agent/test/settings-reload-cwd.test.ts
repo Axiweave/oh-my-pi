@@ -328,6 +328,21 @@ describe("Settings.reloadForCwd", () => {
 			const reloaded = await Settings.loadIsolated({ cwd: startDir, agentDir });
 			expect(reloaded.getProjectModelRole("default")).toBe("anthropic/claude-sonnet-4-5");
 		});
+		it("writes the project modelProfile selector alongside existing project roles", async () => {
+			const settings = await Settings.init({ cwd: startDir, agentDir });
+			const projectConfigPath = path.join(startDir, ".omp", "config.yml");
+			settings.setProjectModelRole("default", "anthropic/project");
+
+			settings.setProjectModelProfile("work");
+			// Merged-layer visibility before any disk write.
+			expect(settings.get("modelProfile")).toBe("work");
+			await settings.flush();
+
+			expect(YAML.parse(await Bun.file(projectConfigPath).text())).toEqual({
+				modelRoles: { default: "anthropic/project" },
+				modelProfile: "work",
+			});
+		});
 		it("does not copy unedited roles from other project settings providers", async () => {
 			await Bun.write(
 				path.join(scopedProject, ".omp", "settings.json"),

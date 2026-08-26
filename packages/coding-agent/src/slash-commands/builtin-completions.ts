@@ -289,3 +289,55 @@ function buildDirectoryCompletionDisplayValue(prefix: string, absoluteValue: str
 	const relative = path.relative(cwd, normalized);
 	return `${relative.replaceAll("\\", "/")}/`;
 }
+
+const MODEL_PROFILE_SCOPES = [
+	{ name: "global", description: "Also save as startup profile in ~/.omp/agent/config.yml" },
+	{ name: "project", description: "Also save as startup profile in ./.omp/config.yml" },
+] as const;
+
+/** Build getArgumentCompletions for /model-profile: bundle names, then a save scope. */
+export function buildModelProfileArgumentCompletions(
+	runtime: TuiSlashCommandRuntime,
+): (prefix: string) => AutocompleteItem[] | null {
+	return (argumentPrefix: string) => {
+		const profiles = runtime.ctx.settings.getModelProfiles();
+		const spaceIndex = argumentPrefix.indexOf(" ");
+		if (spaceIndex !== -1) {
+			// Second token: scope, only after a valid profile name.
+			const name = argumentPrefix.slice(0, spaceIndex);
+			if (!Object.hasOwn(profiles, name)) return null;
+			const scopePrefix = argumentPrefix.slice(spaceIndex + 1).toLowerCase();
+			if (scopePrefix.includes(" ")) return null;
+			const matches = MODEL_PROFILE_SCOPES.filter(s => s.name.startsWith(scopePrefix)).map(s => ({
+				value: `${name} ${s.name}`,
+				label: s.name,
+				description: s.description,
+			}));
+			return matches.length > 0 ? matches : null;
+		}
+		const active = runtime.ctx.session.activeModelProfile;
+		const lower = argumentPrefix.toLowerCase();
+		// No trailing space in `value`: Enter after accepting a name must submit
+		// a session-only switch, not surface the scope popup.
+		const items = Object.entries(profiles)
+			.filter(([name]) => name.toLowerCase().startsWith(lower))
+			.map(([name, roles]) => {
+				const summary =
+					Object.entries(roles)
+						.map(([role, model]) => `${role}: ${model}`)
+						.join(", ") || "no overrides — config roles";
+				return { value: name, label: name, description: name === active ? `(active) ${summary}` : summary };
+			});
+		return items.length > 0 ? items : null;
+	};
+}
+
+/** Ghost hint for /model-profile: full usage when empty, scope suffix while the name is typed. */
+export function buildModelProfileInlineHint(): (argumentText: string) => string | null {
+	return (argumentText: string) => {
+		const trimmed = argumentText.trimStart();
+		if (trimmed.length === 0) return "[name] [global|project]";
+		if (!trimmed.includes(" ")) return " [global|project]";
+		return null;
+	};
+}

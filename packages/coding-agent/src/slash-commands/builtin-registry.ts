@@ -5,6 +5,8 @@ import {
 	buildArgumentCompletions,
 	buildDirectoryArgumentCompletions,
 	buildMcpArgumentCompletions,
+	buildModelProfileArgumentCompletions,
+	buildModelProfileInlineHint,
 	buildStaticInlineHint,
 	buildSubcommandInlineHint,
 } from "./builtin-completions";
@@ -78,6 +80,9 @@ function materializeTuiBuiltinSlashCommand(
 				? buildMcpArgumentCompletions(cmd.subcommands, runtime)
 				: buildArgumentCompletions(cmd.subcommands);
 		materialized.getInlineHint = buildSubcommandInlineHint(cmd.subcommands);
+	} else if (cmd.name === "model-profile" && runtime) {
+		materialized.getArgumentCompletions = buildModelProfileArgumentCompletions(runtime);
+		materialized.getInlineHint = buildModelProfileInlineHint();
 	} else if (cmd.name === "move") {
 		materialized.getArgumentCompletions = buildDirectoryArgumentCompletions();
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);

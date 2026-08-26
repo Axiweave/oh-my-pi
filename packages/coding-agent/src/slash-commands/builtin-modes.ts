@@ -6,6 +6,7 @@ import {
 	resolveCliModel,
 } from "../config/model-resolver";
 import type { SettingPath, Settings } from "../config/settings";
+import { renderSegmentTrack } from "../modes/components/segment-track";
 import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession } from "../session/agent-session";
@@ -57,6 +58,39 @@ function formatFastModeStatus(session: AgentSession): string {
 /** `/extended-context status` label for the premium long-context window setting. */
 function formatExtendedContextStatus(settings: Settings): string {
 	return settings.get("extendedContext") ? "on" : "off";
+}
+
+type ModelProfileScope = "global" | "project";
+
+/** Resolves the /model-profile argument tokens against configured bundles. */
+function resolveModelProfileArg(
+	settings: Settings,
+	args: string,
+):
+	| { kind: "none-configured" }
+	| { kind: "status"; names: string[] }
+	| { kind: "usage" }
+	| { kind: "unknown"; name: string; names: string[] }
+	| { kind: "apply"; name: string; names: string[]; scope?: ModelProfileScope } {
+	const names = Object.keys(settings.getModelProfiles());
+	if (names.length === 0) return { kind: "none-configured" };
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	if (tokens.length === 0) return { kind: "status", names };
+	if (tokens.length > 2) return { kind: "usage" };
+	const [name, scope] = tokens;
+	if (scope !== undefined && scope !== "global" && scope !== "project") return { kind: "usage" };
+	if (!names.includes(name)) return { kind: "unknown", name, names };
+	return { kind: "apply", name, names, scope };
+}
+
+/** Persists the startup modelProfile field to the requested config scope. */
+function persistModelProfile(settings: Settings, name: string, scope: ModelProfileScope): string {
+	if (scope === "global") {
+		settings.set("modelProfile", name);
+		return "saved as startup profile (global config)";
+	}
+	settings.setProjectModelProfile(name);
+	return "saved as startup profile (.omp/config.yml)";
 }
 
 /** Applies an `/extended-context` argument and returns its operator feedback. */
@@ -400,6 +434,120 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showModelSelector({ temporaryOnly: true });
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "model-profile",
+		icon: "package",
+		description: "Switch to a named modelProfiles bundle, optionally saving it as the startup profile",
+		acpDescription: "Switch to a named modelProfiles bundle, optionally saving it as the startup profile",
+		acpInputHint: "[name] [global|project]",
+		inlineHint: "[name] [global|project]",
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => `Profile: ${runtime.ctx.session.activeModelProfile ?? "none"}`,
+		handle: async (command, runtime) => {
+			const resolved = resolveModelProfileArg(runtime.settings, command.args);
+			if (resolved.kind === "none-configured") {
+				await runtime.output("No model profiles configured — add `modelProfiles` to your config.");
+				return commandConsumed();
+			}
+			if (resolved.kind === "status") {
+				await runtime.output(
+					`Model profile: ${runtime.session.activeModelProfile ?? "none (config roles)"}. Available: ${resolved.names.join(", ")}`,
+				);
+				return commandConsumed();
+			}
+			if (resolved.kind === "usage") {
+				return usage("Usage: /model-profile [name] [global|project]", runtime);
+			}
+			if (resolved.kind === "unknown") {
+				return usage(`Unknown model profile: ${resolved.name}. Available: ${resolved.names.join(", ")}`, runtime);
+			}
+			try {
+				const role = runtime.session.getPlanModeState()?.enabled ? "plan" : "default";
+				const result = await runtime.session.applyModelProfile(resolved.name, role);
+				// Persist regardless of result.model: the bundle is installed either way,
+				// and the startup field names a bundle, not a model.
+				const saved = resolved.scope
+					? persistModelProfile(runtime.settings, resolved.name, resolved.scope)
+					: undefined;
+				await runtime.output(
+					(result?.model
+						? `Model profile ${resolved.name}: now on ${result.model.provider}/${result.model.id}.`
+						: `Model profile ${resolved.name} installed, but no configured role resolved to an available model.`) +
+						(saved ? ` ${saved[0].toUpperCase()}${saved.slice(1)}.` : ""),
+				);
+				await runtime.notifyTitleChanged?.();
+				await runtime.notifyConfigChanged?.();
+				return commandConsumed();
+			} catch (err) {
+				return usage(`Failed to set model profile: ${errorMessage(err)}`, runtime);
+			}
+		},
+		handleTui: async (command, runtime) => {
+			runtime.ctx.editor.setText("");
+			if (runtime.ctx.focusedAgentId) {
+				runtime.ctx.showStatus("Model/thinking apply to the main session — press ←← to return first");
+				return;
+			}
+			const resolved = resolveModelProfileArg(runtime.ctx.settings, command.args);
+			if (resolved.kind === "none-configured") {
+				runtime.ctx.showStatus("No model profiles configured — add `modelProfiles` to your config");
+				return;
+			}
+			if (resolved.kind === "status") {
+				runtime.ctx.showStatus(
+					`Model profile: ${runtime.ctx.session.activeModelProfile ?? "none (config roles)"} — available: ${resolved.names.join(", ")}`,
+				);
+				return;
+			}
+			if (resolved.kind === "usage") {
+				runtime.ctx.showStatus("Usage: /model-profile [name] [global|project]");
+				return;
+			}
+			if (resolved.kind === "unknown") {
+				runtime.ctx.showStatus(`Unknown model profile: ${resolved.name}. Available: ${resolved.names.join(", ")}`);
+				return;
+			}
+			try {
+				const role = runtime.ctx.session.getPlanModeState()?.enabled ? "plan" : "default";
+				const result = await runtime.ctx.session.applyModelProfile(resolved.name, role);
+				if (!result) {
+					// Unreachable after the key check above, but keep the guard.
+					runtime.ctx.showStatus(
+						`Unknown model profile: ${resolved.name}. Available: ${resolved.names.join(", ")}`,
+					);
+					return;
+				}
+				// Persist regardless of result.model: the bundle is installed either way,
+				// and the startup field names a bundle, not a model.
+				const saved = resolved.scope
+					? persistModelProfile(runtime.ctx.settings, resolved.name, resolved.scope)
+					: undefined;
+				runtime.ctx.statusLine.invalidate();
+				runtime.ctx.updateEditorBorderColor();
+				if (!result.model) {
+					runtime.ctx.showStatus(
+						`Model profile ${result.profile}: no configured role resolved to an available model${saved ? ` — ${saved}` : ""}`,
+					);
+					return;
+				}
+				if (saved) {
+					// Scope-save shows a status naming the file instead of the segment track.
+					runtime.ctx.showStatus(
+						`Model profile ${resolved.name}: now on ${result.model.provider}/${result.model.id} — ${saved}`,
+					);
+					return;
+				}
+				runtime.ctx.showModelCycleTrack(
+					renderSegmentTrack(
+						resolved.names.map(label => ({ label })),
+						resolved.names.indexOf(result.profile),
+					),
+				);
+			} catch (error) {
+				runtime.ctx.showError(error instanceof Error ? error.message : String(error));
+			}
 		},
 	},
 	{

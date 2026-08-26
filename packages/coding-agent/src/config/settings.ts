@@ -465,6 +465,8 @@ export class Settings {
 	#modified = new Set<string>();
 	/** Individual project model roles modified during this session */
 	#modifiedProjectModelRoles = new Set<string>();
+	/** Project-layer modelProfile pending persist to .omp/config.yml. */
+	#modifiedProjectModelProfile = false;
 	/** Individual global model roles modified during this session (for partial save) */
 	#modifiedGlobalModelRoles = new Set<string>();
 	/** On-disk generations and prior values observed before each pending global mutation. */
@@ -745,7 +747,7 @@ export class Settings {
 		if (this.#modified.size > 0 || this.#modifiedGlobalModelRoles.size > 0) {
 			await this.#saveNow();
 		}
-		if (this.#modifiedProjectModelRoles.size > 0) {
+		if (this.#modifiedProjectModelRoles.size > 0 || this.#modifiedProjectModelProfile) {
 			await this.#saveProjectNow();
 		}
 	}
@@ -1186,6 +1188,17 @@ export class Settings {
 		this.#setProjectModelRoleValue(role, null);
 		this.#captureRuntimeModelRoleOverride(role);
 		this.#updateRuntimeModelRoleOverride(role, undefined);
+	}
+
+	/** Persist `modelProfile: name` in <cwd>/.omp/config.yml (project layer). */
+	setProjectModelProfile(name: string): void {
+		const prev = this.get("modelProfile");
+		setByPath(this.#project, ["modelProfile"], name);
+		this.#modifiedProjectModelProfile = true;
+		this.#persistedMutationGeneration++;
+		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged("modelProfile", this.get("modelProfile"), prev);
+		this.#queueProjectSave();
 	}
 
 	/**
@@ -2678,11 +2691,18 @@ export class Settings {
 	}
 
 	async #saveProjectNow(): Promise<void> {
-		if (this.#savesCancelled || !this.#persist || this.#modifiedProjectModelRoles.size === 0) return;
+		if (
+			this.#savesCancelled ||
+			!this.#persist ||
+			(this.#modifiedProjectModelRoles.size === 0 && !this.#modifiedProjectModelProfile)
+		)
+			return;
 
 		const projectConfigPath = path.join(this.#cwd, ".omp", "config.yml");
 		const modifiedModelRoles = [...this.#modifiedProjectModelRoles];
 		this.#modifiedProjectModelRoles.clear();
+		const modifiedModelProfile = this.#modifiedProjectModelProfile;
+		this.#modifiedProjectModelProfile = false;
 
 		try {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
@@ -2697,6 +2717,9 @@ export class Settings {
 					const value = isRecord(projectRoles) ? projectRoles[role] : undefined;
 					setByPath(projectSettings, ["modelRoles", role], value);
 				}
+				if (modifiedModelProfile) {
+					setByPath(projectSettings, ["modelProfile"], getByPath(this.#project, ["modelProfile"]));
+				}
 
 				await this.#writeYamlAtomically(writePath, projectSettings);
 				this.#projectFileSettings = structuredClone(projectSettings);
@@ -2707,6 +2730,7 @@ export class Settings {
 			for (const role of modifiedModelRoles) {
 				this.#modifiedProjectModelRoles.add(role);
 			}
+			if (modifiedModelProfile) this.#modifiedProjectModelProfile = true;
 			throw error;
 		}
 

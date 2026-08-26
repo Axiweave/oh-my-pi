@@ -205,6 +205,7 @@
 
 - Added `modelProfiles`: named bundles of model-role assignments cycled with `Alt+Shift+M`, so plan mode, commit, and task models all follow the profile you switch to instead of staying pinned to your global roles. The active profile survives resume, appears in the new `model_profile` status-line segment, and malformed bundles or unknown role names are reported as startup warnings.
 - Added `modelProfile` and `--model-profile`: name the `modelProfiles` bundle a new session starts on, readable from a project's `.omp/config.yml`, so plan mode and the status-line segment follow it before any keypress. Resumed sessions keep their own model and profile.
+- Added `/model-profile`: switch to a named `modelProfiles` bundle by name with autocomplete, and optionally persist it as the startup profile with a trailing `global` or `project` scope.
 
 ### Fixed
 
