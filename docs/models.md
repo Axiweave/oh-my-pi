@@ -475,6 +475,27 @@ behind it: plan mode still follows the profile after a resume. A profile
 deleted from `config.yml` since the session was written is dropped instead of
 pinning roles that no longer exist.
 
+`modelProfile` (singular) names the bundle a *new* session starts on, so you do
+not have to press `Alt+Shift+M` after every launch:
+
+```yaml
+modelProfile: fable
+```
+
+It reads from the same layers as everything else, so a repository can pin its
+own bundle in `.omp/config.yml` over your global choice, and
+`--model-profile <name>` overrides both for one launch (named for the
+`modelProfiles` bundle — `--profile` is the isolated-profile flag). Precedence:
+a CLI role override (`--smol`, `--slow`, `--plan`) beats the startup profile on
+the role it names, and the startup profile beats plain `modelRoles`. Naming a
+bundle that does not exist is reported as a startup warning.
+
+A resumed session keeps its own state. Its persisted model is restored as
+always, and it reports no active profile unless it was explicitly switched into
+one — the field says where a new session starts, not what an old one becomes.
+Its unpinned roles still resolve through the startup profile, exactly as they
+would through `modelRoles`.
+
 The `model_profile` status-line segment names the active bundle and stays
 hidden until you switch to one. It ships in the `default` preset; with
 `statusLine.preset: custom`, add `model_profile` to `statusLine.leftSegments`.
@@ -485,6 +506,7 @@ Related settings:
 
 - `modelRoles` (record)
 - `modelProfiles` (record of named role bundles)
+- `modelProfile` (name of the bundle a session starts on)
 - `enabledModels` (scoped pattern list)
 - `modelProviderOrder` (provider precedence when equivalent concrete choices share an id)
 - `providers.kimiApiFormat` (`openai` or `anthropic` request format)

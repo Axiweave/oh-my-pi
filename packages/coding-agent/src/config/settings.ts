@@ -1307,17 +1307,41 @@ export class Settings {
 	 * of keeping the outgoing profile's model. Runtime overrides that predate
 	 * the first profile switch (CLI `--smol`/`--slow`/`--plan`) survive every
 	 * switch. Pass `undefined` to drop back to those.
+	 *
+	 * @param options.under - Merge the profile *beneath* those runtime overrides
+	 *   instead of over them, so a CLI flag beats the profile. Used by
+	 *   {@link installStartupModelProfile}; an explicit switch merges over.
 	 */
-	applyModelProfileRoles(roles: ReadOnlyDict<string> | undefined): void {
+	applyModelProfileRoles(roles: ReadOnlyDict<string> | undefined, options?: { under?: boolean }): void {
 		this.#modelProfileBaseRoles ??= this.#modelRolesFromLayer(this.#overrides);
-		const next = { ...this.#modelProfileBaseRoles };
+		const base = this.#modelProfileBaseRoles;
+		const next: Record<string, string> = options?.under ? {} : { ...base };
 		for (const [role, modelId] of Object.entries(roles ?? {})) {
 			if (modelId) next[role] = modelId;
 		}
+		if (options?.under) Object.assign(next, base);
 		// The whole runtime layer is being replaced, so per-role project-edit
 		// captures no longer describe anything restorable (mirrors `override`).
 		this.#savedRuntimeModelRoleOverrides.clear();
 		this.#setRuntimeModelRoleOverrides(next);
+	}
+
+	/**
+	 * Install the configured startup `modelProfile` beneath the runtime override
+	 * layer and return its name, or `undefined` when unset/unknown.
+	 *
+	 * Under the layer, not over it: an explicit `--smol`/`--slow`/`--plan` beats
+	 * a config field, while every role the flags do not name follows the
+	 * profile. Idempotent — re-running with the same config yields the same
+	 * layer.
+	 */
+	installStartupModelProfile(): string | undefined {
+		const name = this.get("modelProfile")?.trim();
+		if (!name) return undefined;
+		const roles = this.getModelProfiles()[name];
+		if (!roles) return undefined;
+		this.applyModelProfileRoles(roles, { under: true });
+		return name;
 	}
 
 	/**
@@ -1596,9 +1620,10 @@ export class Settings {
 			? await this.#loadYaml(projectConfigPath)
 			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
 				{});
-		// `modelProfiles` is a model-role layer too: dropping it here while
-		// `modelRoles` survives would leave a project half-configured.
-		for (const key of ["modelRoles", "modelProfiles"]) {
+		// `modelProfiles` is a model-role layer too, and `modelProfile` is the
+		// field that selects among them: dropping either here while `modelRoles`
+		// survives would leave a project half-configured.
+		for (const key of ["modelRoles", "modelProfiles", "modelProfile"]) {
 			const native = getByPath(nativeProject, [key]);
 			if (native !== undefined) merged = this.#deepMerge(merged, { [key]: native });
 		}

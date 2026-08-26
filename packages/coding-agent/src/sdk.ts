@@ -1305,6 +1305,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		extensionRoots?.configured ?? settings.get("extensions") ?? [],
 		extensionRoots?.configuredLevel ?? settings.extensionsSourceLevel(),
 	);
+	// The startup profile is a model-role layer, so it must be installed before
+	// the default role resolves below — otherwise the session boots on the
+	// global default model with the profile's roles behind it.
+	settings.installStartupModelProfile();
 
 	// Pin authStorage to modelRegistry.authStorage: ModelRegistry.getApiKey() routes refresh
 	// failures through that instance, so any divergent storage handed to the bridge / mcpManager

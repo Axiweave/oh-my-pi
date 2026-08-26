@@ -77,6 +77,9 @@ function flagValue(name: string, desc: FlagDescriptor): ValueSource {
 	if (MODEL_FLAGS[name]) return { kind: "models", multiple: false };
 	if (name === "models") return { kind: "models", multiple: true };
 	if (SESSION_FLAGS[name]) return { kind: "sessions" };
+	// Bundle names come from the operator's own config; no static list to offer,
+	// and file completion would be actively wrong.
+	if (name === "model-profile") return { kind: "value" };
 	if (name === "tools") return { kind: "list", values: BUILTIN_TOOL_NAMES };
 	if (DIR_FLAGS[name]) return { kind: "dir" };
 	if (desc.kind === "integer") return { kind: "value" };

@@ -475,13 +475,38 @@ export class ModelControls {
 	 * outgoing session's bundle is still installed.
 	 *
 	 * A bundle deleted from config since the session was written resolves to
-	 * nothing and drops, rather than pinning roles that no longer exist.
+	 * nothing, as does a session that never switched; a session with no
+	 * transcript of its own then falls through to the configured startup
+	 * `modelProfile`, and only then to the bare config roles.
+	 *
+	 * A session that *does* have a transcript is left alone: its persisted model
+	 * already outranks the config roles, so claiming the startup profile here
+	 * would report a bundle whose `default` model is not the one running. The
+	 * config field names where a new session starts, not what a resumed one is.
 	 */
 	restoreModelProfile(name: string | undefined): void {
 		const profile = name ? this.#host.settings.getModelProfiles()[name] : undefined;
-		if (!profile && !this.#activeModelProfile) return;
-		this.#host.settings.applyModelProfileRoles(profile);
-		this.#activeModelProfile = profile ? name : undefined;
+		if (profile) {
+			this.#host.settings.applyModelProfileRoles(profile);
+			this.#activeModelProfile = name;
+			return;
+		}
+		// A session with a conversation of its own never switched profiles, and
+		// its persisted model already outranks the config roles — claiming the
+		// startup profile here would report a bundle whose `default` model is not
+		// the one running. Messages are replaced before both callers, so an empty
+		// transcript is the "nothing to honor yet" signal; the branch itself is
+		// not (a fresh session already carries model/thinking records).
+		if (this.#host.agent.state.messages.length === 0) {
+			const configured = this.#host.settings.installStartupModelProfile();
+			if (configured) {
+				this.#activeModelProfile = configured;
+				return;
+			}
+		}
+		if (!this.#activeModelProfile) return;
+		this.#host.settings.applyModelProfileRoles(undefined);
+		this.#activeModelProfile = undefined;
 	}
 
 	/**

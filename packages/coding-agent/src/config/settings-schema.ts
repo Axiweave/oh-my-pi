@@ -680,6 +680,8 @@ export const SETTINGS_SCHEMA = {
 
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
 
+	modelProfile: { type: "string", default: "" },
+
 	modelProfiles: { type: "record", default: EMPTY_MODEL_PROFILES_RECORD },
 
 	modelTags: { type: "record", default: EMPTY_MODEL_TAGS_RECORD },

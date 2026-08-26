@@ -124,6 +124,11 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
  * already surfaces when you switch to it.
  */
 export function validateModelProfiles(settings: Settings, warn: (message: string) => void): void {
+	const active = settings.get("modelProfile")?.trim();
+	if (active && !Object.hasOwn(settings.getModelProfiles(), active)) {
+		warn(`modelProfile '${active}' names no bundle in modelProfiles; ignoring it.`);
+	}
+
 	const profiles: unknown = settings.get("modelProfiles");
 	if (profiles === undefined) return;
 	if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) {

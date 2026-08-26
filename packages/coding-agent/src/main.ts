@@ -1543,6 +1543,12 @@ export async function runRootCommand(
 				plan: planModel,
 			});
 		}
+		// `--model-profile` selects the startup bundle; `createAgentSession`
+		// installs it beneath the role overrides above, so a `--smol` on the same
+		// command line still wins on the role it names.
+		if (parsedArgs.modelProfile) {
+			settingsInstance.override("modelProfile", parsedArgs.modelProfile);
+		}
 
 		// --print-thoughts (single-shot print mode) must surface reasoning, so un-hide
 		// thinking before the session is built — otherwise a passive omitThinking

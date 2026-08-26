@@ -59,15 +59,19 @@ describe("AgentSession model profiles", () => {
 	function createSession(options: {
 		initialModelId: string;
 		modelRoles?: Record<string, string>;
+		modelProfile?: string;
+		runtimeModelRoles?: Record<string, string>;
 		modelProfiles: unknown;
 		sessionManager?: SessionManager;
+		/** Seed a transcript, as sdk/session-switch do before restoring a profile. */
+		resumedConversation?: boolean;
 	}) {
 		const agent = new Agent({
 			initialState: {
 				model: anthropicModel(options.initialModelId),
 				systemPrompt: ["Test"],
 				tools: [],
-				messages: [],
+				messages: options.resumedConversation ? [{ role: "user", content: "hi", timestamp: Date.now() }] : [],
 				thinkingLevel: Effort.Medium,
 			},
 		});
@@ -79,6 +83,10 @@ describe("AgentSession model profiles", () => {
 		}
 		// Deliberately malformed fixtures: the validator's whole job is bad input.
 		sessionSettings.override("modelProfiles", options.modelProfiles as ModelProfilesSettings);
+		if (options.modelProfile !== undefined) sessionSettings.override("modelProfile", options.modelProfile);
+		// Mirrors `--smol` and friends: installed before the session exists, so
+		// the startup-profile layer has to land underneath it.
+		if (options.runtimeModelRoles) sessionSettings.overrideModelRoles(options.runtimeModelRoles);
 		session = new AgentSession({
 			agent,
 			sessionManager: options.sessionManager ?? SessionManager.inMemory(),
@@ -298,5 +306,76 @@ describe("AgentSession model profiles", () => {
 		expect(session.activeModelProfile).toBe("fast");
 		expect(session.resolveRoleModelWithThinking("plan").model?.id).toBe(haiku().id);
 		await written.dispose();
+	});
+
+	it("boots on the configured startup profile before any switch", () => {
+		createSession({
+			initialModelId: sonnet45().id,
+			modelRoles: { default: selector(sonnet45()), plan: selector(sonnet45()) },
+			modelProfiles: { fast: { default: selector(haiku()), plan: selector(haiku()) } },
+			modelProfile: "fast",
+		});
+
+		expect(session.activeModelProfile).toBe("fast");
+		expect(session.resolveRoleModelWithThinking("plan").model?.id).toBe(haiku().id);
+	});
+
+	it("does not claim the startup profile for a session that already has a transcript", () => {
+		createSession({
+			initialModelId: sonnet45().id,
+			modelRoles: { default: selector(sonnet45()) },
+			modelProfiles: { fast: { default: selector(haiku()) } },
+			modelProfile: "fast",
+			resumedConversation: true,
+		});
+
+		// The resumed session's own model outranks the config field, so reporting
+		// `fast` would name a bundle whose default is not the running model.
+		expect(session.activeModelProfile).toBeUndefined();
+	});
+
+	it("lets a CLI role override beat the startup profile it names", () => {
+		createSession({
+			initialModelId: sonnet45().id,
+			modelProfiles: { fast: { default: selector(haiku()), smol: selector(haiku()) } },
+			modelProfile: "fast",
+			runtimeModelRoles: { smol: selector(sonnet46()) },
+		});
+
+		// The flag wins on the role it names; the profile still owns the rest.
+		expect(sessionSettings.getModelRole("smol")).toBe(selector(sonnet46()));
+		expect(sessionSettings.getModelRole("default")).toBe(selector(haiku()));
+	});
+
+	it("prefers a resumed session's pinned profile over the configured one", async () => {
+		const profiles = {
+			fast: { default: selector(haiku()) },
+			strong: { default: selector(sonnet46()) },
+		};
+		createSession({ initialModelId: sonnet45().id, modelProfiles: profiles, modelProfile: "fast" });
+		const written = session;
+		await written.applyModelProfile("strong");
+
+		createSession({
+			initialModelId: sonnet45().id,
+			modelProfiles: profiles,
+			modelProfile: "fast",
+			sessionManager: written.sessionManager,
+		});
+
+		expect(session.activeModelProfile).toBe("strong");
+		expect(sessionSettings.getModelRole("default")).toBe(selector(sonnet46()));
+		await written.dispose();
+	});
+
+	it("warns when the startup profile names no bundle", () => {
+		createSession({
+			initialModelId: sonnet45().id,
+			modelProfiles: { fast: { default: selector(haiku()) } },
+			modelProfile: "nope",
+		});
+
+		expect(session.configWarnings).toContain("modelProfile 'nope' names no bundle in modelProfiles; ignoring it.");
+		expect(session.activeModelProfile).toBeUndefined();
 	});
 });

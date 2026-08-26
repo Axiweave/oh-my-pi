@@ -120,6 +120,27 @@ it("layers project modelProfiles over global ones", async () => {
 	}
 });
 
+it("layers a project modelProfile selector over the global one", async () => {
+	const testDir = path.join(os.tmpdir(), `project-profile-select-${Snowflake.next()}`);
+	const pinned = path.join(testDir, "pinned");
+	const bare = path.join(testDir, "bare");
+	fs.mkdirSync(path.join(pinned, ".omp"), { recursive: true });
+	fs.mkdirSync(path.join(bare, ".omp"), { recursive: true });
+	fs.writeFileSync(path.join(testDir, "config.yml"), "modelProfile: globalone\n");
+	fs.writeFileSync(path.join(pinned, ".omp", "config.yml"), "modelProfile: projectone\n");
+	fs.writeFileSync(path.join(bare, ".omp", "config.yml"), "modelRoles:\n  default: anthropic/project\n");
+	try {
+		const withProject = await Settings.loadIsolated({ cwd: pinned, agentDir: testDir });
+		expect(withProject.get("modelProfile")).toBe("projectone");
+
+		// Without a project selector the global choice is what a session boots on.
+		const withoutProject = await Settings.loadIsolated({ cwd: bare, agentDir: testDir });
+		expect(withoutProject.get("modelProfile")).toBe("globalone");
+	} finally {
+		if (fs.existsSync(testDir)) removeSyncWithRetries(testDir);
+	}
+});
+
 describe("Settings.reloadForCwd", () => {
 	let settingsState: SettingsTestState | undefined;
 
