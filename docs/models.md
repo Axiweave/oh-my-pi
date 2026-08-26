@@ -407,9 +407,78 @@ Role aliases like `@smol` expand through `settings.modelRoles`; `*` selects `@de
 
 If a role points at another role, the target model still inherits normally and any explicit suffix on the referring role wins for that role-specific use.
 
+### Model profiles
+
+`modelProfiles` bundles several role assignments under one name so a single
+keypress swaps the whole set. `Ctrl+P` cycles one role at a time within the
+current assignments; `Alt+Shift+M` — `app.model.cycleProfileForward` — cycles
+the bundles themselves.
+
+```yaml
+modelRoles:
+  default: anthropic/claude-sonnet-5:high
+  plan: anthropic/claude-opus-5:xhigh
+
+modelProfiles:
+  sonnet:
+    default: anthropic/claude-sonnet-5:high
+    plan: anthropic/claude-sonnet-5:high
+  fable:
+    default: anthropic/claude-fable-5:xhigh
+    plan: anthropic/claude-fable-5:xhigh
+```
+
+Because a profile carries its own `plan` role, entering plan mode under the
+`fable` profile stays on Fable rather than jumping to the global
+`modelRoles.plan`. Cycling profiles *while plan mode is active* switches to the
+incoming profile's `plan` role; everywhere else it switches to its `default`
+role, falling back to `default` when the requested role is unset.
+
+Profiles apply to the running session only — they are never written back to
+`config.yml`. Roles a profile does not name keep resolving through the normal
+config layers, and roles the previous profile set never leak into the next one.
+Runtime overrides that predate the first profile switch (`--smol`, `--slow`,
+`--plan`) survive every switch.
+
+A profile with nothing under it is the way back to your plain `modelRoles` —
+it names no overrides, so every role resolves through config again:
+
+```yaml
+modelProfiles:
+  fable:
+    default: anthropic/claude-fable-5:xhigh
+    plan: anthropic/claude-fable-5:xhigh
+  base:
+```
+
+Without such an entry the cycle only visits named bundles; once you switch to
+one there is no stop that means "config as written". The status-line segment
+stays hidden while an empty profile is active — the session is in exactly the
+state it would be in having never switched, so there is nothing to report.
+
+Profile mistakes that would otherwise fail silently are reported as startup
+warnings: a bundle that is not a mapping, a role value that is not a selector
+string, and — most usefully — a role name nothing reads, which is how a typo
+like `pan:` for `plan:` announces itself instead of quietly applying to
+nothing. Selectors themselves are not checked here; an unresolvable model
+surfaces when you switch to the profile.
+
+The active profile is recorded on the session's `model_change` entry, so
+`--continue` and session switches restore both the model and the role layer
+behind it: plan mode still follows the profile after a resume. A profile
+deleted from `config.yml` since the session was written is dropped instead of
+pinning roles that no longer exist.
+
+The `model_profile` status-line segment names the active bundle and stays
+hidden until you switch to one. It ships in the `default` preset; with
+`statusLine.preset: custom`, add `model_profile` to `statusLine.leftSegments`.
+The `claude3` composer footer renders it automatically after the thinking
+level.
+
 Related settings:
 
 - `modelRoles` (record)
+- `modelProfiles` (record of named role bundles)
 - `enabledModels` (scoped pattern list)
 - `modelProviderOrder` (provider precedence when equivalent concrete choices share an id)
 - `providers.kimiApiFormat` (`openai` or `anthropic` request format)

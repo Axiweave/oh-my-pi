@@ -201,6 +201,10 @@
 - Fixed `omp update` leaving standalone Windows binaries on the old version when stale Bun launcher metadata was present, and preserved launchers installed by a newer concurrent update during binary repair ([#9806](https://github.com/can1357/oh-my-pi/issues/9806)).
 - Quitting `omp git` during commit-message generation now exits cleanly without leaving the process running.
 
+### Added
+
+- Added `modelProfiles`: named bundles of model-role assignments cycled with `Alt+Shift+M`, so plan mode, commit, and task models all follow the profile you switch to instead of staying pinned to your global roles. The active profile survives resume, appears in the new `model_profile` status-line segment, and malformed bundles or unknown role names are reported as startup warnings.
+
 ### Fixed
 
 - Fixed the streaming write preview changing height on nearly every update, and jumping again when the write completed.

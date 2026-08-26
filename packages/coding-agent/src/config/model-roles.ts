@@ -111,3 +111,49 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
 
 	return { name: role, color: "muted" };
 }
+
+/**
+ * Report structural mistakes in `modelProfiles` that would otherwise fail
+ * silently: {@link Settings.getModelProfiles} drops anything malformed, and a
+ * role nobody reads is simply never applied. Reported at startup through
+ * `configWarnings`, mirroring `validateRetryFallbackChains`.
+ *
+ * Selectors are left alone on purpose — whether a model resolves depends on
+ * credentials and provider discovery that are still settling here, and
+ * `modelRoles` makes no such promise either. An unresolvable profile role
+ * already surfaces when you switch to it.
+ */
+export function validateModelProfiles(settings: Settings, warn: (message: string) => void): void {
+	const profiles: unknown = settings.get("modelProfiles");
+	if (profiles === undefined) return;
+	if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) {
+		warn("modelProfiles must be a mapping of profile names to role bundles.");
+		return;
+	}
+
+	// Hidden built-ins are real roles, so union them back over the UI list.
+	const knownRoles = new Set<string>([...MODEL_ROLE_IDS, ...getKnownRoleIds(settings)]);
+
+	for (const name in profiles) {
+		if (!Object.hasOwn(profiles, name)) continue;
+		const roles = (profiles as Record<string, unknown>)[name];
+		// `name:` with nothing under it is the documented way to resolve every
+		// role through `modelRoles`, not a mistake.
+		if (roles == null) continue;
+		if (typeof roles !== "object" || Array.isArray(roles)) {
+			warn(`modelProfiles.${name} must be a mapping of role names to model selectors; ignoring it.`);
+			continue;
+		}
+		for (const role in roles) {
+			if (!Object.hasOwn(roles, role)) continue;
+			if (!knownRoles.has(role)) {
+				warn(`modelProfiles.${name} sets unknown role '${role}'; nothing reads it. Add it to modelRoles first.`);
+				continue;
+			}
+			const value = (roles as Record<string, unknown>)[role];
+			if (typeof value !== "string" || !value.trim()) {
+				warn(`modelProfiles.${name}.${role} must be a model selector string.`);
+			}
+		}
+	}
+}

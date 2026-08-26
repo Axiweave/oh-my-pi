@@ -489,6 +489,16 @@ export class InputController {
 		this.ctx.editor.setActionKeys("app.model.cycleBackward", this.ctx.keybindings.getKeys("app.model.cycleBackward"));
 		this.ctx.editor.onCycleModelBackward = () => this.cycleRoleModel("backward");
 		this.ctx.editor.setActionKeys(
+			"app.model.cycleProfileForward",
+			this.ctx.keybindings.getKeys("app.model.cycleProfileForward"),
+		);
+		this.ctx.editor.onCycleModelProfileForward = () => this.cycleModelProfile("forward");
+		this.ctx.editor.setActionKeys(
+			"app.model.cycleProfileBackward",
+			this.ctx.keybindings.getKeys("app.model.cycleProfileBackward"),
+		);
+		this.ctx.editor.onCycleModelProfileBackward = () => this.cycleModelProfile("backward");
+		this.ctx.editor.setActionKeys(
 			"app.model.selectTemporary",
 			this.ctx.keybindings.getKeys("app.model.selectTemporary"),
 		);
@@ -2038,6 +2048,44 @@ export class InputController {
 				cycleOrder.indexOf(result.role),
 			);
 			this.ctx.showModelCycleTrack(track);
+		} catch (error) {
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	async cycleModelProfile(direction: "forward" | "backward" = "forward"): Promise<void> {
+		if (this.ctx.focusedAgentId) {
+			this.ctx.showStatus("Model/thinking apply to the main session — press ←← to return first");
+			return;
+		}
+		try {
+			const profiles = Object.keys(settings.getModelProfiles());
+			if (profiles.length === 0) {
+				this.ctx.showStatus("No model profiles configured — add `modelProfiles` to your config");
+				return;
+			}
+			// In plan mode the operator is looking at the plan model, so land on the
+			// incoming profile's `plan` role instead of dropping back to `default`;
+			// that is the whole reason a profile is a bundle rather than one model.
+			const role = this.ctx.session.getPlanModeState()?.enabled ? "plan" : "default";
+			const result = await this.ctx.session.cycleModelProfile(direction, role);
+			if (!result) {
+				this.ctx.showStatus("No model profiles configured — add `modelProfiles` to your config");
+				return;
+			}
+
+			this.ctx.statusLine.invalidate();
+			this.ctx.updateEditorBorderColor();
+			if (!result.model) {
+				this.ctx.showStatus(`Model profile ${result.profile}: no configured role resolved to an available model`);
+				return;
+			}
+			this.ctx.showModelCycleTrack(
+				renderSegmentTrack(
+					profiles.map(name => ({ label: name })),
+					profiles.indexOf(result.profile),
+				),
+			);
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}

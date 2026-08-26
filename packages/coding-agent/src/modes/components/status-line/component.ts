@@ -2475,7 +2475,15 @@ export class StatusLineComponent implements Component {
 
 		const sep = theme.fg("statusLineSep", " | ");
 		const modelSeg = renderSegment("model", ctx);
-		const line1Left = modelSeg.visible ? modelSeg.content : "";
+		// The claude3 footer has a fixed layout and never reads leftSegments, so
+		// the profile is appended here rather than being placed by the operator.
+		// It trails the model segment's thinking level, matching where it lands
+		// when `model_profile` follows `model` in a custom preset.
+		const profileSeg = renderSegment("model_profile", ctx);
+		let line1Left = modelSeg.visible ? modelSeg.content : "";
+		if (profileSeg.visible && profileSeg.content) {
+			line1Left += theme.fg("statusLineSep", theme.sep.dot) + profileSeg.content;
+		}
 		const ideSelection = renderSegment("ide_selection", ctx);
 		let line1 = line1Left;
 		if (ideSelection.visible && ideSelection.content) {

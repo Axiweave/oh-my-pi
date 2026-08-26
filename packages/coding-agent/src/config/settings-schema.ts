@@ -239,6 +239,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 export type StatusLineSegmentId =
 	| "pi"
 	| "model"
+	| "model_profile"
 	| "mode"
 	| "path"
 	| "git"
@@ -396,6 +397,16 @@ export interface ModelTagsSettings {
 	[key: string]: ModelTagDef;
 }
 
+/**
+ * A named bundle of model-role assignments, shaped exactly like `modelRoles`.
+ * Switching profiles swaps the whole bundle at once, so every role-driven
+ * surface (plan mode, commit, task, vision, …) follows the active profile
+ * instead of each being pinned independently.
+ */
+export interface ModelProfilesSettings {
+	[profile: string]: Record<string, string>;
+}
+
 // Typed defaults for array/record settings — named constants avoid `as` casts
 // under `as const` while still letting SettingValue infer the correct element type.
 const EMPTY_STRING_ARRAY: string[] = [];
@@ -404,6 +415,7 @@ const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["hub"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
+const EMPTY_MODEL_PROFILES_RECORD: ModelProfilesSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	{
@@ -667,6 +679,8 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
+
+	modelProfiles: { type: "record", default: EMPTY_MODEL_PROFILES_RECORD },
 
 	modelTags: { type: "record", default: EMPTY_MODEL_TAGS_RECORD },
 
@@ -6338,6 +6352,7 @@ export interface GroupTypeMap {
 	thinkingBudgets: ThinkingBudgetsSettings;
 	stt: SttSettings;
 	modelRoles: Record<string, string>;
+	modelProfiles: ModelProfilesSettings;
 	modelTags: ModelTagsSettings;
 	cycleOrder: string[];
 	shellMinimizer: ShellMinimizerSettings;

@@ -105,6 +105,7 @@ import type { EffectiveExtensionRoots } from "../capability/types";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import type { ResolvedModelRoleValue } from "../config/model-resolver";
+import { validateModelProfiles } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate, resolvePromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
@@ -236,6 +237,7 @@ import type {
 	FreshSessionResult,
 	HandoffResult,
 	ModelCycleResult,
+	ModelProfileResult,
 	Prewalk,
 	PromptOptions,
 	ResetSessionContextResult,
@@ -1167,6 +1169,10 @@ export class AgentSession {
 			thinkingLevel: config.thinkingLevel,
 			thinkingLevelCeiling: config.thinkingLevelCeiling,
 			serviceTierByFamily: config.serviceTierByFamily,
+		});
+		validateModelProfiles(this.settings, message => {
+			logger.warn(message);
+			this.configWarnings.push(message);
 		});
 
 		this.#promptTemplates = config.promptTemplates ?? [];
@@ -7444,6 +7450,21 @@ export class AgentSession {
 		return this.#models.cycleRoleModels(roleOrder, direction);
 	}
 
+	/** Name of the `modelProfiles` bundle currently installed, if any. */
+	get activeModelProfile(): string | undefined {
+		return this.#models.activeModelProfile;
+	}
+
+	/** Installs a `modelProfiles` bundle and activates one of its roles. */
+	applyModelProfile(name: string, role?: string): Promise<ModelProfileResult | undefined> {
+		return this.#models.applyModelProfile(name, role);
+	}
+
+	/** Cycles through the configured `modelProfiles` bundles. */
+	cycleModelProfile(direction?: "forward" | "backward", role?: string): Promise<ModelProfileResult | undefined> {
+		return this.#models.cycleModelProfile(direction, role);
+	}
+
 	/** Lists available models after applying the configured enabled-model filter. */
 	getAvailableModels(): Model[] {
 		return this.#models.getAvailableModels();
@@ -8422,6 +8443,10 @@ export class AgentSession {
 			} else if (didReloadConversationChange) {
 				this.#closeAllProviderSessions("session reload");
 			}
+
+			// Before the model restore: the incoming session's bundle (or none)
+			// replaces the outgoing session's role layer wholesale.
+			this.#models.restoreModelProfile(this.sessionManager.getLastModelProfile());
 
 			// Restore model if saved
 			const targetModelStrings = getRestorableSessionModels(

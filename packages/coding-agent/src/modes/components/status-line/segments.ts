@@ -233,6 +233,27 @@ const modelSegment: StatusLineSegment = {
 	},
 };
 
+/**
+ * Active `modelProfiles` bundle (see `app.model.cycleProfileForward`). Hidden
+ * until the operator switches to a bundle that actually names roles: with no
+ * bundle installed — or an empty one, the escape hatch back to config — the
+ * roles come straight from config and there is no name worth reporting.
+ * Rendered muted: it qualifies the model rather than competing with it.
+ */
+const modelProfileSegment: StatusLineSegment = {
+	id: "model_profile",
+	render(ctx) {
+		const profile = ctx.session.activeModelProfile;
+		if (!profile) return { content: "", visible: false };
+		// An empty bundle installs no overrides, so the session is in exactly the
+		// state it would be in having never switched. Naming it would report a
+		// difference that does not exist.
+		const roles = ctx.session.settings.getModelProfiles()[profile];
+		if (!roles || Object.keys(roles).length === 0) return { content: "", visible: false };
+		return { content: theme.fg("muted", withIcon(theme.icon.package, profile)), visible: true };
+	},
+};
+
 function formatGoalBudget(current: number, budget?: number): string {
 	const used = formatNumber(current);
 	if (budget === undefined) return used;
@@ -806,6 +827,7 @@ const usageSegment: StatusLineSegment = {
 export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	model: modelSegment,
+	model_profile: modelProfileSegment,
 	mode: modeSegment,
 	path: pathSegment,
 	git: gitSegment,

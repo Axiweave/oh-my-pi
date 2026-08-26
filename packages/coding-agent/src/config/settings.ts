@@ -48,6 +48,7 @@ import {
 	type GroupPrefix,
 	type GroupTypeMap,
 	getDefault,
+	type ModelProfilesSettings,
 	SETTINGS_SCHEMA,
 	type SettingPath,
 	type SettingValue,
@@ -479,6 +480,15 @@ export class Settings {
 	 * when the role had no runtime override).
 	 */
 	#savedRuntimeModelRoleOverrides = new Map<string, string | undefined>();
+
+	/**
+	 * Runtime model-role layer as it stood before the first model-profile switch
+	 * (`--smol`/`--slow`/`--plan` and any other runtime override). Profiles
+	 * replace each other wholesale, so every profile application rebuilds the
+	 * runtime layer from this snapshot instead of merging onto the outgoing
+	 * profile's roles.
+	 */
+	#modelProfileBaseRoles?: Record<string, string>;
 
 	/** Legacy `lastChangelogVersion` captured from config.yml during migration (now a marker file). */
 	#legacyLastChangelogVersion?: string;
@@ -1259,6 +1269,54 @@ export class Settings {
 				this.#savedRuntimeModelRoleOverrides.delete(role);
 			}
 		}
+		this.#setRuntimeModelRoleOverrides(next);
+	}
+
+	/** Named model-role bundles from `modelProfiles`, in configured order. */
+	getModelProfiles(): ModelProfilesSettings {
+		const profiles: unknown = this.get("modelProfiles");
+		if (!isRecord(profiles)) return {};
+
+		const normalized: ModelProfilesSettings = {};
+		for (const name in profiles) {
+			if (!Object.hasOwn(profiles, name)) continue;
+			const value = profiles[name];
+			// `base:` with nothing under it is the natural spelling of "no
+			// overrides — resolve every role through config", so it must stay in
+			// the cycle rather than silently vanishing. A non-record value is
+			// still malformed.
+			if (value != null && !isRecord(value)) continue;
+			const roles = value ?? {};
+
+			const bundle: Record<string, string> = {};
+			for (const role in roles) {
+				if (!Object.hasOwn(roles, role)) continue;
+				const modelId = modelRoleValueFromUnknown(roles[role]);
+				if (modelId !== undefined) bundle[role] = modelId;
+			}
+			normalized[name] = bundle;
+		}
+		return normalized;
+	}
+
+	/**
+	 * Install a model profile's roles as the runtime model-role layer.
+	 *
+	 * Unlike {@link overrideModelRoles}, this replaces rather than merges: roles
+	 * the incoming profile does not name fall back to the config layers instead
+	 * of keeping the outgoing profile's model. Runtime overrides that predate
+	 * the first profile switch (CLI `--smol`/`--slow`/`--plan`) survive every
+	 * switch. Pass `undefined` to drop back to those.
+	 */
+	applyModelProfileRoles(roles: ReadOnlyDict<string> | undefined): void {
+		this.#modelProfileBaseRoles ??= this.#modelRolesFromLayer(this.#overrides);
+		const next = { ...this.#modelProfileBaseRoles };
+		for (const [role, modelId] of Object.entries(roles ?? {})) {
+			if (modelId) next[role] = modelId;
+		}
+		// The whole runtime layer is being replaced, so per-role project-edit
+		// captures no longer describe anything restorable (mirrors `override`).
+		this.#savedRuntimeModelRoleOverrides.clear();
 		this.#setRuntimeModelRoleOverrides(next);
 	}
 

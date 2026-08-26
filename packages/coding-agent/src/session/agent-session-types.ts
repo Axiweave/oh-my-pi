@@ -372,6 +372,16 @@ export interface RoleModelCycleResult {
 	role: string;
 }
 
+/** Result from cycleModelProfile()/applyModelProfile(). */
+export interface ModelProfileResult {
+	/** Name of the `modelProfiles` bundle now installed. */
+	profile: string;
+	/** Model the session switched to; `undefined` when no role resolved. */
+	model: Model | undefined;
+	/** Role that supplied {@link model}. */
+	role: string | undefined;
+}
+
 /** A configured role resolved to a concrete model. */
 export interface ResolvedRoleModel {
 	role: string;

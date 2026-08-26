@@ -36,7 +36,13 @@ import {
 } from "../thinking";
 import type { EditMode } from "../utils/edit-mode";
 import type { AgentSessionEvent } from "./agent-session-events";
-import type { ModelCycleResult, ResolvedRoleModel, RoleModelCycle, RoleModelCycleResult } from "./agent-session-types";
+import type {
+	ModelCycleResult,
+	ModelProfileResult,
+	ResolvedRoleModel,
+	RoleModelCycle,
+	RoleModelCycleResult,
+} from "./agent-session-types";
 import { formatRoleModelValue, resolveRoleModelFull } from "./role-models";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
@@ -72,6 +78,8 @@ export class ModelControls {
 	#autoThinking = false;
 	#autoResolvedLevel: Effort | undefined;
 	#serviceTierByFamily: ServiceTierByFamily;
+	/** Name of the `modelProfiles` bundle currently installed, if any. */
+	#activeModelProfile: string | undefined;
 
 	constructor(
 		host: ModelControlsHost,
@@ -102,6 +110,9 @@ export class ModelControls {
 			);
 		}
 		this.#applyThinkingLevelToAgent(this.#thinkingLevel);
+		// A resumed session carries its profile on the last tagged `model_change`;
+		// reinstall the role layer before any surface resolves a role.
+		this.restoreModelProfile(host.sessionManager.getLastModelProfile());
 	}
 
 	get #model(): Model | undefined {
@@ -219,6 +230,8 @@ export class ModelControls {
 			selector?: string;
 			thinkingLevel?: ThinkingLevel;
 			persist?: boolean;
+			/** `modelProfiles` bundle this switch installs; persisted so resume can reinstall it. */
+			profile?: string;
 		},
 	): Promise<{ switched: boolean }> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
@@ -231,7 +244,12 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(targetModel);
-		this.#host.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
+		this.#host.sessionManager.appendModelChange(
+			`${targetModel.provider}/${targetModel.id}`,
+			role,
+			false,
+			options?.profile,
+		);
 		if (options?.persist) {
 			this.#host.settings.setModelRole(
 				role,
@@ -369,8 +387,8 @@ export class ModelControls {
 	 * Apply a resolved role model as the active model without changing global
 	 * settings. Shared with role cycling and the plan-approval model slider.
 	 */
-	async applyRoleModel(entry: ResolvedRoleModel): Promise<void> {
-		await this.setModel(entry.model, entry.role);
+	async applyRoleModel(entry: ResolvedRoleModel, options?: { profile?: string }): Promise<void> {
+		await this.setModel(entry.model, entry.role, { profile: options?.profile });
 		if (entry.explicitThinkingLevel && entry.thinkingLevel !== undefined) {
 			this.setThinkingLevel(entry.thinkingLevel);
 		}
@@ -395,6 +413,98 @@ export class ModelControls {
 		await this.applyRoleModel(next);
 
 		return { model: next.model, thinkingLevel: this.thinkingLevel, role: next.role };
+	}
+
+	/** Name of the `modelProfiles` bundle currently installed, if any. */
+	get activeModelProfile(): string | undefined {
+		return this.#activeModelProfile;
+	}
+
+	/**
+	 * Install a named `modelProfiles` bundle as the runtime model-role layer and
+	 * switch the session onto one of its roles.
+	 *
+	 * The profile drives every role-resolving surface (plan mode, commit, task,
+	 * …), not just the active model, which is the point: a profile switch that
+	 * left `modelRoles.plan` pointing at the previous bundle's model would put
+	 * plan mode back on the model the operator just cycled away from.
+	 *
+	 * @param role - Role to make active; falls back to `default` when the
+	 *   profile leaves it unresolved (e.g. plan-mode switch into a profile that
+	 *   configures no `plan` role).
+	 */
+	async applyModelProfile(name: string, role: string = "default"): Promise<ModelProfileResult | undefined> {
+		const profile = this.#host.settings.getModelProfiles()[name];
+		if (!profile) return undefined;
+
+		this.#host.settings.applyModelProfileRoles(profile);
+		this.#activeModelProfile = name;
+
+		let activeRole = role;
+		let resolved = this.resolveRoleModelWithThinking(activeRole);
+		if (!resolved.model && activeRole !== "default") {
+			activeRole = "default";
+			resolved = this.resolveRoleModelWithThinking(activeRole);
+		}
+		if (!resolved.model) {
+			// Nothing resolvable (unavailable model, no credential). The role layer
+			// is installed regardless, so later role lookups follow the new profile.
+			return { profile: name, model: undefined, role: undefined };
+		}
+
+		await this.applyRoleModel(
+			{
+				role: activeRole,
+				model: resolved.model,
+				thinkingLevel: resolved.thinkingLevel,
+				explicitThinkingLevel: resolved.explicitThinkingLevel,
+			},
+			{ profile: name },
+		);
+		return { profile: name, model: resolved.model, role: activeRole };
+	}
+
+	/**
+	 * Reinstall the `modelProfiles` bundle a resumed session was last switched
+	 * to, or drop back to the config roles when it has none.
+	 *
+	 * The persisted `model_change` entry already restores the *active* model;
+	 * this restores the role layer behind it, so plan mode, commit, and task
+	 * keep following the profile after a resume instead of snapping back to the
+	 * global `modelRoles`. Dropping matters on session switch, where the
+	 * outgoing session's bundle is still installed.
+	 *
+	 * A bundle deleted from config since the session was written resolves to
+	 * nothing and drops, rather than pinning roles that no longer exist.
+	 */
+	restoreModelProfile(name: string | undefined): void {
+		const profile = name ? this.#host.settings.getModelProfiles()[name] : undefined;
+		if (!profile && !this.#activeModelProfile) return;
+		this.#host.settings.applyModelProfileRoles(profile);
+		this.#activeModelProfile = profile ? name : undefined;
+	}
+
+	/**
+	 * Cycle to the next/previous `modelProfiles` bundle.
+	 *
+	 * @param role - Role to activate within the incoming profile (see
+	 *   {@link applyModelProfile}).
+	 */
+	async cycleModelProfile(
+		direction: "forward" | "backward" = "forward",
+		role: string = "default",
+	): Promise<ModelProfileResult | undefined> {
+		const names = Object.keys(this.#host.settings.getModelProfiles());
+		if (names.length === 0) return undefined;
+
+		const current = this.#activeModelProfile ? names.indexOf(this.#activeModelProfile) : -1;
+		const step = direction === "backward" ? -1 : 1;
+		// An unknown/unset active profile starts at the first entry going forward
+		// and the last going backward, so the first press always lands somewhere.
+		const next =
+			current === -1 ? (step === 1 ? 0 : names.length - 1) : (current + step + names.length) % names.length;
+
+		return this.applyModelProfile(names[next], role);
 	}
 
 	async #getScopedModelsWithApiKey(): Promise<Array<{ model: Model; thinkingLevel?: ThinkingLevel }>> {

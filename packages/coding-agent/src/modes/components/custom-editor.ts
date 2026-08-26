@@ -35,6 +35,8 @@ type ConfigurableEditorAction = Extract<
 	| "app.thinking.cycle"
 	| "app.model.cycleForward"
 	| "app.model.cycleBackward"
+	| "app.model.cycleProfileForward"
+	| "app.model.cycleProfileBackward"
 	| "app.model.select"
 	| "app.model.selectTemporary"
 	| "app.tools.toggleVisibility"
@@ -57,6 +59,8 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.thinking.cycle": ["shift+tab"],
 	"app.model.cycleForward": ["ctrl+p"],
 	"app.model.cycleBackward": ["shift+ctrl+p"],
+	"app.model.cycleProfileForward": ["alt+shift+m"],
+	"app.model.cycleProfileBackward": [],
 	"app.model.select": ["alt+m"],
 	"app.model.selectTemporary": ["alt+p"],
 	"app.tools.toggleVisibility": ["ctrl+shift+o"],
@@ -692,6 +696,8 @@ export class CustomEditor extends Editor {
 	onCycleThinkingLevel?: () => void;
 	onCycleModelForward?: () => void;
 	onCycleModelBackward?: () => void;
+	onCycleModelProfileForward?: () => void;
+	onCycleModelProfileBackward?: () => void;
 	onSelectModel?: () => void;
 	onToggleToolActivity?: () => void;
 	onToggleThinking?: () => void;
@@ -1063,6 +1069,18 @@ export class CustomEditor extends Editor {
 			// Intercept configured forward model cycling
 			if (this.#matchesAction(canonical, "app.model.cycleForward") && this.onCycleModelForward) {
 				this.onCycleModelForward();
+				return;
+			}
+
+			// Intercept configured backward model-profile cycling (before forward)
+			if (this.#matchesAction(canonical, "app.model.cycleProfileBackward") && this.onCycleModelProfileBackward) {
+				this.onCycleModelProfileBackward();
+				return;
+			}
+
+			// Intercept configured forward model-profile cycling
+			if (this.#matchesAction(canonical, "app.model.cycleProfileForward") && this.onCycleModelProfileForward) {
+				this.onCycleModelProfileForward();
 				return;
 			}
 

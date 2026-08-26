@@ -2327,14 +2327,16 @@ export class SessionManager {
 	 * @param model Model in "provider/modelId" format
 	 * @param role Optional role (default: "default")
 	 * @param resolvedModelIsFallback Whether this transition selected a retry-fallback model
+	 * @param profile `modelProfiles` bundle this transition installed, if any
 	 */
-	appendModelChange(model: string, role?: string, resolvedModelIsFallback = false): string {
+	appendModelChange(model: string, role?: string, resolvedModelIsFallback = false, profile?: string): string {
 		const entry: ModelChangeEntry = {
 			type: "model_change",
 			...this.#freshEntryFields(),
 			model,
 			role,
 			resolvedModelIsFallback,
+			profile,
 		};
 		this.#recordEntry(entry);
 		return entry.id;
@@ -2528,6 +2530,21 @@ export class SessionManager {
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type === "model_change") return entry.role ?? "default";
+		}
+		return undefined;
+	}
+
+	/**
+	 * The `modelProfiles` bundle this branch was last switched to, or undefined
+	 * when it never was. Profiles are never uninstalled in-session, so the most
+	 * recent tagged `model_change` names the active bundle even when plain role
+	 * cycles were recorded after it.
+	 */
+	getLastModelProfile(): string | undefined {
+		const branch = this.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (entry.type === "model_change" && entry.profile) return entry.profile;
 		}
 		return undefined;
 	}

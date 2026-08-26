@@ -87,6 +87,12 @@ export interface ModelChangeEntry extends SessionEntryBase {
 	role?: string;
 	/** True when this transition selected a retry-fallback model rather than the configured model. */
 	resolvedModelIsFallback?: boolean;
+	/**
+	 * `modelProfiles` bundle installed by this transition. Only profile switches
+	 * carry it; role cycles within a profile leave it absent, so the last entry
+	 * that has one names the session's active bundle.
+	 */
+	profile?: string;
 }
 
 export interface ServiceTierChangeEntry extends SessionEntryBase {

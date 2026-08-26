@@ -27,6 +27,8 @@ interface AppKeybindings {
 	"app.thinking.toggle": true;
 	"app.model.cycleForward": true;
 	"app.model.cycleBackward": true;
+	"app.model.cycleProfileForward": true;
+	"app.model.cycleProfileBackward": true;
 	"app.model.select": true;
 	"app.model.selectTemporary": true;
 	"app.tools.expand": true;
@@ -113,6 +115,16 @@ export const KEYBINDINGS = {
 	"app.model.cycleBackward": {
 		defaultKeys: "shift+ctrl+p",
 		description: "Cycle to previous model",
+	},
+	"app.model.cycleProfileForward": {
+		defaultKeys: "alt+shift+m",
+		description: "Cycle to next model profile",
+	},
+	"app.model.cycleProfileBackward": {
+		// Unbound by default: chord space is tight and two or three profiles cycle
+		// fine forward-only. Bind it in keybindings.yml when a longer list hurts.
+		defaultKeys: [],
+		description: "Cycle to previous model profile",
 	},
 	"app.model.select": {
 		defaultKeys: "alt+m",

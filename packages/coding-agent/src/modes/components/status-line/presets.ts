@@ -2,7 +2,19 @@ import type { PresetDef, StatusLinePreset } from "./types";
 
 export const STATUS_LINE_PRESETS: Record<StatusLinePreset, PresetDef> = {
 	default: {
-		leftSegments: ["pi", "model", "mode", "collab", "path", "git", "pr", "ide_selection", "context_pct", "cost"],
+		leftSegments: [
+			"pi",
+			"model",
+			"model_profile",
+			"mode",
+			"collab",
+			"path",
+			"git",
+			"pr",
+			"ide_selection",
+			"context_pct",
+			"cost",
+		],
 		rightSegments: ["session_name"],
 		separator: "powerline-thin",
 		segmentOptions: {
