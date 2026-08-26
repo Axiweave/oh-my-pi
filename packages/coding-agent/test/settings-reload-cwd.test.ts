@@ -94,6 +94,32 @@ it("reports overlay provenance for a null tombstone that blocks the global fallb
 	}
 });
 
+it("layers project modelProfiles over global ones", async () => {
+	const testDir = path.join(os.tmpdir(), `project-profiles-${Snowflake.next()}`);
+	const projectDir = path.join(testDir, "project");
+	fs.mkdirSync(path.join(projectDir, ".omp"), { recursive: true });
+	fs.writeFileSync(
+		path.join(testDir, "config.yml"),
+		"modelProfiles:\n  fast:\n    default: anthropic/global-fast\n    plan: anthropic/global-plan\n",
+	);
+	fs.writeFileSync(
+		path.join(projectDir, ".omp", "config.yml"),
+		"modelProfiles:\n  fast:\n    default: anthropic/project-fast\n  local:\n    default: anthropic/project-local\n",
+	);
+	try {
+		const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir: testDir });
+		const profiles = settings.getModelProfiles();
+
+		// A project bundle adds to the cycle rather than replacing it...
+		expect(Object.keys(profiles)).toEqual(["fast", "local"]);
+		expect(profiles.local).toEqual({ default: "anthropic/project-local" });
+		// ...and overrides only the roles it names inside a shared bundle.
+		expect(profiles.fast).toEqual({ default: "anthropic/project-fast", plan: "anthropic/global-plan" });
+	} finally {
+		if (fs.existsSync(testDir)) removeSyncWithRetries(testDir);
+	}
+});
+
 describe("Settings.reloadForCwd", () => {
 	let settingsState: SettingsTestState | undefined;
 

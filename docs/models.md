@@ -440,6 +440,12 @@ config layers, and roles the previous profile set never leak into the next one.
 Runtime overrides that predate the first profile switch (`--smol`, `--slow`,
 `--plan`) survive every switch.
 
+`modelProfiles` reads from the same layers as every other setting, so a
+repository can define its own in `.omp/config.yml`. Project bundles join the
+cycle alongside your global ones, and a project bundle sharing a global name
+overrides only the roles it names — the rest of that bundle still comes from
+your global config.
+
 A profile with nothing under it is the way back to your plain `modelRoles` —
 it names no overrides, so every role resolves through config again:
 

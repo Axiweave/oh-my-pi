@@ -1589,16 +1589,18 @@ export class Settings {
 		} catch {
 			shellPathSource = undefined;
 			// Capability discovery is best-effort; the native project config below
-			// remains authoritative for its model-role layer and must not be hidden.
+			// remains authoritative for its model-role layers and must not be hidden.
 		}
 		const projectConfigPath = path.join(this.#cwd, ".omp", "config.yml");
 		const nativeProject = quarantineInvalid
 			? await this.#loadYaml(projectConfigPath)
 			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
 				{});
-		const nativeModelRoles = getByPath(nativeProject, ["modelRoles"]);
-		if (nativeModelRoles !== undefined) {
-			merged = this.#deepMerge(merged, { modelRoles: nativeModelRoles });
+		// `modelProfiles` is a model-role layer too: dropping it here while
+		// `modelRoles` survives would leave a project half-configured.
+		for (const key of ["modelRoles", "modelProfiles"]) {
+			const native = getByPath(nativeProject, [key]);
+			if (native !== undefined) merged = this.#deepMerge(merged, { [key]: native });
 		}
 		return {
 			settings: this.#migrateRawSettings(merged, quarantineInvalid),
