@@ -103,12 +103,18 @@ describe("InteractiveMode working-message session accent cache", () => {
 			mode.syncComposerShape();
 			startStableLoader(mode);
 			const rendered = Bun.stripANSI(renderLoader(mode)).trimStart();
-			expect(rendered.startsWith(theme.getSpinnerFrames()[0])).toBe(true);
+			expect(rendered.startsWith(`${theme.getSpinnerFrames()[0]}  `)).toBe(true);
 			expect(rendered).not.toContain(theme.icon.esc);
 		} finally {
 			settings.clearOverride("composerStyle.footerMode");
 			mode.syncComposerShape();
 		}
+	});
+	it("separates the interrupt icon from the message when the status brand owns the spinner", async () => {
+		const { mode } = await createHarness("Status brand session");
+		startStableLoader(mode);
+		const rendered = Bun.stripANSI(renderLoader(mode)).trimStart();
+		expect(rendered.startsWith(`${theme.icon.esc}  `)).toBe(true);
 	});
 
 	it("reuses one computed accent across loader spinner and message colorizers", async () => {

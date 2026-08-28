@@ -5162,7 +5162,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				DEFAULT_WORKING_MESSAGE,
 				// Use the interrupt affordance when the status line owns the spinner.
 				// Custom layouts without the brand segment keep the loader spinner.
-				showsWorkingBrand ? [` ${theme.icon.esc}`] : theme.getSpinnerFrames(),
+				// Each frame adds one visual gap beyond the loader's standard separator.
+				showsWorkingBrand ? [` ${theme.icon.esc} `] : theme.getSpinnerFrames().map(frame => `${frame} `),
 			);
 			this.loadingAnimation.setTrailer(() => this.#workingTitleTrailer());
 			this.statusContainer.addChild(this.loadingAnimation);

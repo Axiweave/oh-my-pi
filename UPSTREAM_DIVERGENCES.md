@@ -24,6 +24,13 @@ It is not a changelog. Each entry describes a current decision that upstream reb
 - **Key paths:** `packages/coding-agent/src/modes/components/status-line/component.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/components/composer/types.ts`.
 - **Checks:** `packages/coding-agent/test/modes/components/status-line/component.test.ts` and `packages/coding-agent/test/interactive-mode-working-accent.test.ts`.
 
+### Working message icon spacing
+
+- **Decision:** Leave one extra visual cell between the working icon and its message.
+- **Why:** Spinner and Escape glyphs otherwise touch the message in common terminal fonts.
+- **Key path:** `packages/coding-agent/src/modes/interactive-mode.ts`.
+- **Check:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts`.
+
 ### IDE selection and open-file context
 
 - **Decision:** Read IDE MCP notifications for selections and open files.
