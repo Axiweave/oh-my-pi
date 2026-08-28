@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> This fork intentionally differs from upstream. Read [UPSTREAM_DIVERGENCES.md](UPSTREAM_DIVERGENCES.md) before rebasing or changing fork-only behavior.
+
 <p align="center">
   <img src="https://github.com/can1357/oh-my-pi/blob/main/assets/hero.png?raw=true" alt="omp">
 </p>

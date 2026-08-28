@@ -23,6 +23,12 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Catalog import convention**: code in this repo imports catalog _values_ (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort _types_ its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
+## Upstream Divergences
+
+Before an upstream rebase, conflict resolution, or fork-only behavior change, **MUST read `UPSTREAM_DIVERGENCES.md`**.
+Update the register in the same commit as each fork-only feature or decision.
+After each rebase, verify every entry, update the reviewed release, and remove entries that upstream adopted or this fork retired.
+
 ## GitHub
 
 Unless user tells you exactly what to write:
