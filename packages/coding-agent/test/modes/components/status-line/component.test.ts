@@ -5,7 +5,7 @@ import { clearIdeSelection, subscribeIdeSelection } from "../../../../src/mcp/id
 import type { MCPManager } from "../../../../src/mcp/manager";
 import { StatusLineComponent } from "../../../../src/modes/components/status-line/component";
 import { loadTheme } from "../../../../src/modes/theme/loader";
-import { getThemeByName, setThemeInstance } from "../../../../src/modes/theme/theme";
+import { getThemeByName, setThemeInstance, theme } from "../../../../src/modes/theme/theme";
 import type { AgentSession } from "../../../../src/session/agent-session";
 
 /** Minimal stand-in for MCPManager that captures the registered listener. */
@@ -139,6 +139,18 @@ describe("StatusLineComponent", () => {
 		expect(stripped[0]).toContain("test-model");
 		expect(stripped[1]).toContain(path.basename(process.cwd()));
 		expect(stripped[2]).toContain("advisor running");
+	});
+	it("keeps the claude footer model on the theme model color", () => {
+		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+		statusLine.setComposerStyle({
+			statusAttachment: "none",
+			bottomBar: "full",
+			bottomBarGap: false,
+			footerMode: "claude3",
+		});
+
+		const [modelLine] = statusLine.render(200);
+		expect(modelLine).toContain(`${theme.getFgAnsi("statusLineModel")}${theme.icon.model} test-model`);
 	});
 
 	it("omits the claude footer hints row when no hints are active", () => {

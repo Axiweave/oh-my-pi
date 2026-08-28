@@ -5150,19 +5150,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			// message is static, so leave `animated` unset and let the loader use
 			// the spinner-only ~12.5fps cadence instead of repainting a frozen line.
 			if (shimmerEnabled()) messageColorFn.animated = true;
+			const showsWorkingBrand = this.statusLine.showsWorkingBrand();
 			this.loadingAnimation = new Loader(
 				this.ui,
 				spinner => {
 					const accent = this.#getWorkingMessageAccent();
-					return accent ? `${accent.dim}${spinner}\x1b[39m` : theme.fg("muted", spinner);
+					if (accent) return `${showsWorkingBrand ? accent.dim : accent.main}${spinner}\x1b[39m`;
+					return theme.fg(showsWorkingBrand ? "muted" : "accent", spinner);
 				},
 				messageColorFn,
 				DEFAULT_WORKING_MESSAGE,
-				// The brand spinner lives in the status line while working; this row
-				// leads with the interrupt affordance instead of a second spinner.
-				// The leading space nudges the row one column right of the flush-left
-				// status rows so the interrupt glyph reads as indented.
-				[` ${theme.icon.esc}`],
+				// Use the interrupt affordance when the status line owns the spinner.
+				// Custom layouts without the brand segment keep the loader spinner.
+				showsWorkingBrand ? [` ${theme.icon.esc}`] : theme.getSpinnerFrames(),
 			);
 			this.loadingAnimation.setTrailer(() => this.#workingTitleTrailer());
 			this.statusContainer.addChild(this.loadingAnimation);

@@ -96,6 +96,21 @@ afterAll(() => {
 });
 
 describe("InteractiveMode working-message session accent cache", () => {
+	it("uses the loader spinner when the claude footer hides the status brand", async () => {
+		const { mode } = await createHarness("Claude footer session");
+		settings.override("composerStyle.footerMode", "claude3");
+		try {
+			mode.syncComposerShape();
+			startStableLoader(mode);
+			const rendered = Bun.stripANSI(renderLoader(mode)).trimStart();
+			expect(rendered.startsWith(theme.getSpinnerFrames()[0])).toBe(true);
+			expect(rendered).not.toContain(theme.icon.esc);
+		} finally {
+			settings.clearOverride("composerStyle.footerMode");
+			mode.syncComposerShape();
+		}
+	});
+
 	it("reuses one computed accent across loader spinner and message colorizers", async () => {
 		const { mode } = await createHarness("Cached session");
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");

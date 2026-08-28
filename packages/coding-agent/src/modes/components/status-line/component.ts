@@ -2361,6 +2361,12 @@ export class StatusLineComponent implements Component {
 		this.#standaloneGap = style.bottomBarGap;
 		this.#claudeFooterMode = style.footerMode === "claude3" || settings.get("composerStyle.footerMode") === "claude3";
 	}
+	/** Whether the active status layout renders the working `pi` brand segment. */
+	showsWorkingBrand(): boolean {
+		if (this.#claudeFooterMode) return false;
+		const settings = this.#resolveSettings();
+		return settings.leftSegments.includes("pi") || settings.rightSegments.includes("pi");
+	}
 
 	/** While true, the standalone bar yields its row to the editor's autocomplete menu. */
 	setAutocompleteActiveProbe(probe: (() => boolean) | undefined): void {
@@ -2474,7 +2480,10 @@ export class StatusLineComponent implements Component {
 		const ctx = this.#buildSegmentContext(width, settings.segmentOptions, true, true, false);
 
 		const sep = theme.fg("statusLineSep", " | ");
+		const sessionAccent = ctx.sessionAccent;
+		ctx.sessionAccent = false;
 		const modelSeg = renderSegment("model", ctx);
+		ctx.sessionAccent = sessionAccent;
 		// The claude3 footer has a fixed layout and never reads leftSegments, so
 		// the profile is appended here rather than being placed by the operator.
 		// It trails the model segment's thinking level, matching where it lands
