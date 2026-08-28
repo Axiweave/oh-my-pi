@@ -3205,10 +3205,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
 		}
 		this.#planModeHasEntered = true;
-		// Session loading already restored the model recorded in the journal.
-		// Reapplying today's plan role here would replace a CLI/session-specific
-		// selection with current config during --resume or an in-process switch.
-		if (!options?.preserveRestoredModel) {
+		if (options?.preserveRestoredModel) {
+			// Resume keeps the persisted plan model active. Seed the exit target
+			// from the restored role layer because the in-memory pre-plan snapshot
+			// did not survive the process boundary.
+			const resolved = this.session.resolveRoleModelWithThinking("default");
+			this.#planModePreviousModelState = resolved.model
+				? { model: resolved.model, thinkingLevel: resolved.thinkingLevel }
+				: undefined;
+		} else {
 			await this.#applyPlanModeModel();
 		}
 		this.#updatePlanModeStatus();

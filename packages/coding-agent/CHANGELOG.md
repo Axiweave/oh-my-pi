@@ -52,6 +52,10 @@
 - Added a status message when `CTRL-O` toggles tool-output expansion.
 - Fixed `omp usage` to report Codex Chat and Spark capacity meters separately when they share a usage window.
 
+### Fixed
+
+- Fixed exiting plan mode after a session resume leaving the active model profile on its plan model instead of its default model.
+
 ## [18.0.8] - 2026-08-27
 
 ### Added

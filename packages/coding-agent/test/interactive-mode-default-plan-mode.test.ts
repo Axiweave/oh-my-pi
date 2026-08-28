@@ -438,4 +438,32 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.model?.id).toBe("claude-sonnet-4-5");
 	});
+
+	it("restores the active profile default after exiting a resumed plan session", async () => {
+		const created = createHarness(
+			Settings.isolated({
+				"compaction.enabled": false,
+				modelProfile: "fast",
+				modelProfiles: {
+					fast: {
+						default: "anthropic/claude-sonnet-4-5",
+						plan: "anthropic/claude-haiku-4-5",
+					},
+				},
+			}),
+			{ initialModel: { provider: "anthropic", id: "claude-haiku-4-5" } },
+		);
+		created.sessionManager.appendModelChange("anthropic/claude-haiku-4-5", "plan", false, "fast");
+		created.sessionManager.appendModeChange("plan", { planFilePath: "local://PLAN.md" });
+		created.sessionManager.appendMessage({ role: "user", content: "prior plan turn", timestamp: Date.now() });
+
+		await created.init({ suppressWelcomeIntro: true });
+		expect(session?.model?.id).toBe("claude-haiku-4-5");
+		expect(session?.resolveRoleModelWithThinking("default").model?.id).toBe("claude-sonnet-4-5");
+		await created.handlePlanModeCommand();
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.activeModelProfile).toBe("fast");
+		expect(session?.model?.id).toBe("claude-sonnet-4-5");
+	});
 });
