@@ -4828,6 +4828,31 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"plan.keybindingWorkflow": {
+		type: "enum",
+		values: ["parallel", "debate"] as const,
+		default: "parallel",
+		ui: {
+			tab: "tasks",
+			group: "Modes",
+			label: "Plan Shortcut Workflow",
+			description: "Choose whether the plan shortcut enters standard plan or debate mode",
+			condition: "planModeEnabled",
+			options: [
+				{
+					value: "parallel",
+					label: "Plan",
+					description: "Enter standard read-only plan mode",
+				},
+				{
+					value: "debate",
+					label: "Debate",
+					description: "Require independent plan review before human approval",
+				},
+			],
+		},
+	},
+
 	"goal.enabled": {
 		type: "boolean",
 		default: true,

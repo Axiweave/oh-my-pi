@@ -545,7 +545,12 @@ export class InputController {
 		this.registerExtensionShortcuts();
 		const planModeKeys = this.ctx.keybindings.getKeys("app.plan.toggle");
 		for (const key of planModeKeys) {
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				const requestedWorkflow = this.ctx.planModePaused
+					? "parallel"
+					: (this.ctx.session.getPlanModeState()?.workflow ?? this.ctx.settings.get("plan.keybindingWorkflow"));
+				void this.ctx.handlePlanModeCommand(undefined, undefined, requestedWorkflow);
+			});
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {

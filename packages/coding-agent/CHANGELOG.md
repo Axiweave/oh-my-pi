@@ -5,6 +5,7 @@
 ### Added
 
 - Added `/debate` plan mode, which requires an independent slow-model review and exact-plan consensus before human approval.
+- Added `plan.keybindingWorkflow` to let the plan shortcut enter standard plan or debate mode.
 
 ### Fixed
 

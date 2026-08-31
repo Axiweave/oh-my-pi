@@ -1,10 +1,13 @@
 import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { SettingValue } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { AskDialogComponent } from "@oh-my-pi/pi-coding-agent/modes/components/ask-dialog";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tree-selector";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { PlanWorkflow } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { type KeyId, matchesKey } from "@oh-my-pi/pi-tui";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
@@ -49,6 +52,13 @@ type FakeEditor = {
 type InputListenerResult = { consume: boolean } | undefined;
 type InputListener = (data: string) => InputListenerResult;
 
+interface CreateContextOptions {
+	planKeybindingWorkflow?: SettingValue<"plan.keybindingWorkflow">;
+	planModeEnabled?: boolean;
+	planModePaused?: boolean;
+	activePlanWorkflow?: PlanWorkflow;
+}
+
 function dispatchInput(listeners: InputListener[], data: string): InputListenerResult {
 	for (const listener of listeners) {
 		const result = listener(data);
@@ -61,9 +71,15 @@ function registeredInputListeners(addInputListener: Mock<(listener: InputListene
 	return addInputListener.mock.calls.map(call => call[0]);
 }
 
-async function createContext() {
+async function createContext(options: CreateContextOptions = {}) {
 	let editorText = "";
+	const settings = Settings.isolated();
+	if (options.planKeybindingWorkflow !== undefined) {
+		settings.set("plan.keybindingWorkflow", options.planKeybindingWorkflow);
+	}
+	vi.spyOn(settings, "set");
 	const keyMap: Record<string, KeyId[]> = {
+		"app.plan.toggle": ["alt+shift+p"],
 		"app.display.reset": ["ctrl+l"],
 		"app.model.selectTemporary": ["ctrl+y"],
 		"app.model.select": ["alt+m"],
@@ -111,6 +127,8 @@ async function createContext() {
 		queuedMessageCount: 0,
 		abort,
 		retry,
+		getPlanModeState: () =>
+			options.activePlanWorkflow === undefined ? undefined : { workflow: options.activePlanWorkflow },
 	};
 	const updatePendingMessagesDisplay = vi.fn();
 	const handleBtwBranchKey = vi.fn(async () => true);
@@ -209,11 +227,13 @@ async function createContext() {
 			}
 		},
 		updatePendingMessagesDisplay,
+		planModeEnabled: options.planModeEnabled ?? false,
+		planModePaused: options.planModePaused ?? false,
 		isBashMode: false,
 		isPythonMode: false,
 		hideToolActivity: false,
 		toolOutputExpanded: false,
-		settings: { set: vi.fn() },
+		settings,
 		chatContainer: { children: [], setToolActivityVisible: vi.fn() },
 		handleHotkeysCommand: vi.fn(),
 		handlePlanModeCommand: vi.fn(),
@@ -297,6 +317,32 @@ describe("InputController keybinding setup", () => {
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
 		expect(spies.resetDisplayAfterAppearanceRefresh).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		["uses the schema default when plan mode is off", {}, "parallel"],
+		["uses the configured debate workflow when plan mode is off", { planKeybindingWorkflow: "debate" }, "debate"],
+		[
+			"keeps the active parallel workflow after the setting changes",
+			{ planKeybindingWorkflow: "debate", planModeEnabled: true, activePlanWorkflow: "parallel" },
+			"parallel",
+		],
+		[
+			"uses the parallel sentinel to turn paused debate mode off",
+			{ planKeybindingWorkflow: "debate", planModePaused: true, activePlanWorkflow: "debate" },
+			"parallel",
+		],
+	] as const)("%s", async (_name, options, expectedWorkflow) => {
+		const { InputController, ctx, customHandlers } = await createContext(options);
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		const handler = customHandlers.get("alt+shift+p");
+		expect(handler).toBeDefined();
+
+		handler?.();
+
+		expect(ctx.handlePlanModeCommand).toHaveBeenCalledWith(undefined, undefined, expectedWorkflow);
 	});
 
 	it("registers the tool activity visibility action", async () => {
