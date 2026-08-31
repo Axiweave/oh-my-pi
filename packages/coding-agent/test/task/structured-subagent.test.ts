@@ -170,7 +170,7 @@ describe("structured subagent primitive", () => {
 		expect(discover).not.toHaveBeenCalled();
 	});
 
-	it("uses the bundled slow plan reviewer with a strict caller schema", async () => {
+	it("uses the bundled reviewer role with a slow fallback and strict caller schema", async () => {
 		const reviewer = getBundledAgent("plan-reviewer");
 		if (!reviewer) throw new Error("Bundled plan-reviewer agent is missing");
 		mockDiscovery(reviewer);
@@ -186,7 +186,7 @@ describe("structured subagent primitive", () => {
 			}),
 		);
 
-		expect(policy.agent.model).toEqual(["@slow"]);
+		expect(policy.agent.model).toEqual(["@reviewer", "@slow"]);
 		expect(policy.effectiveAgent.tools).toEqual(["read", "grep", "glob", "web_search"]);
 		expect(policy.schema).toEqual({
 			schema: PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA,

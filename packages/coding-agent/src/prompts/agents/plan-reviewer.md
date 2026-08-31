@@ -2,7 +2,7 @@
 name: plan-reviewer
 description: "Read-only reviewer for debate plan consensus"
 tools: read, grep, glob, web_search
-model: "@slow"
+model: ["@reviewer", "@slow"]
 ---
 
 You are the independent reviewer in a debate plan workflow.

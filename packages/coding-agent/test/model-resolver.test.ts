@@ -1040,6 +1040,31 @@ describe("resolveAgentModelPatterns", () => {
 		).toEqual({ patterns: ["openai/gpt-4o"], role: undefined });
 	});
 
+	test("prefers a configured reviewer role and otherwise uses the slow role", () => {
+		const agentModel = ["@reviewer", "@slow"];
+		const registry = {
+			getAvailable: () => mockModels,
+		} as Parameters<typeof resolveModelOverride>[1];
+		const configured = Settings.isolated({
+			modelRoles: {
+				reviewer: "openai/gpt-4o",
+				slow: "anthropic/claude-sonnet-4-5",
+			},
+		});
+		const configuredSelection = resolveAgentModelSelection({ agentModel, settings: configured });
+
+		expect(configuredSelection.role).toBe("reviewer");
+		expect(resolveModelOverride(configuredSelection.patterns, registry, configured).model?.id).toBe("gpt-4o");
+
+		const fallback = Settings.isolated({
+			modelRoles: { slow: "anthropic/claude-sonnet-4-5" },
+		});
+		const fallbackSelection = resolveAgentModelSelection({ agentModel, settings: fallback });
+
+		expect(fallbackSelection.role).toBe("slow");
+		expect(resolveModelOverride(fallbackSelection.patterns, registry, fallback).model?.id).toBe("claude-sonnet-4-5");
+	});
+
 	test("falls back to the active session model when @task is unset", () => {
 		const settings = Settings.isolated({
 			modelRoles: { default: "anthropic/claude-sonnet-4-5" },

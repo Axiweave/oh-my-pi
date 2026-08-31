@@ -7,6 +7,10 @@
 - Added `/debate` plan mode, which requires an independent slow-model review and exact-plan consensus before human approval.
 - Added `plan.keybindingWorkflow` to let the plan shortcut enter standard plan or debate mode.
 
+### Changed
+
+- Plan debate reviewers now prefer a configured `reviewer` model role and fall back to the `slow` role.
+
 ### Fixed
 
 - Fixed Claude three-line footers showing an Escape badge instead of the working spinner and recoloring the model with the session accent.
