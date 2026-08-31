@@ -370,6 +370,9 @@ export class Agent {
 	#abortController?: AbortController;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+	#additionalContextTransforms = new Set<
+		(messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>
+	>();
 	#transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
 	#steeringQueue: AgentMessage[] = [];
 	#followUpQueue: AgentMessage[] = [];
@@ -805,6 +808,14 @@ export class Agent {
 	subscribe(fn: (e: AgentEvent) => void): () => void {
 		this.#listeners.add(fn);
 		return () => this.#listeners.delete(fn);
+	}
+	/** Register an independently removable message transform that runs after the configured transform. */
+	addContextTransform(
+		transform: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>,
+	): () => void {
+		const registration = (messages: AgentMessage[], signal?: AbortSignal) => transform(messages, signal);
+		this.#additionalContextTransforms.add(registration);
+		return () => this.#additionalContextTransforms.delete(registration);
 	}
 
 	/** Register an independently removable hook that runs before queued messages are consumed. */
@@ -1430,7 +1441,18 @@ export class Agent {
 			preferWebsockets: this.#preferWebsockets,
 			convertToLlm: this.#convertToLlm,
 			transformProviderContext: this.#transformProviderContext,
-			transformContext: this.#transformContext,
+			transformContext:
+				this.#transformContext || this.#additionalContextTransforms.size > 0
+					? async (messages, signal) => {
+							let transformed = this.#transformContext
+								? await this.#transformContext(messages, signal)
+								: messages;
+							for (const transform of this.#additionalContextTransforms) {
+								transformed = await transform(transformed, signal);
+							}
+							return transformed;
+						}
+					: undefined,
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
 			onSseEvent: this.#onSseEvent,

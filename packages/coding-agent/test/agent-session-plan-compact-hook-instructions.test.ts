@@ -22,7 +22,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -32,14 +32,15 @@ import { Settings } from "../src/config/settings";
 import type { SessionBeforeCompactEvent } from "../src/extensibility/shared-events";
 import { AgentSession } from "../src/session/agent-session";
 import { AuthStorage } from "../src/session/auth-storage";
-import { convertToLlm } from "../src/session/messages";
+import { CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE, convertToLlm } from "../src/session/messages";
 import { SessionManager } from "../src/session/session-manager";
 
 type Harness = {
 	session: AgentSession;
 	sessionManager: SessionManager;
 	beforeCompactEvents: SessionBeforeCompactEvent[];
-	summarizerCalls: Array<{ customInstructions: string | undefined }>;
+	summarizerCalls: Array<{ customInstructions: string | undefined; context: string }>;
+	retainedSideRequestMessages: AgentMessage[];
 };
 
 function createAssistantResponse(text: string) {
@@ -116,10 +117,20 @@ describe("AgentSession plan-mode compaction hook contract (issue #4359)", () => 
 
 		// Stub the underlying LLM summary so compaction completes without a network
 		// call, and capture what customInstructions the native summarizer received.
-		const summarizerCalls: Array<{ customInstructions: string | undefined }> = [];
+		const summarizerCalls: Array<{ customInstructions: string | undefined; context: string }> = [];
+		const retainedSideRequestMessages: AgentMessage[] = [];
 		vi.spyOn(compactionModule, "compact").mockImplementation(
-			async (preparation, _model, _resolver, customInstructions) => {
-				summarizerCalls.push({ customInstructions });
+			async (preparation, _model, _resolver, customInstructions, _signal, options) => {
+				const converted = options?.convertToLlm?.(
+					retainedSideRequestMessages.length > 0
+						? retainedSideRequestMessages
+						: [
+								...preparation.messagesToSummarize,
+								...preparation.turnPrefixMessages,
+								...preparation.recentMessages,
+							],
+				);
+				summarizerCalls.push({ customInstructions, context: JSON.stringify(converted ?? []) });
 				return {
 					summary: "compacted",
 					shortSummary: undefined,
@@ -161,7 +172,7 @@ describe("AgentSession plan-mode compaction hook contract (issue #4359)", () => 
 			await session.dispose();
 			authStorage.close();
 		});
-		return { session, sessionManager, beforeCompactEvents, summarizerCalls };
+		return { session, sessionManager, beforeCompactEvents, summarizerCalls, retainedSideRequestMessages };
 	}
 
 	it("routes internalGuidance to the summarizer without exposing it to session_before_compact", async () => {
@@ -177,6 +188,38 @@ describe("AgentSession plan-mode compaction hook contract (issue #4359)", () => 
 		// Native summarizer still receives the guidance so the summary is directed.
 		expect(summarizerCalls.length).toBe(1);
 		expect(summarizerCalls[0]?.customInstructions).toBe(planGuidance);
+	});
+
+	it("filters exited plan restrictions from compaction side requests", async () => {
+		const { session, summarizerCalls, retainedSideRequestMessages } = await createHarness();
+		session.setPlanModeState({
+			enabled: true,
+			planFilePath: "local://PLAN.md",
+			workflow: "parallel",
+		});
+		await session.sendPlanModeContext({ deliverAs: "nextTurn" });
+		expect(
+			session.sessionManager
+				.buildSessionContext({ transcript: true })
+				.messages.some(
+					message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+				),
+		).toBe(true);
+		// PlanYolo's proposal finalizer performs this same state transition during
+		// tool execution. Turn-end consumers retain the loop's original array.
+		retainedSideRequestMessages.push(...session.messages);
+		session.setPlanModeState(undefined);
+		expect(
+			retainedSideRequestMessages.some(
+				message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+			),
+		).toBe(true);
+
+		await session.compact("summarize after plan exit");
+
+		expect(summarizerCalls).toHaveLength(1);
+		expect(summarizerCalls[0]?.context).not.toContain("Plan mode active.");
+		expect(summarizerCalls[0]?.context).not.toContain("NEVER run state-changing commands");
 	});
 
 	it("still forwards a user /compact focus verbatim to the hook", async () => {

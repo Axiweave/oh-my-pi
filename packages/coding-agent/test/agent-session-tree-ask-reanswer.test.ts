@@ -20,6 +20,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRunner, ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { AskToolDetails } from "@oh-my-pi/pi-coding-agent/tools/ask";
 
@@ -529,8 +530,24 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 				toolResultMsg(askCallId, "ask", "User selected: staging", staleAnswerResult().details),
 			);
 			sessionManager.appendMessage(assistantMsg("deploying to staging"));
+			session.setPlanModeState({
+				enabled: true,
+				planFilePath: "local://PLAN.md",
+				workflow: "parallel",
+			});
+			await session.sendPlanModeContext({ deliverAs: "nextTurn" });
+			expect(
+				session.messages.some(
+					message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+				),
+			).toBe(true);
 
-			const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue(undefined);
+			let planContextPresentAtContinue: boolean | undefined;
+			const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+				planContextPresentAtContinue = session.messages.some(
+					message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+				);
+			});
 
 			const probe = await session.navigateTree(tr1Id, { allowAskReopen: true });
 			expect(probe.reopenAsk).toBeDefined();
@@ -548,14 +565,18 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 			expect(result.askReanswerCommitted).toBe(true);
 			await session.waitForIdle();
 			expect(continueSpy).not.toHaveBeenCalled();
-			// The tail the resume will continue from is the new answer toolResult.
-			const messages = session.messages;
-			expect(messages[messages.length - 1]?.role).toBe("toolResult");
+			// The conversation tail remains the new answer toolResult. The active
+			// plan constraint follows it as hidden provider context.
+			const conversationMessages = session.messages.filter(
+				message => message.role !== "custom" || message.customType !== CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+			);
+			expect(conversationMessages.at(-1)?.role).toBe("toolResult");
 
 			// The caller resumes explicitly after rebuilding its UI.
 			session.resumeAfterAskReanswer();
 			await session.waitForIdle();
 			expect(continueSpy).toHaveBeenCalledTimes(1);
+			expect(planContextPresentAtContinue).toBe(true);
 		} finally {
 			await ctx.cleanup();
 		}

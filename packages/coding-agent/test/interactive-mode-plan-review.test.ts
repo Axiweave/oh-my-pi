@@ -20,7 +20,11 @@ import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { hashPlanContent } from "@oh-my-pi/pi-coding-agent/plan-mode/debate";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SILENT_ABORT_MARKER, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import {
+	CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+	SILENT_ABORT_MARKER,
+	USER_INTERRUPT_LABEL,
+} from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking";
 import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
@@ -969,10 +973,27 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
+		session.setPlanModeState({ enabled: true, planFilePath, workflow: "parallel" });
+		session.agent.appendMessage({
+			role: "custom",
+			customType: CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+			content: "Plan mode active. NEVER run state-changing commands.",
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
 		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
 		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		let planContextPresentAtExecution: boolean | undefined;
+		const prompt = vi.spyOn(session, "prompt").mockImplementation(async (_text, options) => {
+			if (options?.synthetic) {
+				planContextPresentAtExecution = session.agent.state.messages.some(
+					message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+				);
+			}
+			return undefined as never;
+		});
 
 		await mode.handlePlanApproval({
 			planFilePath,
@@ -985,6 +1006,8 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(prompt).toHaveBeenCalledWith(expect.any(String), {
 			synthetic: true,
 		});
+		expect(session.getPlanModeState()).toBeUndefined();
+		expect(planContextPresentAtExecution).toBe(false);
 	});
 
 	it("hides the review overlay before the blocking execution turn resolves", async () => {

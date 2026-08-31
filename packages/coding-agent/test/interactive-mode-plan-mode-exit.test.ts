@@ -18,7 +18,11 @@ import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mod
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import {
+	CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+	convertToLlm,
+	USER_INTERRUPT_LABEL,
+} from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -55,6 +59,7 @@ describe("InteractiveMode plan mode exit", () => {
 					if (!streamFn) throw new Error("No test stream configured");
 					return streamFn(...args);
 				},
+				convertToLlm,
 			}),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
 			settings: Settings.isolated({}),
@@ -110,5 +115,49 @@ describe("InteractiveMode plan mode exit", () => {
 		expect(session.isStreaming).toBe(false);
 		expect(session.getPlanModeState()).toBeUndefined();
 		expect(abortReason).toBe(USER_INTERRUPT_LABEL);
+	});
+
+	it("removes stale plan restrictions from the first turn after exit", async () => {
+		const contexts: string[] = [];
+		streamFn = (_model, context) => {
+			contexts.push(JSON.stringify(context));
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
+			});
+			return stream;
+		};
+
+		await mode.handlePlanModeCommand();
+		expect(mode.planModeEnabled).toBe(true);
+		await session.prompt("Investigate and plan");
+		expect(
+			session.sessionManager
+				.buildSessionContext()
+				.messages.some(
+					message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+				),
+		).toBe(false);
+		expect(
+			session.sessionManager
+				.buildSessionContext({ transcript: true })
+				.messages.some(
+					message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+				),
+		).toBe(true);
+
+		await session.prompt("Refine the plan");
+		await mode.handlePlanModeCommand();
+		expect(mode.planModeEnabled).toBe(false);
+		expect(mode.planModePaused).toBe(true);
+		expect(session.getPlanModeState()).toBeUndefined();
+		await session.prompt("Commit the completed change");
+
+		expect(contexts).toHaveLength(3);
+		expect(contexts[0]).toContain("Plan mode active.");
+		expect(contexts[1].split("Plan mode active.")).toHaveLength(2);
+		expect(contexts[2]).not.toContain("Plan mode active.");
+		expect(contexts[2]).not.toContain("NEVER run state-changing commands");
 	});
 });

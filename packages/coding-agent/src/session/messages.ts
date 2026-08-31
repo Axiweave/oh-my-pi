@@ -44,6 +44,29 @@ export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
 export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
 export const PREWALK_PLAN_MESSAGE_TYPE = "prewalk-plan";
+export const CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE = "core-plan-mode-context";
+const LEGACY_CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
+
+/** Identify core-owned plan constraints, including entries persisted before the marker was namespaced. */
+export function isCorePlanModeContextMessage(message: AgentMessage): boolean {
+	if (message.role !== "custom") return false;
+	if (message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE) return true;
+	return (
+		message.customType === LEGACY_CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE &&
+		typeof message.content === "string" &&
+		message.content.includes("Plan mode active.") &&
+		message.content.includes("NEVER run state-changing commands")
+	);
+}
+
+/** Keep only the newest core plan constraint while active, or none after exit. */
+export function filterCorePlanModeContextMessages(messages: AgentMessage[], active: boolean): AgentMessage[] {
+	const keepIndex = active ? messages.findLastIndex(isCorePlanModeContextMessage) : -1;
+	if (!messages.some((message, index) => isCorePlanModeContextMessage(message) && index !== keepIndex)) {
+		return messages;
+	}
+	return messages.filter((message, index) => !isCorePlanModeContextMessage(message) || index === keepIndex);
+}
 
 /**
  * Logs provider-error turns so their actual cause is available outside the

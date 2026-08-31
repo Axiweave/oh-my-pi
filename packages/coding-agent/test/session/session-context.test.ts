@@ -2,7 +2,11 @@ import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
-import { type CompactionSummaryMessage, INTERRUPTED_THINKING_MESSAGE_TYPE } from "../../src/session/messages";
+import {
+	CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+	type CompactionSummaryMessage,
+	INTERRUPTED_THINKING_MESSAGE_TYPE,
+} from "../../src/session/messages";
 import { buildSessionContext, type StrippedToolCallsMarker } from "../../src/session/session-context";
 import type { SessionEntry } from "../../src/session/session-entries";
 
@@ -50,6 +54,49 @@ function compactionSummary(messages: AgentMessage[]): CompactionSummaryMessage {
 	if (!summary) throw new Error("Expected a compaction summary message");
 	return summary;
 }
+
+describe("buildSessionContext plan constraints", () => {
+	it("drops core plan constraints but preserves the legacy extension context", () => {
+		const entries = [
+			{
+				type: "custom_message",
+				id: "legacy-core",
+				parentId: null,
+				timestamp,
+				customType: "plan-mode-context",
+				content: "Plan mode active. NEVER run state-changing commands.",
+				display: false,
+			},
+			{
+				type: "custom_message",
+				id: "extension",
+				parentId: "legacy-core",
+				timestamp,
+				customType: "plan-mode-context",
+				content: "[PLAN MODE ACTIVE]\nBash is restricted to READ-ONLY commands.",
+				display: false,
+			},
+			{
+				type: "custom_message",
+				id: "current-core",
+				parentId: "extension",
+				timestamp,
+				customType: CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+				content: "Current core plan constraints.",
+				display: false,
+			},
+		] satisfies SessionEntry[];
+
+		const providerMessages = buildSessionContext(entries).messages;
+		expect(providerMessages).toHaveLength(1);
+		expect(providerMessages[0]).toMatchObject({
+			role: "custom",
+			customType: "plan-mode-context",
+			content: "[PLAN MODE ACTIVE]\nBash is restricted to READ-ONLY commands.",
+		});
+		expect(buildSessionContext(entries, undefined, undefined, { transcript: true }).messages).toHaveLength(3);
+	});
+});
 
 describe("buildSessionContext snapcompact archives", () => {
 	it("omits snapcompact archive blocks from collapsed transcript summaries", () => {

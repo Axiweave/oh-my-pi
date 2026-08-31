@@ -310,6 +310,7 @@ import {
 	type BashExecutionMessage,
 	buildReplanTitleContext,
 	CHECKPOINT_ACTIVE_REMINDER_TYPE,
+	CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
 	type CustomMessage,
 	type CustomMessagePayload,
 	convertToLlm,
@@ -317,9 +318,11 @@ import {
 	demoteInterruptedThinking,
 	didSessionMessagesChange,
 	type FileMentionMessage,
+	filterCorePlanModeContextMessages,
 	type HookMessage,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
 	type InterruptedThinkingDetails,
+	isCorePlanModeContextMessage,
 	isEmptyErrorTurn,
 	isUserInterruptAbort,
 	isUserInvokedSkillPrompt,
@@ -681,6 +684,7 @@ export class AgentSession {
 	#usagePreflightReadyModel: Model | undefined;
 	#detachUsageBeforeQueueDequeue: (() => void) | undefined;
 	#detachUsageBeforeModelCall: (() => void) | undefined;
+	#detachPlanModeContextTransform: (() => void) | undefined;
 
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
@@ -1309,6 +1313,9 @@ export class AgentSession {
 				throw new DOMException("Usage preflight cancelled", "AbortError");
 			}
 		});
+		this.#detachPlanModeContextTransform = this.agent.addContextTransform(async messages =>
+			filterCorePlanModeContextMessages(messages, this.#planModeState?.enabled === true),
+		);
 		const statsHost: SessionStatsTrackerHost = {
 			session: this,
 			agent: this.agent,
@@ -1524,7 +1531,11 @@ export class AgentSession {
 			model: () => this.model,
 			sessionId: () => this.sessionId,
 			localProtocolOptions: () => this.#localProtocolOptions(),
-			transformContext: (messages, signal) => this.#transformContext(messages, signal),
+			transformContext: async (messages, signal) =>
+				filterCorePlanModeContextMessages(
+					await this.#transformContext(messages, signal),
+					this.#planModeState?.enabled === true,
+				),
 			convertToLlm: messages => this.#convertToLlm(messages),
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
@@ -4259,6 +4270,8 @@ export class AgentSession {
 		this.#detachUsageBeforeQueueDequeue = undefined;
 		this.#detachUsageBeforeModelCall?.();
 		this.#detachUsageBeforeModelCall = undefined;
+		this.#detachPlanModeContextTransform?.();
+		this.#detachPlanModeContextTransform = undefined;
 		this.#memory.cancelLocalMemoryStartup();
 		this.#titleGenerationAbortController.abort();
 		this.#abortAutolearnCapture();
@@ -5213,7 +5226,17 @@ export class AgentSession {
 	}
 
 	buildDisplaySessionContext(): SessionContext {
-		return this.#providerBoundary.buildDisplaySessionContext();
+		return this.#preserveActivePlanModeContext(this.#providerBoundary.buildDisplaySessionContext());
+	}
+
+	#preserveActivePlanModeContext(context: SessionContext): SessionContext {
+		if (this.#planModeState?.enabled !== true) return context;
+		const planModeMessage = this.agent.state.messages.findLast(isCorePlanModeContextMessage);
+		if (!planModeMessage) return context;
+		return {
+			...context,
+			messages: filterCorePlanModeContextMessages([...context.messages, planModeMessage], true),
+		};
 	}
 
 	/**
@@ -5245,7 +5268,9 @@ export class AgentSession {
 	}
 
 	#convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
-		return this.#providerBoundary.convertToLlmForSideRequest(messages);
+		return this.#providerBoundary.convertToLlmForSideRequest(
+			filterCorePlanModeContextMessages(messages, this.#planModeState?.enabled === true),
+		);
 	}
 
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
@@ -5320,12 +5345,19 @@ export class AgentSession {
 			this.#planReferenceSent = false;
 			this.#planReferencePath = state.planFilePath;
 		} else {
+			this.#scrubPlanModeContextMessages();
 			this.#planModeReminderCount = 0;
 			this.#planModeReminderAwaitingProgress = false;
 			// Drop any unconsumed forced decision so a post-plan execution turn
 			// does not inherit a stale `required` tool choice.
 			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
 		}
+	}
+
+	#scrubPlanModeContextMessages(): void {
+		const messages = this.agent.state.messages;
+		const filtered = filterCorePlanModeContextMessages(messages, false);
+		if (filtered !== messages) this.agent.replaceMessages(filtered);
 	}
 
 	getGoalModeState(): GoalModeState | undefined {
@@ -5456,6 +5488,7 @@ export class AgentSession {
 	 * Inject the plan mode context message into the conversation history.
 	 */
 	async sendPlanModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
+		this.#scrubPlanModeContextMessages();
 		const message = await this.#buildPlanModeMessage();
 		if (!message) return;
 		await this.sendCustomMessage(
@@ -5627,7 +5660,7 @@ export class AgentSession {
 
 		return {
 			role: "custom",
-			customType: "plan-mode-context",
+			customType: CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
 			content,
 			display: false,
 			attribution: "agent",
@@ -6096,6 +6129,7 @@ export class AgentSession {
 			if (planReferenceMessage) {
 				messages.push(planReferenceMessage);
 			}
+			this.#scrubPlanModeContextMessages();
 			const planModeMessage = await this.#buildPlanModeMessage();
 			if (planModeMessage) {
 				messages.push(planModeMessage);
@@ -9254,7 +9288,7 @@ export class AgentSession {
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext();
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
-		this.agent.replaceMessages(displayContext.messages);
+		this.agent.replaceMessages(this.#preserveActivePlanModeContext(displayContext).messages);
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();

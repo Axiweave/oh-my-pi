@@ -3,8 +3,10 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import {
 	buildReplanTitleContext,
+	CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
 	type CustomMessage,
 	convertToLlm,
+	filterCorePlanModeContextMessages,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
 	replaceLlmImagesWithText,
 	SKILL_PROMPT_MESSAGE_TYPE,
@@ -56,6 +58,40 @@ function interruptedThinkingContinuity(): CustomMessage {
 		timestamp: 2,
 	};
 }
+
+describe("filterCorePlanModeContextMessages", () => {
+	it("preserves the legacy extension context while removing core plan constraints", () => {
+		const legacyCore: CustomMessage = {
+			role: "custom",
+			customType: "plan-mode-context",
+			content: "Plan mode active. NEVER run state-changing commands.",
+			display: false,
+			timestamp: 1,
+		};
+		const extensionContext: CustomMessage = {
+			role: "custom",
+			customType: "plan-mode-context",
+			content: "[PLAN MODE ACTIVE]\nBash is restricted to READ-ONLY commands.",
+			display: false,
+			timestamp: 2,
+		};
+		const currentCore: CustomMessage = {
+			role: "custom",
+			customType: CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+			content: "Current core plan constraints.",
+			display: false,
+			timestamp: 3,
+		};
+
+		expect(filterCorePlanModeContextMessages([legacyCore, extensionContext, currentCore], true)).toEqual([
+			extensionContext,
+			currentCore,
+		]);
+		expect(filterCorePlanModeContextMessages([legacyCore, extensionContext, currentCore], false)).toEqual([
+			extensionContext,
+		]);
+	});
+});
 
 describe("convertToLlm", () => {
 	it("presents user-invoked skill prompts as user turns", () => {

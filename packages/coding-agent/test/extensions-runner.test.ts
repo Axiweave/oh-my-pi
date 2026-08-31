@@ -30,6 +30,11 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import {
+	type CustomMessage,
+	filterCorePlanModeContextMessages,
+	normalizeCustomMessagePayload,
+} from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
 
@@ -92,6 +97,86 @@ describe("ExtensionRunner", () => {
 			errors: result.errors.filter(error => isTestScoped(error.path)),
 		};
 	};
+
+	it("preserves the shipped plan extension context when core plan mode is inactive", async () => {
+		const examplePath = path.resolve(import.meta.dir, "../examples/extensions/plan-mode.ts");
+		const result = await loadTestExtensions([examplePath]);
+		expect(result.errors).toEqual([]);
+		const runner = new ExtensionRunner(
+			result.extensions,
+			result.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		const activeToolSets: string[][] = [];
+		runner.initialize(
+			{
+				sendMessage: () => {},
+				sendUserMessage: () => {},
+				appendEntry: () => {},
+				setLabel: () => {},
+				getActiveTools: () => [],
+				getAllTools: () => [],
+				setActiveTools: async tools => {
+					activeToolSets.push(tools);
+				},
+				getCommands: () => [],
+				setModel: async () => false,
+				getThinkingLevel: () => undefined,
+				setThinkingLevel: () => {},
+				getSessionName: () => undefined,
+				setSessionName: async () => {},
+			},
+			{
+				getModel: () => undefined,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => undefined,
+				compact: async () => {},
+				getSystemPrompt: () => [],
+			},
+		);
+		runner.setFlagValue("plan", true);
+		await runner.emit({ type: "session_start" });
+		const injected = await runner.emitBeforeAgentStart("plan", undefined, []);
+		const rawPayload = injected?.messages?.[0];
+		if (rawPayload === undefined) throw new Error("Expected the plan extension context");
+		const payload = normalizeCustomMessagePayload(rawPayload);
+		const extensionMessage: CustomMessage = {
+			role: "custom",
+			customType: payload.customType,
+			content: payload.content,
+			display: payload.display ?? false,
+			timestamp: 1,
+		};
+
+		expect(activeToolSets.at(-1)).toEqual(["read", "bash", "search", "find"]);
+		expect(extensionMessage.customType).toBe("plan-mode-context");
+		expect(filterCorePlanModeContextMessages([extensionMessage], false)).toEqual([extensionMessage]);
+		const blocked = await runner.emitToolCall({
+			type: "tool_call",
+			toolName: "bash",
+			toolCallId: "extension-plan-commit",
+			input: { command: "git commit -m test" },
+		});
+		expect(blocked).toMatchObject({ block: true });
+
+		const command = runner.getCommand("plan");
+		if (!command) throw new Error("Expected the plan extension command");
+		await command.handler("", runner.createCommandContext());
+		expect(activeToolSets.at(-1)).toEqual(["read", "bash", "edit", "write"]);
+		expect(
+			await runner.emitToolCall({
+				type: "tool_call",
+				toolName: "bash",
+				toolCallId: "extension-plan-commit-after-exit",
+				input: { command: "git commit -m test" },
+			}),
+		).toBeUndefined();
+	});
 
 	it("reflects SessionManager.moveTo() changes instead of the constructor-time snapshot (/move)", async () => {
 		const dirA = tempDir.join("dirA");

@@ -8,6 +8,7 @@ import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as unexpectedStopClassifier from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -146,6 +147,24 @@ describe("AgentSession auto-compaction queue resume", () => {
 	});
 
 	it("resumes after threshold compaction when only agent-level queued messages exist", async () => {
+		session.setPlanModeState({
+			enabled: true,
+			planFilePath: "local://PLAN.md",
+			workflow: "parallel",
+		});
+		await session.sendPlanModeContext({ deliverAs: "nextTurn" });
+		expect(
+			session.agent.state.messages.some(
+				message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+			),
+		).toBe(true);
+		expect(
+			session.sessionManager
+				.buildSessionContext({ transcript: true })
+				.messages.some(
+					message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+				),
+		).toBe(true);
 		session.agent.followUp({
 			role: "custom",
 			customType: "test",
@@ -156,7 +175,11 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		expect(session.agent.hasQueuedMessages()).toBe(true);
 
+		let planContextPresentAtContinue: boolean | undefined;
 		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			planContextPresentAtContinue = session.agent.state.messages.some(
+				message => message.role === "custom" && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+			);
 			// Real continue() polls and consumes the queued steering/follow-up
 			// messages. Mirror that here so the stranded-queue drain settles after
 			// one resume instead of rescheduling itself forever (a no-op mock
@@ -216,6 +239,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await idlePromise;
 
 		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(planContextPresentAtContinue).toBe(true);
 		const runtimeSignals = getRuntimeSignals();
 		expect(runtimeSignals).toContain("compaction:start:threshold");
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);

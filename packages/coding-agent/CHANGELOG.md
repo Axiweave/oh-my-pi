@@ -14,6 +14,7 @@
 ### Fixed
 
 - Fixed Claude three-line footers showing an Escape badge instead of the working spinner and recoloring the model with the session accent.
+- Fixed plan-mode restrictions remaining active after exit and blocking later commands such as Git commits.
 
 ## [18.0.10] - 2026-08-28
 

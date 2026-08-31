@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added removable message-context transforms so hosts can apply session-specific provider filtering after agent construction.
+
 ## [18.0.10] - 2026-08-28
 
 ### Added

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
-import { Agent, AgentBusyError, type AgentEvent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import {
+	Agent,
+	AgentBusyError,
+	type AgentEvent,
+	type AgentMessage,
+	type AgentTool,
+	ThinkingLevel,
+} from "@oh-my-pi/pi-agent-core";
 import type { SimpleStreamOptions, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
@@ -305,6 +312,29 @@ describe("Agent", () => {
 		await agent.continue(controller.signal);
 		expect(calls).toBe(1);
 		expect(signals).toEqual([controller.signal]);
+
+		removeSecond();
+		agent.followUp({ role: "user", content: "second turn", timestamp: Date.now() });
+		await agent.continue();
+		expect(calls).toBe(1);
+	});
+
+	it("removes duplicate context transforms independently", async () => {
+		const mock = createMockModel({ responses: [{ content: ["first"] }, { content: ["second"] }] });
+		const agent = new Agent({ streamFn: mock.stream });
+		agent.replaceMessages([createAssistantMessage([{ type: "text", text: "ready" }])]);
+		let calls = 0;
+		const transform = async (messages: AgentMessage[]) => {
+			calls++;
+			return messages;
+		};
+		const removeFirst = agent.addContextTransform(transform);
+		const removeSecond = agent.addContextTransform(transform);
+
+		removeFirst();
+		agent.followUp({ role: "user", content: "first turn", timestamp: Date.now() });
+		await agent.continue();
+		expect(calls).toBe(1);
 
 		removeSecond();
 		agent.followUp({ role: "user", content: "second turn", timestamp: Date.now() });
