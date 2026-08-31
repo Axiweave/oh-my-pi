@@ -10,6 +10,7 @@ export interface PlanApprovalDetails {
 	planFilePath: string;
 	title: string;
 	planExists: boolean;
+	consensusHash?: string;
 }
 
 /** Validate and normalize the agent-supplied plan title into a safe filename stem.

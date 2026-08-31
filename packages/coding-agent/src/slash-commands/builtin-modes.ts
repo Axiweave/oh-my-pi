@@ -259,6 +259,30 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "debate",
+		icon: "plan",
+		description: "Toggle plan mode with independent review",
+		inlineHint: "[prompt]",
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => {
+			if (!runtime.ctx.settings.get("plan.enabled" as SettingPath)) return "Debate: disabled in settings";
+			if (runtime.ctx.planModeEnabled) {
+				const workflow = runtime.ctx.session.getPlanModeState()?.workflow;
+				const planFile = runtime.ctx.planModePlanFilePath;
+				return workflow === "debate"
+					? `Debate: on${planFile ? ` (${path.basename(planFile)})` : ""}`
+					: "Debate: blocked by active plan mode";
+			}
+			if (runtime.ctx.goalModeEnabled) return "Debate: blocked by goal mode";
+			return "Debate: off";
+		},
+		handleTui: async (command, runtime) => {
+			await runWithDetachedModeDraft(command, runtime, () =>
+				runtime.ctx.handlePlanModeCommand(command.args || undefined, runtime.input, "debate"),
+			);
+		},
+	},
+	{
 		name: "plan",
 		icon: "plan",
 		description: "Toggle plan mode (agent plans before executing)",
@@ -275,7 +299,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 		handleTui: async (command, runtime) => {
 			await runWithDetachedModeDraft(command, runtime, () =>
-				runtime.ctx.handlePlanModeCommand(command.args || undefined, runtime.input),
+				runtime.ctx.handlePlanModeCommand(command.args || undefined, runtime.input, "parallel"),
 			);
 		},
 	},

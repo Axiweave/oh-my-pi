@@ -1,5 +1,6 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { PlanWorkflow } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
 /**
@@ -9,29 +10,34 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
  * already active: `true` simulates the user confirming exit (mode flips off);
  * `false` simulates cancel (mode stays on).
  */
-function createPlanHarness(opts: { planModeEnabled: boolean; confirmExit: boolean }) {
-	const state = { planModeEnabled: opts.planModeEnabled };
+function createPlanHarness(opts: { planModeEnabled: boolean; confirmExit: boolean; workflow?: PlanWorkflow }) {
+	const state = { planModeEnabled: opts.planModeEnabled, workflow: opts.workflow ?? ("parallel" as PlanWorkflow) };
 	const addToHistory = mock((_text: string) => {});
 	const clearDraft = mock((_historyText?: string) => {});
 
+	const handlePlanModeCommand = mock(
+		async (_initialPrompt?: string, _input?: unknown, requestedWorkflow: PlanWorkflow = "parallel") => {
+			if (state.planModeEnabled) {
+				if (state.workflow !== requestedWorkflow) return;
+				if (opts.confirmExit) state.planModeEnabled = false;
+				return;
+			}
+			state.planModeEnabled = true;
+			state.workflow = requestedWorkflow;
+		},
+	);
 	const ctx = {
 		editor: { addToHistory, clearDraft } as unknown as InteractiveModeContext["editor"],
 		get planModeEnabled() {
 			return state.planModeEnabled;
 		},
-		handlePlanModeCommand: mock(async (_initialPrompt?: string) => {
-			// Mirror interactive-mode.ts: if already active, confirm → exit; else enter.
-			if (state.planModeEnabled) {
-				if (opts.confirmExit) state.planModeEnabled = false;
-				return;
-			}
-			state.planModeEnabled = true;
-		}),
+		handlePlanModeCommand,
 	} as unknown as InteractiveModeContext;
 
 	return {
 		runtime: { ctx },
 		state,
+		handlePlanModeCommand,
 		addToHistory,
 		clearDraft,
 	};
@@ -91,6 +97,30 @@ describe("/plan handler when already active", () => {
 
 		expect(h.state.planModeEnabled).toBe(true);
 		expect(h.clearDraft).toHaveBeenCalled();
+	});
+});
+
+describe("/debate handler", () => {
+	it("starts debate workflow with the supplied planning prompt", async () => {
+		const h = createPlanHarness({ planModeEnabled: false, confirmExit: false });
+
+		await executeBuiltinSlashCommand("/debate add auth", h.runtime);
+
+		expect(h.state).toEqual({ planModeEnabled: true, workflow: "debate" });
+		expect(h.handlePlanModeCommand).toHaveBeenCalledWith("add auth", undefined, "debate");
+		expect(h.clearDraft).toHaveBeenCalled();
+	});
+
+	it("does not switch an active parallel plan into debate workflow", async () => {
+		const h = createPlanHarness({
+			planModeEnabled: true,
+			confirmExit: true,
+			workflow: "parallel",
+		});
+
+		await executeBuiltinSlashCommand("/debate add auth", h.runtime);
+
+		expect(h.state).toEqual({ planModeEnabled: true, workflow: "parallel" });
 	});
 });
 

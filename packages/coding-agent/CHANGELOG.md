@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `/debate` plan mode, which requires an independent slow-model review and exact-plan consensus before human approval.
+
 ### Fixed
 
 - Fixed Claude three-line footers showing an Escape badge instead of the working spinner and recoloring the model with the session accent.

@@ -318,7 +318,8 @@ const modeSegment: StatusLineSegment = {
 
 		const plan = ctx.planMode;
 		if (plan && (plan.enabled || plan.paused)) {
-			const label = plan.paused ? `Plan${pauseSuffix}` : "Plan";
+			const name = plan.workflow === "debate" ? "Debate" : "Plan";
+			const label = plan.paused ? `${name}${pauseSuffix}` : name;
 			const content = withIcon(theme.icon.plan, label);
 			return {
 				content: plan.paused ? theme.fg("warning", content) : accentFg(ctx, "accent", content),

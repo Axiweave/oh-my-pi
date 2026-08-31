@@ -83,6 +83,7 @@ function makeSession(options: SessionOptions = {}): ToolSession {
 					({
 						enabled: true,
 						planFilePath: path.join(options.cwd ?? process.cwd(), "plan.md"),
+						workflow: "parallel",
 					}) satisfies PlanModeState
 			: undefined,
 	};

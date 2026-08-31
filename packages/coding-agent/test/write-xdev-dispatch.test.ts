@@ -755,7 +755,11 @@ describe("device-only write transport for explicit lists omitting write", () => 
 				getArtifactsDir,
 				getSessionId,
 				localProtocolOptions: { getArtifactsDir, getSessionId },
-				getPlanModeState: () => ({ enabled: true, planFilePath: "local://review-plan.md" }),
+				getPlanModeState: () => ({
+					enabled: true,
+					planFilePath: "local://review-plan.md",
+					workflow: "parallel",
+				}),
 			});
 			const tools = await createTools(session, ["read"]);
 			const read = tools.find(entry => entry.name === "read");

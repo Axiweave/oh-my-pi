@@ -2328,7 +2328,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 				expect(revoked.isError).toBe(true);
 				expect(fs.existsSync(revokedTarget)).toBe(true);
 
-				session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+				session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel" });
 				await session.setActiveToolsByName(["read", "write"]);
 				expect(session.getActiveToolNames()).toContain("write");
 				expect(session.getToolByName("write")?.description).not.toBe(fullWriteDescription);

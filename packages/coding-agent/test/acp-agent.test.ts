@@ -13,10 +13,13 @@ import {
 	AcpAgent,
 	createAcpExtensionUiContext,
 } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-agent";
+import { resolveApprovedPlan } from "@oh-my-pi/pi-coding-agent/plan-mode/approved-plan";
+import { hashPlanContent } from "@oh-my-pi/pi-coding-agent/plan-mode/debate";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type {
 	AgentSession,
 	AgentSessionEvent,
+	PlanProposalOutcome,
 	UsageFallbackConfirmation,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -24,6 +27,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS } from "@oh-my-pi/pi-coding-agent/stt/models";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { PlanProposalContext, PlanProposalHandler } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import {
 	DEFAULT_TTS_LOCAL_MODEL_KEY,
 	DEFAULT_TTS_VOICE,
@@ -54,6 +58,10 @@ import { TOOL_NAME as DELAYED_MCP_TOOL_NAME } from "./fixtures/delayed-tool-mcp"
 function expectAcpStructure(schema: Validator<unknown>, value: unknown): void {
 	const result = schema.safeParse(value);
 	expect(result.success, result.success ? undefined : JSON.stringify(result.error.issues, null, 2)).toBe(true);
+}
+
+function proposalContext(toolCallId = "proposal-call"): PlanProposalContext {
+	return { signal: new AbortController().signal, toolCallId };
 }
 
 const TEST_MODELS: Model[] = [
@@ -351,14 +359,47 @@ class FakeAgentSession {
 		this.planModeState = state;
 	}
 
-	planProposalHandler: ((title: string) => Promise<unknown> | unknown) | undefined;
+	planProposalHandler: PlanProposalHandler | undefined;
+	preparePlanProposalImpl: ((title: string, context: PlanProposalContext) => Promise<PlanProposalOutcome>) | undefined;
 
-	setPlanProposalHandler(handler: ((title: string) => Promise<unknown> | unknown) | null): void {
+	setPlanProposalHandler(handler: PlanProposalHandler | null): void {
 		this.planProposalHandler = handler ?? undefined;
 	}
 
-	peekPlanProposalHandler(): ((title: string) => Promise<unknown> | unknown) | undefined {
+	peekPlanProposalHandler(): PlanProposalHandler | undefined {
 		return this.planProposalHandler;
+	}
+
+	async preparePlanProposal(title: string, context: PlanProposalContext): Promise<PlanProposalOutcome> {
+		if (this.preparePlanProposalImpl) return this.preparePlanProposalImpl(title, context);
+		const state = this.planModeState;
+		if (!state?.enabled) throw new Error("Plan mode is not active.");
+		const resolved = await resolveApprovedPlan({
+			suppliedTitle: title,
+			statePlanFilePath: state.planFilePath,
+			readPlan: async planFilePath => {
+				const resolvedPath = resolveLocalUrlToPath(planFilePath, {
+					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+					getSessionId: () => this.sessionManager.getSessionId(),
+				});
+				try {
+					return await Bun.file(resolvedPath).text();
+				} catch {
+					return null;
+				}
+			},
+		});
+		const planHash = hashPlanContent(resolved.planContent);
+		return {
+			outcome: "ready_for_approval",
+			planContent: resolved.planContent,
+			planHash,
+			approval: {
+				planFilePath: resolved.planFilePath,
+				title: resolved.title,
+				planExists: true,
+			},
+		};
 	}
 
 	planReferencePath: string | undefined;
@@ -628,12 +669,12 @@ describe("ACP agent", () => {
 
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		expectAcpStructure(zNewSessionResponse, created);
-		expect(created.modes?.availableModes.map(mode => mode.id)).toEqual(["default", "plan"]);
+		expect(created.modes?.availableModes.map(mode => mode.id)).toEqual(["default", "plan", "debate"]);
 		const initialModeConfig = created.configOptions?.find(option => option.id === "mode") as
 			| { currentValue?: unknown; options?: Array<{ value: string }> }
 			| undefined;
 		expect(initialModeConfig?.currentValue).toBe("default");
-		expect(initialModeConfig?.options?.map(option => option.value)).toEqual(["default", "plan"]);
+		expect(initialModeConfig?.options?.map(option => option.value)).toEqual(["default", "plan", "debate"]);
 
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
 
@@ -671,6 +712,24 @@ describe("ACP agent", () => {
 		// instead of erroring with no approval path.
 		expect(typeof session.planProposalHandler).toBe("function");
 
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
+		expect(session.planModeState).toEqual(
+			expect.objectContaining({
+				enabled: true,
+				planFilePath: "local://PLAN.md",
+				workflow: "debate",
+				debate: { phase: "drafting", round: 0 },
+			}),
+		);
+		const debateUpdate = harness.updates.findLast(
+			notification =>
+				notification.sessionId === created.sessionId && notification.update.sessionUpdate === "current_mode_update",
+		);
+		expect(debateUpdate?.update).toEqual({
+			sessionUpdate: "current_mode_update",
+			currentModeId: "debate",
+		});
+
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "default" });
 		expect(session.planModeState).toBeUndefined();
 		expect(session.planProposalHandler).toBeUndefined();
@@ -691,7 +750,7 @@ describe("ACP agent", () => {
 
 		// No plan file written → handler surfaces a ToolError telling the
 		// agent to write the plan before requesting approval.
-		await expect(handler!("demo")).rejects.toThrow(/Plan file not found/);
+		await expect(handler!("demo", proposalContext())).rejects.toThrow(/Plan file not found/);
 		// Plan mode must remain active so the agent can recover.
 		expect(session.planModeState?.enabled).toBe(true);
 		expect(typeof session.planProposalHandler).toBe("function");
@@ -720,7 +779,7 @@ describe("ACP agent", () => {
 
 		const updatesBefore = harness.updates.length;
 		const handler = session.planProposalHandler!;
-		const result = (await handler("words-counter")) as {
+		const result = (await handler("words-counter", proposalContext())) as {
 			content: Array<{ type: string; text: string }>;
 			details: { planFilePath: string; title: string; planExists: boolean };
 		};
@@ -787,7 +846,9 @@ describe("ACP agent", () => {
 
 		const updatesBefore = harness.updates.length;
 		const handler = session.planProposalHandler!;
-		const result = (await handler("words-counter")) as { content: Array<{ type: string; text: string }> };
+		const result = (await handler("words-counter", proposalContext())) as {
+			content: Array<{ type: string; text: string }>;
+		};
 
 		expect(result.content[0]?.text).toMatch(/refinement requested/i);
 		// Plan file stays put; no rename, no write-access grant.
@@ -809,6 +870,149 @@ describe("ACP agent", () => {
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
+	});
+
+	it("keeps debate mode active and skips elicitation when the reviewer requests changes", async () => {
+		const elicit = vi.fn(
+			async (): Promise<CreateElicitationResponse> => ({
+				action: "accept",
+				content: { value: "Approve and execute" },
+			}),
+		);
+		const harness = await createHarness({ elicitationHandler: elicit });
+		Settings.instance.set("plan.enabled", true);
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
+		session.preparePlanProposalImpl = async () => ({
+			outcome: "changes_requested",
+			planHash: "reviewed-hash",
+			summary: "The error path is incomplete.",
+			findings: [
+				{
+					id: "error-path",
+					title: "Missing error path",
+					problem: "The plan omits failure handling.",
+					requiredChange: "Add the failure transition.",
+					evidence: [{ path: "src/auth.ts", explanation: "Authentication can fail." }],
+				},
+			],
+			guidance: "Revise the error path and resubmit changed bytes.",
+		});
+
+		const result = await session.planProposalHandler!("auth", proposalContext());
+
+		expect(result.details).toEqual({ outcome: "changes_requested", planHash: "reviewed-hash" });
+		expect(elicit).not.toHaveBeenCalled();
+		expect(session.planModeState?.workflow).toBe("debate");
+		expect(session.planProposalHandler).toBeDefined();
+
+		harness.abortController.abort();
+	});
+
+	it("asks for approval with the exact consensus bytes and exits debate mode", async () => {
+		const requests: CreateElicitationRequest[] = [];
+		const harness = await createHarness({
+			elicitationHandler: async request => {
+				requests.push(request);
+				return { action: "accept", content: { value: "Approve and execute" } };
+			},
+		});
+		Settings.instance.set("plan.enabled", true);
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
+		const planFilePath = "local://auth-plan.md";
+		const planContent = "# Auth\n\nUse the reviewed flow.";
+		const planPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		cleanupRoots.push(
+			resolveLocalUrlToPath("local://", {
+				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+				getSessionId: () => session.sessionManager.getSessionId(),
+			}),
+		);
+		await Bun.write(planPath, planContent);
+		const planHash = hashPlanContent(planContent);
+		session.preparePlanProposalImpl = async () => {
+			session.setPlanModeState({
+				enabled: true,
+				planFilePath,
+				workflow: "debate",
+				debate: { phase: "consensus", round: 1, planHash, summary: "Ready." },
+			});
+			return {
+				outcome: "ready_for_approval",
+				planContent,
+				planHash,
+				approval: { planFilePath, title: "auth", planExists: true, consensusHash: planHash },
+			};
+		};
+
+		await session.planProposalHandler!("auth", proposalContext());
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.message).toContain(planContent);
+		expect(session.planModeState).toBeUndefined();
+		expect(session.planReferencePath).toBe(planFilePath);
+
+		harness.abortController.abort();
+	});
+
+	it("invalidates ACP consensus when the plan changes during human approval", async () => {
+		let planPath = "";
+		const reviewedContent = "# Auth\n\nReviewed bytes.";
+		const concurrentContent = "# Auth\n\nConcurrent disk edit.";
+		const requests: CreateElicitationRequest[] = [];
+		const harness = await createHarness({
+			elicitationHandler: async request => {
+				requests.push(request);
+				await Bun.write(planPath, concurrentContent);
+				return { action: "accept", content: { value: "Approve and execute" } };
+			},
+		});
+		Settings.instance.set("plan.enabled", true);
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
+		const planFilePath = "local://auth-plan.md";
+		const localOptions = {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		};
+		cleanupRoots.push(resolveLocalUrlToPath("local://", localOptions));
+		planPath = resolveLocalUrlToPath(planFilePath, localOptions);
+		await Bun.write(planPath, reviewedContent);
+		const planHash = hashPlanContent(reviewedContent);
+		session.preparePlanProposalImpl = async () => {
+			session.setPlanModeState({
+				enabled: true,
+				planFilePath,
+				workflow: "debate",
+				debate: { phase: "consensus", round: 1, planHash, summary: "Ready." },
+			});
+			return {
+				outcome: "ready_for_approval",
+				planContent: reviewedContent,
+				planHash,
+				approval: { planFilePath, title: "auth", planExists: true, consensusHash: planHash },
+			};
+		};
+
+		const result = await session.planProposalHandler!("auth", proposalContext());
+
+		expect(requests[0]?.message).toContain(reviewedContent);
+		expect(result.details).toEqual({ outcome: "changes_requested", planHash });
+		expect(await Bun.file(planPath).text()).toBe(concurrentContent);
+		expect(session.planModeState?.debate).toMatchObject({
+			phase: "drafting",
+			planHash: hashPlanContent(concurrentContent),
+		});
+		expect(session.planReferencePath).toBeUndefined();
+
+		harness.abortController.abort();
 	});
 
 	it("pushes config_option_update when thinking level changes internally", async () => {

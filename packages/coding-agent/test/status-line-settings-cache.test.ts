@@ -177,6 +177,8 @@ describe("StatusLineComponent effective settings cache", () => {
 
 		component.setPlanModeStatus({ enabled: true, paused: false });
 		expect(stripVTControlCharacters(component.getTopBorder(80).content)).toContain("Plan");
+		component.setPlanModeStatus({ enabled: true, paused: false, workflow: "debate" });
+		expect(stripVTControlCharacters(component.getTopBorder(80).content)).toContain("Debate");
 		expect(component.getEffectiveSettingsForTest()).toBe(effective);
 
 		component.setHookStatus("hook", "hook running");

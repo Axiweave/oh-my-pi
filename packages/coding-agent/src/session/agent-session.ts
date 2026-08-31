@@ -164,13 +164,20 @@ import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { computeNonMessageTokens } from "../modes/utils/context-usage";
 import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/approved-plan";
+import {
+	hashPlanContent,
+	PlanDebateGate,
+	type PlanDebateGateOutcome,
+	type PlanDebateReviewer,
+} from "../plan-mode/debate";
 import { listPlanFiles, readPlanFile } from "../plan-mode/plan-files";
-import type { PlanModeState } from "../plan-mode/state";
+import { type PlanModeState, serializePlanModeState } from "../plan-mode/state";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
+import planDebateProposalResultPrompt from "../prompts/system/plan-debate-proposal-result.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
@@ -208,6 +215,7 @@ import {
 	buildResolveReminderMessage,
 	isPreviewResolutionToolCall,
 	isProposeToolCall,
+	type PlanProposalContext,
 	type PlanProposalHandler,
 	PROPOSE_DEVICE_NAME,
 	writeDeviceDispatch,
@@ -493,6 +501,15 @@ function cloneMessageEndNotification(message: AgentMessage): AgentMessage {
 const INTERRUPTED_THINKING_MIN_CHARS = 60;
 const SESSION_CWD_CHANGE_REJECTED = Symbol("sessionCwdChangeRejected");
 
+export type PlanProposalOutcome =
+	| {
+			outcome: "ready_for_approval";
+			planContent: string;
+			planHash: string;
+			approval: PlanApprovalDetails;
+	  }
+	| (Exclude<PlanDebateGateOutcome, { outcome: "ready_for_approval" }> & { guidance: string });
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -550,6 +567,8 @@ export class AgentSession {
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	#queuedMessageDrainScheduled = false;
 	#planModeState: PlanModeState | undefined;
+	readonly #planDebateGate: PlanDebateGate;
+	readonly #runPlanDebateReviewer?: PlanDebateReviewer;
 	/** Session-scoped `/vision` override; undefined = follow persisted `inspect_image.mode`. */
 	#inspectImageModeOverride: InspectImageMode | undefined;
 	#vibeModeState: VibeModeState | undefined;
@@ -1015,22 +1034,69 @@ export class AgentSession {
 		return this.#prewalk.arm(target, thinkingLevel);
 	}
 
-	/** Validate the active plan artifact and shape an `xd://propose` result for review-mode hosts. */
-	async preparePlanForReview(title: string): Promise<AgentToolResult<PlanApprovalDetails>> {
+	/** Validate the active plan artifact and prepare its host-independent proposal outcome. */
+	async preparePlanProposal(title: string, context: PlanProposalContext): Promise<PlanProposalOutcome> {
 		const state = this.getPlanModeState();
-		if (!state?.enabled) {
-			throw new ToolError("Plan mode is not active.");
-		}
-		const { planFilePath, title: resolvedTitle } = await resolveApprovedPlan({
+		if (!state?.enabled) throw new ToolError("Plan mode is not active.");
+		const resolved = await resolveApprovedPlan({
 			suppliedTitle: title,
 			statePlanFilePath: state.planFilePath,
 			readPlan: url => this.#readPlanFile(url),
 			listPlanFiles: () => this.#listPlanFiles(),
 		});
-		return {
-			content: [{ type: "text", text: "Plan ready for review." }],
-			details: { planFilePath, title: resolvedTitle, planExists: true },
-		};
+		const planHash = hashPlanContent(resolved.planContent);
+		if (state.workflow !== "debate") {
+			return {
+				outcome: "ready_for_approval",
+				planContent: resolved.planContent,
+				planHash,
+				approval: { planFilePath: resolved.planFilePath, title: resolved.title, planExists: true },
+			};
+		}
+		if (state.planFilePath !== resolved.planFilePath) {
+			this.#commitPlanModeState({ ...state, planFilePath: resolved.planFilePath });
+		}
+		const reviewer: PlanDebateReviewer =
+			this.#runPlanDebateReviewer ??
+			(async () => {
+				throw new Error("This session does not provide a plan debate reviewer.");
+			});
+		const outcome = await this.#planDebateGate.propose({
+			planFilePath: resolved.planFilePath,
+			planContent: resolved.planContent,
+			planTitle: resolved.title,
+			reviewer,
+			signal: context.signal,
+			proposalToolCallId: context.toolCallId,
+		});
+		if (outcome.outcome === "ready_for_approval") {
+			return {
+				outcome: "ready_for_approval",
+				planContent: resolved.planContent,
+				planHash: outcome.planHash,
+				approval: {
+					planFilePath: resolved.planFilePath,
+					title: resolved.title,
+					planExists: true,
+					consensusHash: outcome.planHash,
+				},
+			};
+		}
+		const debate = this.#planModeState?.debate;
+		const guidance = prompt.render(planDebateProposalResultPrompt, {
+			changesRequested: outcome.outcome === "changes_requested",
+			reviewing: outcome.outcome === "reviewing",
+			failed: outcome.outcome === "failed",
+			round: debate?.round ?? 0,
+			...(outcome.outcome === "changes_requested" ? { summary: outcome.summary, findings: outcome.findings } : {}),
+			...(outcome.outcome === "failed" ? { error: outcome.error } : {}),
+		});
+		return { ...outcome, guidance };
+	}
+
+	#commitPlanModeState(state: PlanModeState): void {
+		this.#planModeState = state;
+		this.sessionManager.appendModeChange(state.enabled ? "plan" : "plan_paused", serializePlanModeState(state));
 	}
 
 	async #readPlanFile(planFilePath: string): Promise<string | null> {
@@ -1053,6 +1119,11 @@ export class AgentSession {
 		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.#runPlanDebateReviewer = config.runPlanDebateReviewer;
+		this.#planDebateGate = new PlanDebateGate({
+			getState: () => this.#planModeState,
+			commitState: state => this.#commitPlanModeState(state),
+		});
 		this.#modelRegistry = config.modelRegistry;
 		this.#extensionRoots =
 			config.extensionRoots ??
@@ -2827,10 +2898,15 @@ export class AgentSession {
 				await this.#goalRuntime.onToolCompleted(event.toolName);
 			}
 			this.#planModeReminderAwaitingProgress = false;
-			if (
-				event.toolName === "ask" ||
-				writeDeviceDispatch(event.toolName, event.result)?.tool === PROPOSE_DEVICE_NAME
-			) {
+			const dispatch = writeDeviceDispatch(event.toolName, event.result);
+			const proposalReady =
+				dispatch?.tool === PROPOSE_DEVICE_NAME &&
+				(this.#planModeState?.workflow !== "debate" ||
+					(dispatch.inner !== null &&
+						typeof dispatch.inner === "object" &&
+						"outcome" in dispatch.inner &&
+						dispatch.inner.outcome === "ready_for_approval"));
+			if (event.toolName === "ask" || proposalReady) {
 				this.#planModeReminderCount = 0;
 				this.#planModeReminderAwaitingProgress = false;
 			}
@@ -5545,6 +5621,7 @@ export class AgentSession {
 			isHashlineEditMode: this.#resolveActiveEditMode() === "hashline",
 			reentry: state.reentry ?? false,
 			iterative: state.workflow === "iterative",
+			debate: state.workflow === "debate",
 			scoutAvailable: this.#isScoutAvailable(),
 		});
 
@@ -7709,7 +7786,10 @@ export class AgentSession {
 	}
 	/** Plan-mode decision affordances: `ask`, or plan approval via `write xd://propose`. */
 	#isPlanDecisionTool(toolCall: { name: string; arguments?: Record<string, unknown> }): boolean {
-		return toolCall.name === "ask" || isProposeToolCall(toolCall);
+		if (toolCall.name === "ask") return true;
+		if (!isProposeToolCall(toolCall)) return false;
+		const state = this.#planModeState;
+		return state?.workflow !== "debate" || state.debate?.phase === "consensus";
 	}
 
 	async #enforcePlanModeDecisionAtSettle(): Promise<boolean> {
@@ -7757,6 +7837,7 @@ export class AgentSession {
 		this.#toolChoiceQueue.pushOnce("required", { label: "plan-mode-decision" });
 		const reminder = prompt.render(planModeToolDecisionReminderPrompt, {
 			askToolName: "ask",
+			debate: this.#planModeState?.workflow === "debate",
 		});
 		const reminderMessage: Message = {
 			role: "developer",

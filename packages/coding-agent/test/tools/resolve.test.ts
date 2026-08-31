@@ -157,21 +157,29 @@ describe("dispatchResolutionDevice", () => {
 		expect(writeDeviceDispatch("write", { details: { xdev } })?.tool).toBe(RESOLVE_DEVICE_NAME);
 	});
 
-	it("routes propose to the plan proposal handler", async () => {
+	it("routes propose with the originating call lifecycle", async () => {
 		let proposedTitle = "";
-		const proposalHandler: PlanProposalHandler = async (title: string) => {
+		let receivedSignal: AbortSignal | undefined;
+		let receivedToolCallId = "";
+		const proposalHandler: PlanProposalHandler = async (title, context) => {
 			proposedTitle = title;
+			receivedSignal = context.signal;
+			receivedToolCallId = context.toolCallId;
 			return {
 				content: [{ type: "text", text: "Plan ready for approval." }],
 				details: { planFilePath: "local://demo-plan.md", title, planExists: true },
 			};
 		};
+		const controller = new AbortController();
 		const { result, xdev } = await dispatchResolutionDevice(
 			createSession({ proposalHandler }),
 			PROPOSE_DEVICE_NAME,
 			"demo",
+			{ signal: controller.signal, toolCallId: "proposal-call-1" },
 		);
 		expect(proposedTitle).toBe("demo");
+		expect(receivedSignal).toBe(controller.signal);
+		expect(receivedToolCallId).toBe("proposal-call-1");
 		expect(getText(result)).toContain("Plan ready for approval.");
 		expect(xdev).toMatchObject({ tool: PROPOSE_DEVICE_NAME, mode: "execute", args: { title: "demo" } });
 	});

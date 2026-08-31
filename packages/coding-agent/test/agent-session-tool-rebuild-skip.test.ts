@@ -1291,7 +1291,7 @@ These tools became available:
 		expect(isDeviceOnlyWrite()).toBe(false);
 		const activeBefore = session.getActiveToolNames();
 
-		session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+		session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel" });
 		failRebuild = true;
 		await expect(session.setActiveToolsByName(["read", "write"])).rejects.toThrow("rebuild failed");
 

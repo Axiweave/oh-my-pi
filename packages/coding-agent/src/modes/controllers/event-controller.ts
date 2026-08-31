@@ -1783,6 +1783,8 @@ export class EventController {
 			if (
 				details &&
 				typeof details === "object" &&
+				"outcome" in details &&
+				details.outcome === "ready_for_approval" &&
 				"planFilePath" in details &&
 				"title" in details &&
 				"planExists" in details &&
@@ -1807,6 +1809,9 @@ export class EventController {
 						planFilePath: details.planFilePath,
 						title: details.title,
 						planExists: details.planExists,
+						...("consensusHash" in details && typeof details.consensusHash === "string"
+							? { consensusHash: details.consensusHash }
+							: {}),
 					})
 					.catch(err => {
 						logger.warn("Plan approval dispatch failed", {

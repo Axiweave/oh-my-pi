@@ -559,7 +559,7 @@ describe("Code Mode session reconciliation", () => {
 				extraTools,
 			);
 			await session.setActiveToolsByName(names);
-			session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+			session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel" });
 			await session.sendPlanModeContext();
 			const planMessage = session.state.messages.find(
 				message => (message as { customType?: string }).customType === "plan-mode-context",

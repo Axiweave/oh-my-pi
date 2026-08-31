@@ -1,8 +1,7 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { getBlobsDir, isEnoent, logger, type postmortem, VERSION } from "@oh-my-pi/pi-utils";
+import { getBlobsDir, isEnoent, logger, type postmortem, prompt, VERSION } from "@oh-my-pi/pi-utils";
 import {
 	type Agent,
 	type AgentSideConnection,
@@ -61,7 +60,11 @@ import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
-import { normalizePlanTitle, type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
+import { hashPlanContent } from "../../plan-mode/debate";
+import { type PlanModeState, serializePlanModeState } from "../../plan-mode/state";
+import planDebateConsensusInvalidatedPrompt from "../../prompts/system/plan-debate-consensus-invalidated.md" with {
+	type: "text",
+};
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { BlobStore, resolveImageDataSync } from "../../session/blob-store";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -75,7 +78,7 @@ import { refreshAgentDiscovery } from "../../task";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { OTHER_OPTION } from "../../tools/ask";
 import { normalizeLocalScheme } from "../../tools/path-utils";
-import { ToolError } from "../../tools/tool-errors";
+import type { PlanProposalContext } from "../../tools/resolve";
 import {
 	DEFAULT_TTS_LOCAL_MODEL_KEY,
 	DEFAULT_TTS_VOICE,
@@ -93,6 +96,7 @@ import { ACP_TERMINAL_AUTH_FLAG } from "./terminal-auth";
 
 const ACP_DEFAULT_MODE_ID = "default";
 const ACP_PLAN_MODE_ID = "plan";
+const ACP_DEBATE_MODE_ID = "debate";
 const DEFAULT_PLAN_FILE_URL = "local://PLAN.md";
 const APPROVE_OPTION = "Approve and execute";
 const REFINE_OPTION = "Refine plan";
@@ -1827,18 +1831,26 @@ export class AcpAgent implements Agent {
 	#getAvailableModes(session: AgentSession): Array<{ id: string; name: string; description: string }> {
 		const modes = [{ id: ACP_DEFAULT_MODE_ID, name: "Default", description: "Standard ACP headless mode" }];
 		if (session.settings.get("plan.enabled")) {
-			modes.push({
-				id: ACP_PLAN_MODE_ID,
-				name: "Plan",
-				description: "Read-only planning mode that drafts a plan to a markdown file before any code changes",
-			});
+			modes.push(
+				{
+					id: ACP_PLAN_MODE_ID,
+					name: "Plan",
+					description: "Read-only planning mode that drafts a plan before any code changes",
+				},
+				{
+					id: ACP_DEBATE_MODE_ID,
+					name: "Debate",
+					description: "Read-only planning mode with independent review before approval",
+				},
+			);
 		}
-		void session;
 		return modes;
 	}
 
 	#getCurrentModeId(session: AgentSession): string {
-		return session.getPlanModeState()?.enabled ? ACP_PLAN_MODE_ID : ACP_DEFAULT_MODE_ID;
+		const state = session.getPlanModeState();
+		if (!state?.enabled) return ACP_DEFAULT_MODE_ID;
+		return state.workflow === "debate" ? ACP_DEBATE_MODE_ID : ACP_PLAN_MODE_ID;
 	}
 
 	#applyModeChange(session: AgentSession, modeId: string): void {
@@ -1846,22 +1858,30 @@ export class AcpAgent implements Agent {
 		if (!availableModes.some(mode => mode.id === modeId)) {
 			throw new Error(`Unsupported ACP mode: ${modeId}`);
 		}
-		if (modeId === ACP_PLAN_MODE_ID) {
+		if (modeId === ACP_PLAN_MODE_ID || modeId === ACP_DEBATE_MODE_ID) {
 			const previous = session.getPlanModeState();
-			session.setPlanModeState({
+			const workflow = modeId === ACP_DEBATE_MODE_ID ? "debate" : "parallel";
+			const state: PlanModeState = {
 				enabled: true,
 				planFilePath: previous?.planFilePath ?? DEFAULT_PLAN_FILE_URL,
-				workflow: previous?.workflow ?? "parallel",
+				workflow,
+				...(workflow === "debate"
+					? {
+							debate:
+								previous?.workflow === "debate" && previous.debate
+									? previous.debate
+									: { phase: "drafting", round: 0 },
+						}
+					: {}),
 				reentry: previous !== undefined,
-			});
-			// Mirror `InteractiveMode.#enterPlanMode`: register the plan-proposal
-			// handler that consumes `xd://propose` writes from plan mode. Without
-			// this, proposal dispatch falls through and plan mode has no approval
-			// path (issue #1869).
-			session.setPlanProposalHandler?.(title => this.#handleAcpPlanProposal(session, title));
+			};
+			session.setPlanModeState(state);
+			session.sessionManager.appendModeChange("plan", serializePlanModeState(state));
+			session.setPlanProposalHandler?.((title, context) => this.#handleAcpPlanProposal(session, title, context));
 		} else {
 			session.setPlanProposalHandler?.(null);
 			session.setPlanModeState(undefined);
+			session.sessionManager.appendModeChange("none");
 		}
 	}
 
@@ -1878,51 +1898,60 @@ export class AcpAgent implements Agent {
 	 * get an auto-approve so plan mode is never stranded — the agent always has
 	 * a way out.
 	 */
-	async #handleAcpPlanProposal(session: AgentSession, title: string): Promise<AgentToolResult<unknown>> {
-		const state = session.getPlanModeState();
-		if (!state?.enabled) {
-			throw new ToolError("Plan mode is not active.");
+	async #handleAcpPlanProposal(
+		session: AgentSession,
+		title: string,
+		context: PlanProposalContext,
+	): Promise<AgentToolResult<unknown>> {
+		const proposal = await session.preparePlanProposal(title, context);
+		if (proposal.outcome !== "ready_for_approval") {
+			return {
+				content: [{ type: "text", text: proposal.guidance }],
+				details: { outcome: proposal.outcome, planHash: proposal.planHash },
+			};
 		}
-		const {
-			planFilePath,
-			planContent,
-			title: resolvedTitle,
-		} = await resolveApprovedPlan({
-			suppliedTitle: title,
-			statePlanFilePath: state.planFilePath,
-			readPlan: url => this.#readAcpPlanFile(session, url),
-			listPlanFiles: () => this.#listAcpLocalPlanFiles(session),
-		});
-		const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, resolvedTitle, planContent);
-		const details: PlanApprovalDetails = {
-			planFilePath,
-			title: resolvedTitle,
-			planExists: true,
-		};
+		const { approval, planContent, planHash } = proposal;
+		const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, approval.title, planContent);
 		if (!approved) {
-			// Rejection keeps plan mode active for another planning turn. Promote the
-			// reviewed path into plan-mode state so the next `#buildPlanModeMessage()`
-			// targets the plan just reviewed, not the stale state path.
-			if (state.planFilePath !== planFilePath) {
-				session.setPlanModeState({ ...state, planFilePath });
-			}
-			const normalizedTitle = normalizePlanTitle(resolvedTitle).title;
+			this.#markAcpPlanDrafting(session, approval.planFilePath, planContent);
 			return {
 				content: [
 					{
-						type: "text" as const,
-						text: `Plan refinement requested. Update the plan file, then write ${normalizedTitle} to xd://propose again when ready.`,
+						type: "text",
+						text: `Plan refinement requested. Update the plan file, then write ${approval.title} to xd://propose again when ready.`,
 					},
 				],
-				details,
+				details: { outcome: "changes_requested", planHash },
 			};
 		}
-		// Approved. Set the plan reference so the next turn injects the plan
-		// content as context (the file keeps its agent-chosen name — no rename),
-		// then exit plan mode so the agent regains full tools.
-		session.setPlanReferencePath(planFilePath);
+		if (approval.consensusHash) {
+			const currentContent = await this.#readAcpPlanFile(session, approval.planFilePath);
+			const liveState = session.getPlanModeState();
+			if (
+				currentContent === null ||
+				hashPlanContent(currentContent) !== approval.consensusHash ||
+				liveState?.workflow !== "debate" ||
+				liveState.debate?.phase !== "consensus" ||
+				liveState.debate.planHash !== approval.consensusHash
+			) {
+				this.#markAcpPlanDrafting(session, approval.planFilePath, currentContent ?? undefined);
+				return {
+					content: [
+						{
+							type: "text",
+							text: prompt.render(planDebateConsensusInvalidatedPrompt, {
+								planFilePath: approval.planFilePath,
+							}),
+						},
+					],
+					details: { outcome: "changes_requested", planHash },
+				};
+			}
+		}
+		session.setPlanReferencePath(approval.planFilePath);
 		session.setPlanProposalHandler?.(null);
 		session.setPlanModeState(undefined);
+		session.sessionManager.appendModeChange("none");
 		try {
 			await this.#connection.sessionUpdate({
 				sessionId: session.sessionId,
@@ -1938,12 +1967,39 @@ export class AcpAgent implements Agent {
 		return {
 			content: [
 				{
-					type: "text" as const,
-					text: `Plan approved at ${planFilePath}. Plan mode exited; proceed with the implementation.`,
+					type: "text",
+					text: `Plan approved at ${approval.planFilePath}. Plan mode exited; proceed with the implementation.`,
 				},
 			],
-			details,
+			details: { outcome: proposal.outcome, ...approval },
 		};
+	}
+
+	#markAcpPlanDrafting(session: AgentSession, planFilePath: string, planContent?: string): void {
+		const state = session.getPlanModeState();
+		if (!state?.enabled) return;
+		if (state.workflow !== "debate") {
+			if (state.planFilePath !== planFilePath) {
+				const nextState = { ...state, planFilePath };
+				session.setPlanModeState(nextState);
+				session.sessionManager.appendModeChange("plan", serializePlanModeState(nextState));
+			}
+			return;
+		}
+		const previous = state.debate;
+		const nextState = {
+			...state,
+			planFilePath,
+			debate: {
+				phase: "drafting" as const,
+				round: previous?.round ?? 0,
+				...(planContent === undefined ? {} : { planHash: hashPlanContent(planContent) }),
+				...(previous?.summary === undefined ? {} : { summary: previous.summary }),
+				...(previous?.findings === undefined ? {} : { findings: previous.findings }),
+			},
+		};
+		session.setPlanModeState(nextState);
+		session.sessionManager.appendModeChange("plan", serializePlanModeState(nextState));
 	}
 
 	#resolveAcpPlanFilePath(session: AgentSession, planFilePath: string): string {
@@ -1966,26 +2022,6 @@ export class AcpAgent implements Agent {
 				return null;
 			}
 			throw error;
-		}
-	}
-
-	/** `local://` URLs of plan files in the session-local root, newest first —
-	 *  the `resolveApprovedPlan` fallback for a dropped `extra.title`. */
-	async #listAcpLocalPlanFiles(session: AgentSession): Promise<string[]> {
-		const localRoot = this.#resolveAcpPlanFilePath(session, "local://");
-		try {
-			const entries = await fs.readdir(localRoot, { withFileTypes: true });
-			const plans = await Promise.all(
-				entries
-					.filter(entry => entry.isFile() && /plan\.md$/i.test(entry.name))
-					.map(async entry => {
-						const stat = await fs.stat(path.join(localRoot, entry.name)).catch(() => null);
-						return { url: `local://${entry.name}`, mtime: stat?.mtimeMs ?? 0 };
-					}),
-			);
-			return plans.sort((a, b) => b.mtime - a.mtime).map(plan => plan.url);
-		} catch {
-			return [];
 		}
 	}
 

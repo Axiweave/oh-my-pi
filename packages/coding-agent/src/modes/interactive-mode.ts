@@ -94,8 +94,13 @@ import {
 	type McpConnectionStatusEvent,
 } from "../mcp/startup-events";
 import { humanizePlanTitle, type PlanApprovalDetails, resolvePlanTitle } from "../plan-mode/approved-plan";
+import { hashPlanContent } from "../plan-mode/debate";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
+import { type PlanModeState, type PlanWorkflow, parsePlanModeState, serializePlanModeState } from "../plan-mode/state";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
+import planDebateConsensusInvalidatedPrompt from "../prompts/system/plan-debate-consensus-invalidated.md" with {
+	type: "text",
+};
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
@@ -739,6 +744,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Whether #pendingModelSwitch was queued by the live plan-role reconciler. */
 	#pendingPlanModelSwitch = false;
 	#planModeHasEntered = false;
+	#pausedPlanModeState: PlanModeState | undefined;
 	#planReviewOverlay: PlanReviewOverlay | undefined;
 	#planReviewOverlayHandle: OverlayHandle | undefined;
 	#planReviewCancel: (() => void) | undefined;
@@ -2779,6 +2785,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				? {
 						enabled: this.planModeEnabled,
 						paused: this.planModePaused,
+						workflow: this.planModeEnabled
+							? this.session.getPlanModeState()?.workflow
+							: this.#pausedPlanModeState?.workflow,
 					}
 				: undefined;
 		this.statusLine.setPlanModeStatus(status);
@@ -3010,6 +3019,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.session.setPlanProposalHandler?.(null);
 				this.planModeEnabled = false;
 				this.planModePaused = false;
+				this.#pausedPlanModeState = undefined;
 				this.planModePlanFilePath = undefined;
 				this.#planModePreviousTools = undefined;
 				this.#planModePreviousModelState = undefined;
@@ -3130,9 +3140,24 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (sessionContext.mode === "plan") {
-			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
-			await this.#enterPlanMode({ planFilePath, preserveRestoredModel: true });
+			const restored = parsePlanModeState(sessionContext.modeData, true);
+			if (!restored) {
+				this.sessionManager.appendModeChange("none");
+				return;
+			}
+			await this.#enterPlanMode({
+				planFilePath: restored.planFilePath,
+				workflow: restored.workflow,
+				restoredState: restored,
+				preserveRestoredModel: true,
+			});
 		} else if (sessionContext.mode === "plan_paused") {
+			const restored = parsePlanModeState(sessionContext.modeData, false);
+			if (!restored) {
+				this.sessionManager.appendModeChange("none");
+				return;
+			}
+			this.#pausedPlanModeState = { ...restored, enabled: false };
 			this.planModePaused = true;
 			this.#planModeHasEntered = true;
 			this.#updatePlanModeStatus();
@@ -3141,7 +3166,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #enterPlanMode(options?: {
 		planFilePath?: string;
-		workflow?: "parallel" | "iterative";
+		workflow?: PlanWorkflow;
+		restoredState?: PlanModeState;
 		preserveRestoredModel?: boolean;
 	}): Promise<void> {
 		if (this.planModeEnabled) {
@@ -3157,8 +3183,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.planModePaused = false;
+		this.#pausedPlanModeState = undefined;
 
-		const planFilePath = options?.planFilePath ?? (await this.#getPlanFilePath());
+		const workflow = options?.workflow ?? options?.restoredState?.workflow ?? "parallel";
+		const planFilePath =
+			options?.planFilePath ?? options?.restoredState?.planFilePath ?? (await this.#getPlanFilePath());
 		const previousTools = this.session.getEnabledToolNames();
 		// `plan-mode-active.md` instructs the agent to draft the plan file with
 		// `write` and refine it with `edit`, and plan approval itself is a `write`
@@ -3187,12 +3216,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		// direct surface keeps `write` only while a transport needs it, and plan
 		// approval is a top-level `write` to `xd://propose`.
 		const previousPlanModeState = this.session.getPlanModeState();
-		this.session.setPlanModeState({
-			enabled: true,
-			planFilePath,
-			workflow: options?.workflow ?? "parallel",
-			reentry: this.#planModeHasEntered,
-		});
+		const planModeState: PlanModeState = options?.restoredState
+			? { ...options.restoredState, enabled: true, planFilePath, workflow }
+			: {
+					enabled: true,
+					planFilePath,
+					workflow,
+					reentry: this.#planModeHasEntered,
+				};
+		this.session.setPlanModeState(planModeState);
 		try {
 			await this.session.setActiveToolsByName(uniquePlanTools);
 		} catch (error) {
@@ -3200,7 +3232,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.planModeEnabled = false;
 			throw error;
 		}
-		this.session.setPlanProposalHandler?.(title => this.session.preparePlanForReview(title));
+		this.session.setPlanProposalHandler?.(async (title, context) => {
+			const outcome = await this.session.preparePlanProposal(title, context);
+			if (outcome.outcome === "ready_for_approval") {
+				return {
+					content: [{ type: "text", text: "Plan ready for review." }],
+					details: { outcome: outcome.outcome, ...outcome.approval },
+				};
+			}
+			return {
+				content: [{ type: "text", text: outcome.guidance }],
+				details: { outcome: outcome.outcome, planHash: outcome.planHash },
+			};
+		});
 		if (this.session.isStreaming) {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
 		}
@@ -3217,8 +3261,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#applyPlanModeModel();
 		}
 		this.#updatePlanModeStatus();
-		this.sessionManager.appendModeChange("plan", { planFilePath });
-		this.showStatus(`Plan mode enabled. Plan file: ${planFilePath}`);
+		this.sessionManager.appendModeChange("plan", serializePlanModeState(planModeState));
+		this.showStatus(`${options?.workflow === "debate" ? "Debate" : "Plan"} mode enabled. Plan file: ${planFilePath}`);
 	}
 
 	async #restorePlanPreviousModel(prev: { model: Model; thinkingLevel?: ConfiguredThinkingLevel }): Promise<void> {
@@ -3339,13 +3383,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Suppress cache-miss marker on the next turn: plan exit changes the system
 		// prompt, which predictably invalidates the cache.
 		this.lastAssistantUsage = undefined;
-		this.planModePaused = options?.paused ?? false;
+		const paused = options?.paused ?? false;
+		this.planModePaused = paused;
+		this.#pausedPlanModeState = paused && planModeState ? { ...planModeState, enabled: false } : undefined;
 		this.planModePlanFilePath = undefined;
 		this.#planModePreviousTools = undefined;
 		if (!options?.deferModelRestore) this.#planModePreviousModelState = undefined;
 		this.#updatePlanModeStatus();
-		const paused = options?.paused ?? false;
-		this.sessionManager.appendModeChange(paused ? "plan_paused" : "none");
+		this.sessionManager.appendModeChange(
+			paused ? "plan_paused" : "none",
+			this.#pausedPlanModeState ? serializePlanModeState(this.#pausedPlanModeState) : undefined,
+		);
 		if (!options?.silent) {
 			this.showStatus(paused ? "Plan mode paused." : "Plan mode disabled.");
 		}
@@ -3902,6 +3950,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async handlePlanModeCommand(
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		requestedWorkflow: PlanWorkflow = "parallel",
 	): Promise<boolean> {
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
@@ -3911,7 +3960,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Exit vibe mode first.");
 			return false;
 		}
+		const activeWorkflow = this.session.getPlanModeState()?.workflow ?? "parallel";
 		if (this.planModeEnabled) {
+			if (activeWorkflow !== requestedWorkflow) {
+				this.showWarning(`Plan mode is already active with the ${activeWorkflow} workflow.`);
+				return false;
+			}
 			const planFilePath = this.planModePlanFilePath ?? (await this.#getPlanFilePath());
 			if (await this.#hasPlanModeDraftContent(planFilePath)) {
 				const confirmed = await this.showHookConfirm(
@@ -3923,13 +3977,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#exitPlanMode({ paused: true, interruptActiveTurn: true });
 			return false;
 		}
-		if (this.planModePaused && !initialPrompt) {
-			// No-arg third toggle: paused → off. Tools, model, and plan state were
-			// already restored by the prior #exitPlanMode({ paused: true }); only the
-			// paused flag, the reentry marker, and the session mode entry remain.
-			// Prompted /plan invocations fall through to #enterPlanMode below so the
-			// supplied prompt is still submitted as the first plan-mode turn.
+		if (this.planModePaused && !initialPrompt && requestedWorkflow === "parallel") {
+			// No-arg `/plan` keeps the existing third-toggle behavior: paused → off.
 			this.planModePaused = false;
+			this.#pausedPlanModeState = undefined;
 			this.#planModeHasEntered = false;
 			this.#updatePlanModeStatus();
 			this.sessionManager.appendModeChange("none");
@@ -3940,7 +3991,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Plan mode is disabled. Enable it in settings (plan.enabled).");
 			return false;
 		}
-		await this.#enterPlanMode();
+		const restoredState =
+			this.planModePaused && this.#pausedPlanModeState?.workflow === requestedWorkflow
+				? this.#pausedPlanModeState
+				: undefined;
+		await this.#enterPlanMode({ workflow: requestedWorkflow, restoredState });
 		if (!initialPrompt) return false;
 		if (isKnownSkillCommand(this, initialPrompt)) {
 			await invokeSkillCommandFromText(this, initialPrompt, "steer", {
@@ -4407,20 +4462,42 @@ export class InteractiveMode implements InteractiveModeContext {
 		return await this.#startGoalFromObjective(objective, input);
 	}
 
-	/** Manually (re-)open the plan-review overlay — bound to `/plan-review`. Lets
-	 *  the operator pull the review back up after dismissing it, or review a plan
-	 *  the agent wrote without dispatching approval. There is no fixed plan filename:
-	 *  `getPlanReferencePath()` is empty until a plan is actually approved (and does
-	 *  not survive a restart), so this drives off the newest `local://<slug>-plan.md`
-	 *  the agent wrote — the files persist in the session artifacts dir, so the scan
-	 *  works before any review and across restarts. */
+	#markDebateDrafting(planFilePath: string, planContent?: string): void {
+		const state = this.session.getPlanModeState();
+		if (!state?.enabled || state.workflow !== "debate") return;
+		const previous = state.debate;
+		const nextState: PlanModeState = {
+			...state,
+			planFilePath,
+			debate: {
+				phase: "drafting",
+				round: previous?.round ?? 0,
+				...(planContent === undefined ? {} : { planHash: hashPlanContent(planContent) }),
+				...(previous?.summary === undefined ? {} : { summary: previous.summary }),
+				...(previous?.findings === undefined ? {} : { findings: previous.findings }),
+			},
+		};
+		this.session.setPlanModeState(nextState);
+		this.sessionManager.appendModeChange("plan", serializePlanModeState(nextState));
+	}
+
+	async #invalidateDebateConsensus(planFilePath: string, planContent?: string): Promise<void> {
+		this.#markDebateDrafting(planFilePath, planContent);
+		this.showWarning("The plan changed after reviewer consensus. Human approval was not applied.");
+		await this.session.followUp(prompt.render(planDebateConsensusInvalidatedPrompt, { planFilePath }), undefined, {
+			synthetic: true,
+		});
+	}
+
+	/** Manually reopen the current plan review. Debate plans require matching reviewer consensus. */
 	async openPlanReview(): Promise<void> {
 		if (!this.planModeEnabled) {
 			this.showWarning("Plan mode is not active.");
 			return;
 		}
 		const noPlan = "No plan to review yet — write one to a local://<slug>-plan.md file first.";
-		const [planFilePath] = await this.#listLocalPlanFiles();
+		const state = this.session.getPlanModeState();
+		const planFilePath = state?.workflow === "debate" ? state.planFilePath : (await this.#listLocalPlanFiles())[0];
 		if (!planFilePath) {
 			this.showWarning(noPlan);
 			return;
@@ -4430,8 +4507,26 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning(noPlan);
 			return;
 		}
+		if (state?.workflow === "debate") {
+			const consensus = state.debate?.phase === "consensus" ? state.debate : undefined;
+			if (!consensus) {
+				this.showWarning("The independent reviewer has not accepted the current plan.");
+				return;
+			}
+			if (hashPlanContent(planContent) !== consensus.planHash) {
+				await this.#invalidateDebateConsensus(planFilePath, planContent);
+				return;
+			}
+		}
 		const { title } = resolvePlanTitle({ planContent, planFilePath });
-		await this.handlePlanApproval({ planFilePath, title, planExists: true });
+		await this.handlePlanApproval({
+			planFilePath,
+			title,
+			planExists: true,
+			...(state?.workflow === "debate" && state.debate?.phase === "consensus"
+				? { consensusHash: state.debate.planHash }
+				: {}),
+		});
 	}
 
 	async handlePlanApproval(details: PlanApprovalDetails): Promise<void> {
@@ -4450,20 +4545,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
 		this.planModePlanFilePath = planFilePath;
 		const planContent = await this.#readPlanFile(planFilePath);
+		const planState = this.session.getPlanModeState();
 		if (!planContent) {
-			this.showError(`Plan file not found at ${planFilePath}`);
+			if (planState?.workflow === "debate") {
+				await this.#invalidateDebateConsensus(planFilePath);
+			} else {
+				this.showError(`Plan file not found at ${planFilePath}`);
+			}
+			return;
+		}
+		const debateConsensusHash = planState?.workflow === "debate" ? details.consensusHash : undefined;
+		if (
+			planState?.workflow === "debate" &&
+			(!debateConsensusHash ||
+				planState.debate?.phase !== "consensus" ||
+				planState.debate.planHash !== debateConsensusHash ||
+				hashPlanContent(planContent) !== debateConsensusHash)
+		) {
+			await this.#invalidateDebateConsensus(planFilePath, planContent);
 			return;
 		}
 
-		// resolveApprovedPlan may return a newer draft than the path recorded in
-		// plan-mode state. `AgentSession.#buildPlanModeMessage()` reads that state,
-		// so if the operator refines (or dismisses and keeps planning) the next
-		// planning turn must target the plan just reviewed — promote the reviewed
-		// path into plan-mode state now, mirroring the print-mode approval handler.
-		const planState = this.session.getPlanModeState();
+		// Promote the reviewed path so later refinement targets the same plan.
 		if (planState?.enabled && planState.planFilePath !== planFilePath) {
-			this.session.setPlanModeState({ ...planState, planFilePath });
-			this.sessionManager.appendModeChange("plan", { planFilePath });
+			const nextState = { ...planState, planFilePath };
+			this.session.setPlanModeState(nextState);
+			this.sessionManager.appendModeChange("plan", serializePlanModeState(nextState));
 		}
 
 		const contextUsage = this.#getPlanApprovalContextUsage();
@@ -4555,17 +4662,37 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
 			try {
-				// Prefer in-overlay edits (already in memory) over a disk re-read. The
-				// overlay mirrors edits as they happen, and approval awaits one final
-				// write so the durable plan file and synthetic prompt carry the same text.
-				const latestPlanContent = editedContent ?? (await this.#readPlanFile(planFilePath));
-				if (editedContent !== undefined) {
-					await Bun.write(this.#resolvePlanFilePath(planFilePath), editedContent);
-				}
-				if (!latestPlanContent) {
+				const diskPlanContent = await this.#readPlanFile(planFilePath);
+				if (!diskPlanContent) {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					closePlanReview();
 					return;
+				}
+				let latestPlanContent = diskPlanContent;
+				if (debateConsensusHash) {
+					const liveState = this.session.getPlanModeState();
+					const diskStillReviewed = hashPlanContent(diskPlanContent) === debateConsensusHash;
+					const overlayStillReviewed =
+						editedContent === undefined || hashPlanContent(editedContent) === debateConsensusHash;
+					if (
+						!diskStillReviewed ||
+						!overlayStillReviewed ||
+						liveState?.workflow !== "debate" ||
+						liveState.debate?.phase !== "consensus" ||
+						liveState.debate.planHash !== debateConsensusHash
+					) {
+						// Do not overwrite a concurrent disk edit with the stale overlay buffer.
+						if (diskStillReviewed && editedContent !== undefined) {
+							await Bun.write(this.#resolvePlanFilePath(planFilePath), editedContent);
+							latestPlanContent = editedContent;
+						}
+						await this.#invalidateDebateConsensus(planFilePath, latestPlanContent);
+						closePlanReview();
+						return;
+					}
+				} else if (editedContent !== undefined) {
+					await Bun.write(this.#resolvePlanFilePath(planFilePath), editedContent);
+					latestPlanContent = editedContent;
 				}
 				// Capture the operator's tier choice and hand it to #approvePlan, which
 				// applies it AFTER #exitPlanMode. #exitPlanMode normally restores
@@ -4614,6 +4741,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		if (choice === "Refine plan") {
 			const refinement = feedback.trim();
+			if (planState?.workflow === "debate") {
+				const latestPlanContent = editedContent ?? (await this.#readPlanFile(planFilePath)) ?? undefined;
+				this.#markDebateDrafting(planFilePath, latestPlanContent);
+			}
 			try {
 				if (refinement) {
 					if (this.onInputCallback) {

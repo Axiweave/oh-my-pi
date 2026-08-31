@@ -7,7 +7,9 @@ import {
 	artifactsDirsFromRegistry,
 	resetRegisteredArtifactDirsForTests,
 } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
+import { PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA } from "@oh-my-pi/pi-coding-agent/plan-mode/debate";
 import * as planHandoff from "@oh-my-pi/pi-coding-agent/plan-mode/plan-handoff";
+import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import * as isolationRunner from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
@@ -166,6 +168,32 @@ describe("structured subagent primitive", () => {
 			),
 		).rejects.toThrow("isolation, apply, and merge controls are unavailable in plan mode");
 		expect(discover).not.toHaveBeenCalled();
+	});
+
+	it("uses the bundled slow plan reviewer with a strict caller schema", async () => {
+		const reviewer = getBundledAgent("plan-reviewer");
+		if (!reviewer) throw new Error("Bundled plan-reviewer agent is missing");
+		mockDiscovery(reviewer);
+
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({
+				session: session({ planMode: true }),
+				agent: "plan-reviewer",
+				outputSchema: PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA,
+				schemaMode: "strict",
+				enableLsp: false,
+				enableIrc: false,
+			}),
+		);
+
+		expect(policy.agent.model).toEqual(["@slow"]);
+		expect(policy.effectiveAgent.tools).toEqual(["read", "grep", "glob", "web_search"]);
+		expect(policy.schema).toEqual({
+			schema: PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA,
+			source: "caller",
+			mode: "strict",
+			outputSchemaOverridesAgent: true,
+		});
 	});
 	it("reloads model roles before resolving an agent added during the session", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-task-hot-reload-"));

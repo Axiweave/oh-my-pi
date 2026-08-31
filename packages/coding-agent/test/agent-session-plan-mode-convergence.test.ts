@@ -27,25 +27,13 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { IrcBus, type IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import type { PlanDebateState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import planModeReminderPrompt from "../src/prompts/system/plan-mode-tool-decision-reminder.md" with { type: "text" };
-
-/** A stable, literal (non-templated) line of the reminder prompt, so the test
- *  pins the reminder by its real content rather than a hardcoded copy. */
-function deriveReminderFragment(template: string): string {
-	const line = template
-		.split("\n")
-		.map(l => l.trim())
-		.find(l => l.length > 20 && !l.includes("{{"));
-	if (!line) throw new Error("plan-mode reminder template is missing a stable marker line");
-	return line;
-}
-const REMINDER_FRAGMENT = deriveReminderFragment(planModeReminderPrompt);
 
 function makeTool(name: string): AgentTool {
 	return {
@@ -75,23 +63,13 @@ function makeMcpTool(name: string, loadMode: ToolLoadMode, approval: ToolApprova
 	};
 }
 
-/** Concatenate the text blocks of a message (string or content-array). */
-function messageText(message: AgentMessage): string {
-	if (!("content" in message)) return "";
-	const content = message.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	const text: string[] = [];
-	for (const block of content) {
-		if (block.type === "text") text.push(block.text);
-	}
-	return text.join("\n");
-}
-
 function countReminders(messages: readonly AgentMessage[]): number {
-	return messages.filter(m => m.role === "developer" && messageText(m).includes(REMINDER_FRAGMENT)).length;
+	return messages.filter(message => message.role === "developer" && message.attribution === "agent").length;
 }
 
+function proposalContext(toolCallId = "plan-yolo-proposal") {
+	return { signal: new AbortController().signal, toolCallId };
+}
 interface PlanHarness {
 	session: AgentSession;
 	mock: MockModel;
@@ -229,7 +207,13 @@ describe("AgentSession plan-mode convergence", () => {
 					}
 				: undefined,
 		});
-		if (!options?.planYolo) created.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+		if (!options?.planYolo) {
+			created.setPlanModeState({
+				enabled: true,
+				planFilePath: "local://PLAN.md",
+				workflow: "parallel",
+			});
+		}
 		session = created;
 		return {
 			session: created,
@@ -352,6 +336,82 @@ describe("AgentSession plan-mode convergence", () => {
 		expect(countReminders(harness.session.agent.state.messages)).toBe(2);
 		expect(harness.mock.calls.length).toBe(4);
 	});
+	for (const debate of [
+		{
+			phase: "changes_requested",
+			round: 1,
+			planHash: "changes-hash",
+			summary: "Revise the plan.",
+			findings: [
+				{
+					id: "gap",
+					title: "Gap",
+					problem: "A path is missing.",
+					requiredChange: "Add the path.",
+					evidence: [{ path: "src/service.ts", explanation: "The path can fail." }],
+				},
+			],
+		},
+		{ phase: "reviewing", round: 1, planHash: "reviewing-hash", activeReviewId: "review-1" },
+		{ phase: "failed", round: 1, planHash: "failed-hash", error: "The reviewer failed." },
+	] satisfies PlanDebateState[]) {
+		it(`keeps debate mode converging while the review is ${debate.phase}`, async () => {
+			const harness = await createPlanSession([
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "write",
+							arguments: { path: "xd://propose", content: "debate-plan" },
+						},
+					],
+				},
+				{ content: ["waiting for consensus"] },
+				{ content: [{ type: "toolCall", name: "read", arguments: { path: "a" } }] },
+				{ content: ["still waiting"] },
+				{ content: [{ type: "toolCall", name: "read", arguments: { path: "b" } }] },
+				{ content: ["done waiting"] },
+			]);
+			harness.session.setPlanModeState({
+				enabled: true,
+				planFilePath: "local://PLAN.md",
+				workflow: "debate",
+				debate,
+			});
+
+			await harness.session.prompt("make a plan");
+			await harness.session.waitForIdle();
+
+			expect(countReminders(harness.session.agent.state.messages)).toBe(3);
+			expect(harness.mock.calls.length).toBe(7);
+		});
+	}
+
+	it("settles debate mode when the proposal has exact-byte consensus", async () => {
+		const harness = await createPlanSession([
+			{
+				content: [
+					{
+						type: "toolCall",
+						name: "write",
+						arguments: { path: "xd://propose", content: "debate-plan" },
+					},
+				],
+			},
+		]);
+		harness.session.setPlanModeState({
+			enabled: true,
+			planFilePath: "local://PLAN.md",
+			workflow: "debate",
+			debate: { phase: "consensus", round: 1, planHash: "approved-hash", summary: "Ready." },
+		});
+
+		await harness.session.prompt("make a plan");
+		await harness.session.waitForIdle();
+
+		expect(countReminders(harness.session.agent.state.messages)).toBe(0);
+		expect(harness.mock.calls.length).toBe(2);
+	});
 
 	it("T3c: an ask call resets the convergence counter", async () => {
 		const harness = await createPlanSession([
@@ -442,7 +502,7 @@ describe("AgentSession plan-mode convergence", () => {
 		await Bun.write(planPath, "# Demo plan\n\nImplement it.\n");
 		const handler = harness.session.peekPlanProposalHandler();
 		expect(handler).toBeDefined();
-		await handler!("demo");
+		await handler!("demo", proposalContext());
 
 		expect(harness.session.getPlanModeState()).toBeUndefined();
 		expect(harness.session.getActiveToolNames()).toEqual(["read"]);
@@ -473,7 +533,7 @@ describe("AgentSession plan-mode convergence", () => {
 		await Bun.write(planPath, "# MCP devices plan\n\nKeep the connected devices.\n");
 		const handler = harness.session.peekPlanProposalHandler();
 		if (!handler) throw new Error("Expected PlanYolo proposal handler");
-		await handler("mcp-devices");
+		await handler("mcp-devices", proposalContext());
 
 		expect(harness.session.getPlanModeState()).toBeUndefined();
 		expect(harness.session.getActiveToolNames()).toEqual(["read", "write", "mcp__context_query_docs"]);
@@ -509,7 +569,7 @@ describe("AgentSession plan-mode convergence", () => {
 		await Bun.write(planPath, "# Queued MCP plan\n\nKeep the connected device.\n");
 		const handler = harness.session.peekPlanProposalHandler();
 		if (!handler) throw new Error("Expected PlanYolo proposal handler");
-		const approval = handler("queued-mcp");
+		const approval = handler("queued-mcp", proposalContext());
 		release.resolve();
 		await Promise.all([blocker, refresh, approval]);
 
@@ -540,7 +600,7 @@ describe("AgentSession plan-mode convergence", () => {
 		await Bun.write(planPath, "# Read-only MCP plan\n\nKeep the selected device.\n");
 		const handler = harness.session.peekPlanProposalHandler();
 		if (!handler) throw new Error("Expected PlanYolo proposal handler");
-		await handler("read-only-mcp");
+		await handler("read-only-mcp", proposalContext());
 
 		expect(harness.session.getPlanModeState()).toBeUndefined();
 		expect(harness.session.getActiveToolNames()).toEqual(["read", "mcp__chrome_devtools_list_pages"]);
@@ -566,13 +626,13 @@ describe("AgentSession plan-mode convergence", () => {
 		const mountedBefore = harness.session.getMountedXdevToolNames();
 		rebuildGate.fail = true;
 
-		await expect(handler!("retry")).rejects.toThrow("rebuild failed");
+		await expect(handler!("retry", proposalContext())).rejects.toThrow("rebuild failed");
 		expect(harness.session.getPlanModeState()?.enabled).toBe(true);
 		expect(harness.session.peekPlanProposalHandler()).toBe(handler);
 		expect(harness.session.getActiveToolNames()).toEqual(activeBefore);
 		expect(harness.session.getMountedXdevToolNames()).toEqual(mountedBefore);
 		rebuildGate.fail = false;
-		await handler!("retry");
+		await handler!("retry", proposalContext());
 		expect(harness.session.getPlanModeState()).toBeUndefined();
 		expect(harness.session.getActiveToolNames()).toEqual(["read"]);
 	});

@@ -477,6 +477,7 @@ describe("SQLite tool support", () => {
 			getPlanModeState: () => ({
 				enabled: true,
 				planFilePath: path.join(tmpDir, "plan.md"),
+				workflow: "parallel",
 			}),
 		});
 		const planWriteTool = new WriteTool(planSession);

@@ -13,20 +13,28 @@ beforeAll(() => {
  * A completed `write xd://propose` execution with `mode: "execute"` — the event
  * that drives `#handleToolExecutionEnd` into `ctx.handlePlanApproval`.
  */
-function proposeExecuteEnd(): AgentSessionEvent {
+function proposeExecuteEnd(
+	outcome: "ready_for_approval" | "changes_requested" = "ready_for_approval",
+): AgentSessionEvent {
 	return {
 		type: "tool_execution_end",
 		toolCallId: "propose-1",
 		toolName: "write",
 		isError: false,
 		result: {
-			content: [{ type: "text", text: "Plan ready for approval." }],
+			content: [{ type: "text", text: "Plan proposal result." }],
 			details: {
 				xdev: {
 					tool: PROPOSE_DEVICE_NAME,
 					mode: "execute",
 					args: { title: "demo" },
-					inner: { planFilePath: "local://demo-plan.md", title: "demo", planExists: true },
+					inner: {
+						outcome,
+						planFilePath: "local://demo-plan.md",
+						title: "demo",
+						planExists: true,
+						consensusHash: "reviewed-hash",
+					},
 				},
 			},
 		},
@@ -82,7 +90,12 @@ describe("EventController plan-approval dispatch", () => {
 		// only once its `#runSerialized` link settles: after the fix the approval is
 		// detached, so the link settles even though the execution turn is unresolved.
 		await dispatch(proposeExecuteEnd());
-		expect(handlePlanApproval).toHaveBeenCalledTimes(1);
+		expect(handlePlanApproval).toHaveBeenCalledWith({
+			planFilePath: "local://demo-plan.md",
+			title: "demo",
+			planExists: true,
+			consensusHash: "reviewed-hash",
+		});
 
 		// A later session event arrives while the execution turn is still running.
 		// `turn_start` rides the exact same `#runSerialized` gate that carries
@@ -93,5 +106,30 @@ describe("EventController plan-approval dispatch", () => {
 
 		executionTurn.resolve();
 		await executionTurn.promise;
+	});
+
+	it("does not open human approval when the reviewer requests changes", async () => {
+		let listener: ((event: AgentSessionEvent) => void | Promise<void>) | undefined;
+		const handlePlanApproval = vi.fn();
+		const ctx = {
+			isInitialized: true,
+			session: {
+				subscribe: (fn: (event: AgentSessionEvent) => void | Promise<void>) => {
+					listener = fn;
+					return () => {};
+				},
+			},
+			viewSession: { isStreaming: false },
+			pendingTools: new Map(),
+			ui: { requestRender: vi.fn() },
+			handlePlanApproval,
+		} as unknown as InteractiveModeContext;
+		const controller = new EventController(ctx);
+		controller.subscribeToAgent();
+		if (!listener) throw new Error("subscribeToAgent did not register a listener");
+
+		await listener(proposeExecuteEnd("changes_requested"));
+
+		expect(handlePlanApproval).not.toHaveBeenCalled();
 	});
 });

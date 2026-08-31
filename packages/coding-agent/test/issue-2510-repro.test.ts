@@ -5,6 +5,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { type PlanModeState, serializePlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
@@ -96,5 +97,75 @@ describe("issue #2510 — /plan toggles plan → plan_paused → none", () => {
 		// exit should look like a first entry, not a resume, so plan-mode prompts
 		// don't read "you're back in plan mode" on what is logically a new run.
 		expect(session.getPlanModeState()?.reentry).toBe(false);
+	});
+
+	it("keeps an active debate workflow when /plan requests another workflow", async () => {
+		await mode.handlePlanModeCommand(undefined, undefined, "debate");
+		const warning = vi.spyOn(mode, "showWarning");
+
+		await mode.handlePlanModeCommand(undefined, undefined, "parallel");
+
+		expect(session.getPlanModeState()?.workflow).toBe("debate");
+		expect(mode.planModeEnabled).toBe(true);
+		expect(warning).toHaveBeenCalledWith("Plan mode is already active with the debate workflow.");
+	});
+
+	it("restores active debate state from session history", async () => {
+		const state: PlanModeState = {
+			enabled: true,
+			planFilePath: "local://auth-plan.md",
+			workflow: "debate",
+			debate: {
+				phase: "changes_requested",
+				round: 2,
+				planHash: "reviewed-hash",
+				summary: "Add rollback.",
+				findings: [
+					{
+						id: "rollback",
+						title: "Missing rollback",
+						problem: "The migration can fail.",
+						requiredChange: "Add rollback steps.",
+						evidence: [{ path: "src/auth.ts", explanation: "This write can fail." }],
+					},
+				],
+			},
+		};
+		session.sessionManager.appendModeChange("plan", serializePlanModeState(state));
+		mode.stop();
+
+		mode = new InteractiveMode(session, "test");
+		await mode.init();
+
+		expect(mode.planModeEnabled).toBe(true);
+		expect(mode.planModePaused).toBe(false);
+		expect(session.getPlanModeState()).toEqual(state);
+	});
+
+	it("restores paused debate state without discarding reviewer findings", async () => {
+		const state: PlanModeState = {
+			enabled: false,
+			planFilePath: "local://auth-plan.md",
+			workflow: "debate",
+			debate: {
+				phase: "failed",
+				round: 2,
+				planHash: "reviewed-hash",
+				error: "The review was interrupted.",
+			},
+		};
+		session.sessionManager.appendModeChange("plan_paused", serializePlanModeState(state));
+		mode.stop();
+
+		mode = new InteractiveMode(session, "test");
+		await mode.init();
+
+		expect(mode.planModeEnabled).toBe(false);
+		expect(mode.planModePaused).toBe(true);
+		await mode.handlePlanModeCommand(undefined, undefined, "debate");
+		expect(session.getPlanModeState()).toMatchObject({
+			...state,
+			enabled: true,
+		});
 	});
 });

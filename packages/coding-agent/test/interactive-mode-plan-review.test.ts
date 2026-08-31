@@ -17,6 +17,7 @@ import {
 import { InteractiveMode, planSaveFileName } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { hashPlanContent } from "@oh-my-pi/pi-coding-agent/plan-mode/debate";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SILENT_ABORT_MARKER, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -224,6 +225,51 @@ describe("InteractiveMode plan review rendering", () => {
 		// Each approval shows the current plan in the overlay, not a stale one.
 		expect(review.mock.calls[1]?.[0]).toContain("Second plan");
 		expect(review.mock.calls[1]?.[0]).not.toContain("First plan");
+	});
+
+	it("does not overwrite a plan changed after debate consensus", async () => {
+		const planFilePath = "local://auth-plan.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		const reviewedContent = "# Auth\n\nReviewed bytes.";
+		const concurrentContent = "# Auth\n\nConcurrent disk edit.";
+		await Bun.write(resolvedPlanPath, reviewedContent);
+		const consensusHash = hashPlanContent(reviewedContent);
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		session.setPlanModeState({
+			enabled: true,
+			planFilePath,
+			workflow: "debate",
+			debate: { phase: "consensus", round: 1, planHash: consensusHash, summary: "Ready." },
+		});
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async () => {
+			await Bun.write(resolvedPlanPath, concurrentContent);
+			return "Approve and execute";
+		});
+		const warning = vi.spyOn(mode, "showWarning");
+		const followUp = vi.spyOn(session, "followUp").mockResolvedValue(undefined);
+		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "auth",
+			consensusHash,
+		});
+
+		expect(await Bun.file(resolvedPlanPath).text()).toBe(concurrentContent);
+		expect(session.getPlanModeState()?.debate).toMatchObject({
+			phase: "drafting",
+			planHash: hashPlanContent(concurrentContent),
+		});
+		expect(warning).toHaveBeenCalledWith(
+			"The plan changed after reviewer consensus. Human approval was not applied.",
+		);
+		expect(followUp).toHaveBeenCalledTimes(1);
+		expect(promptSpy.mock.calls.filter(isPlanApprovedCall)).toHaveLength(0);
 	});
 
 	it("restores dismissed annotations only when reopening the same plan", async () => {

@@ -276,7 +276,7 @@ export class PrewalkCoordinator {
 			enabled: previousEnabledTools.filter(name => !isMCPToolName(name)),
 			mounted: previousMountedTools.filter(name => !isMCPToolName(name)),
 		};
-		this.#host.setPlanProposalHandler(title => this.#finalizePlanYoloProposal(title));
+		this.#host.setPlanProposalHandler((title, _context) => this.#finalizePlanYoloProposal(title));
 	}
 
 	#scrubPlanNudge(liveMessages: AgentMessage[]): void {

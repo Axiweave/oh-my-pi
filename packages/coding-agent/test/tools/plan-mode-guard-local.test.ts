@@ -50,7 +50,7 @@ describe("resolvePlanPath local:// support", () => {
 });
 
 describe("resolvePlanPath resolves literally (no plan-mode redirect)", () => {
-	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md" };
+	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md", workflow: "parallel" };
 
 	it("resolves a bare path against cwd regardless of plan mode", () => {
 		const session = makeSession({ artifactsDir: ARTIFACTS_DIR, cwd: REPO_ROOT, planMode });
@@ -85,7 +85,7 @@ describe("resolvePlanPath resolves literally (no plan-mode redirect)", () => {
 });
 
 describe("enforcePlanModeWrite (working tree read-only, local:// sandbox writable)", () => {
-	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md" };
+	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md", workflow: "parallel" };
 
 	it("accepts writes to any local:// file", () => {
 		const session = makeSession({ artifactsDir: ARTIFACTS_DIR, planMode });
@@ -116,7 +116,7 @@ describe("enforcePlanModeWrite (working tree read-only, local:// sandbox writabl
 });
 
 describe("enforcePlanModeWrite accepts absolute local-sandbox paths", () => {
-	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md" };
+	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md", workflow: "parallel" };
 
 	it("allows the absolute path returned by `read local://...` (== sandbox-resolved path)", async () => {
 		// Use an existing temp directory so the realpath check inside the guard

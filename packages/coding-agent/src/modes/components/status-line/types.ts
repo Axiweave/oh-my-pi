@@ -74,6 +74,7 @@ export interface SegmentContext {
 	planMode: {
 		enabled: boolean;
 		paused: boolean;
+		workflow?: "parallel" | "iterative" | "debate";
 	} | null;
 	prewalk: {
 		enabled: boolean;

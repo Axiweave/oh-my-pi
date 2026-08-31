@@ -19,6 +19,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { MCPManager } from "../mcp";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
+import type { PlanWorkflow } from "../plan-mode/state";
 import type { AgentSession } from "../session/agent-session";
 import type { CompactMode } from "../session/compact-modes";
 import type { ForeignSessionSource } from "../session/foreign-session-store";
@@ -486,6 +487,7 @@ export interface InteractiveModeContext {
 	handlePlanModeCommand(
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		requestedWorkflow?: PlanWorkflow,
 	): Promise<boolean>;
 	handleVibeModeCommand(
 		initialPrompt?: string,
