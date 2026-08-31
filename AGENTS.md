@@ -25,9 +25,10 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 ## Upstream Divergences
 
-Before an upstream rebase, conflict resolution, or fork-only behavior change, **MUST read `UPSTREAM_DIVERGENCES.md`**.
+Before an upstream merge, conflict resolution, or fork-only behavior change, **MUST read `UPSTREAM_DIVERGENCES.md`**.
 Update the register in the same commit as each fork-only feature or decision.
-After each rebase, verify every entry, update the reviewed release, and remove entries that upstream adopted or this fork retired.
+Use merge commits to sync with upstream; do not rebase fork commits onto upstream.
+After each upstream merge, verify every entry, update the reviewed release, and remove entries that upstream adopted or this fork retired.
 
 ## GitHub
 
