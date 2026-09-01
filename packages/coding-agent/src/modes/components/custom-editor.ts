@@ -575,13 +575,13 @@ export class CustomEditor extends Editor {
 	#decorationLines: readonly string[] = [""];
 	#queueShorthandActive = false;
 	#queueListActive = false;
-	#recognizedCommandLength: number | null = null;
+	#recognizedCommandRanges: ReadonlyArray<ReadonlyArray<[number, number]>> = [];
 
-	/** Decorate magic keywords, attachments, the queue-composer header/list markers, and a
-	 *  recognized leading slash command. Queue shorthand reserves its first logical line as a dim
+	/** Decorate magic keywords, attachments, the queue-composer header/list markers, and
+	 *  recognized slash commands. Queue shorthand reserves its first logical line as a dim
 	 *  `Queueing` label; sequential item markers use the accent color so separate follow-ups remain
-	 *  visible while composing. A fully recognized `/command` at the start of the draft is
-	 *  accent-colored the same way as `@mention` references, matching Claude Code/Codex. */
+	 *  visible while composing. A fully recognized leading `/command`, and inline `/skill:name`
+	 *  tokens anywhere in the draft, are accent-colored the same way as `@mention` references. */
 	override decorateText = (text: string, context: EditorTextDecorationContext): string => {
 		const editorText = this.getText();
 		const animated = this.focused && this.#shimmerEnabled() && hasMagicKeyword(editorText);
@@ -593,7 +593,7 @@ export class CustomEditor extends Editor {
 			const queueBody = parseQueueShorthand(editorText);
 			this.#queueShorthandActive = queueBody !== undefined;
 			this.#queueListActive = queueBody !== undefined && isQueuedMessageList(queueBody);
-			this.#recognizedCommandLength = this.getRecognizedCommandLength();
+			this.#recognizedCommandRanges = this.#decorationLines.map((_, i) => this.getRecognizedCommandRanges(i));
 		}
 		let sourceSearchOffset = 0;
 		const locateSource = (value: string): number => {
@@ -606,28 +606,25 @@ export class CustomEditor extends Editor {
 			renderText: value => {
 				const sourceOffset = locateSource(value);
 				const absoluteCol = context.startCol + sourceOffset;
-				const commandLen = this.#recognizedCommandLength;
-				let commandKeyword = "";
-				let body = value;
-				if (context.line === 0 && commandLen !== null && absoluteCol < commandLen) {
-					const keywordEnd = Math.min(value.length, commandLen - absoluteCol);
-					commandKeyword = fgOrPlain(
-						"accent",
-						value.slice(0, keywordEnd),
-						`\x1b[1m${value.slice(0, keywordEnd)}\x1b[22m`,
+				const ranges = this.#recognizedCommandRanges[context.line] ?? [];
+				const decorateBody = (span: string, startCol: number): string =>
+					this.#spelling.decorateTypos(
+						span,
+						{ editorText, lines: this.#decorationLines, line: context.line, startCol },
+						s => highlightMagicKeywords(s, undefined, phase),
 					);
-					body = value.slice(keywordEnd);
+				let highlighted = "";
+				let pos = 0;
+				for (const [rangeStart, rangeEnd] of ranges) {
+					const start = Math.max(0, rangeStart - absoluteCol);
+					const end = Math.min(value.length, rangeEnd - absoluteCol);
+					if (end <= 0 || start >= value.length || start >= end || start < pos) continue;
+					if (start > pos) highlighted += decorateBody(value.slice(pos, start), absoluteCol + pos);
+					const keyword = value.slice(start, end);
+					highlighted += fgOrPlain("accent", keyword, `\x1b[1m${keyword}\x1b[22m`);
+					pos = end;
 				}
-				const highlighted = this.#spelling.decorateTypos(
-					body,
-					{
-						editorText,
-						lines: this.#decorationLines,
-						line: context.line,
-						startCol: absoluteCol + (value.length - body.length),
-					},
-					span => highlightMagicKeywords(span, undefined, phase),
-				);
+				if (pos < value.length) highlighted += decorateBody(value.slice(pos), absoluteCol + pos);
 				if (this.#queueShorthandActive && (value.startsWith("->") || value.startsWith("=>"))) {
 					const icon = typeof theme === "undefined" ? "➤" : theme.nav.selected;
 					return `${fgOrPlain("dim", `Queueing ${icon}`)}${highlighted.slice(2)}`;
@@ -640,7 +637,7 @@ export class CustomEditor extends Editor {
 						return `${indent}${fgOrPlain("accent", value.slice(indent.length, markerEnd))}${highlighted.slice(markerEnd)}`;
 					}
 				}
-				return commandKeyword + highlighted;
+				return highlighted;
 			},
 			renderReference: (value, kind, index, form) => {
 				locateSource(value);

@@ -228,10 +228,11 @@ export interface AutocompleteProvider {
 
 	/** Get inline hint text to show as dim ghost text after the cursor */
 	getInlineHint?(lines: string[], cursorLine: number, cursorCol: number): string | null;
-	/** Length of the recognized command span (leading whitespace + `/name`) when `lineText`
-	 *  starts with a fully known command name or alias — used to color-highlight the keyword in
-	 *  the composer as it's typed. Returns null when there is no exact match. */
-	getRecognizedCommandLength?(lineText: string): number | null;
+	/** Half-open `[start, end)` column ranges of recognized command keywords in `lineText` —
+	 *  used to color-highlight them in the composer as they're typed. When `firstLine` is true,
+	 *  a leading `/name` matching a known command or alias is included; inline `/skill:name`
+	 *  tokens are recognized on any line. Returns an empty array when nothing matches. */
+	getRecognizedCommandRanges?(lineText: string, firstLine: boolean): Array<[number, number]>;
 	/** Synchronously try to complete a slash command at the start of a line (no async I/O). */
 	/** Returns matched items and the full prefix, or null if not applicable. */
 	trySyncSlashCompletion?(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null;
@@ -1185,18 +1186,31 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 		return command.getInlineHint(argumentText);
 	}
-	/** Length of the recognized command span (leading whitespace + `/name`) when `lineText`
-	 *  starts with a fully known command name or alias. See {@link AutocompleteProvider.getRecognizedCommandLength}. */
-	getRecognizedCommandLength(lineText: string): number | null {
-		const slashStart = findLeadingSlashCommandStart(lineText);
-		if (slashStart === null) return null;
-		const commandText = lineText.slice(slashStart);
-		const spaceIndex = commandText.indexOf(" ");
-		const commandName = spaceIndex === -1 ? commandText.slice(1) : commandText.slice(1, spaceIndex);
-		if (!commandName) return null;
-		const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
-		if (!command) return null;
-		return slashStart + 1 + commandName.length;
+	/** Half-open `[start, end)` column ranges of recognized command keywords: the leading
+	 *  `/name` (when `firstLine`) plus inline `/skill:name` tokens anywhere in the line.
+	 *  See {@link AutocompleteProvider.getRecognizedCommandRanges}. */
+	getRecognizedCommandRanges(lineText: string, firstLine: boolean): Array<[number, number]> {
+		const ranges: Array<[number, number]> = [];
+		if (firstLine) {
+			const slashStart = findLeadingSlashCommandStart(lineText);
+			if (slashStart !== null) {
+				const commandText = lineText.slice(slashStart);
+				const spaceIndex = commandText.indexOf(" ");
+				const commandName = spaceIndex === -1 ? commandText.slice(1) : commandText.slice(1, spaceIndex);
+				if (commandName && this.#commands.some(cmd => commandMatchesNameOrAlias(cmd, commandName))) {
+					ranges.push([slashStart, slashStart + 1 + commandName.length]);
+				}
+			}
+		}
+		for (const match of lineText.matchAll(/(^|\s)\/(skill:[\w-]+)/g)) {
+			const name = match[2] ?? "";
+			const start = (match.index ?? 0) + (match[1]?.length ?? 0);
+			const last = ranges[ranges.length - 1];
+			if (last && start < last[1]) continue; // already covered by the leading command
+			if (!this.#commands.some(cmd => commandMatchesNameOrAlias(cmd, name))) continue;
+			ranges.push([start, start + 1 + name.length]);
+		}
+		return ranges;
 	}
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
 		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);

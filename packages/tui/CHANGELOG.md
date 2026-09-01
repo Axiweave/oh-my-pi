@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `AutocompleteProvider.getRecognizedCommandLength` and `Editor.getRecognizedCommandLength` so hosts can color-highlight a fully recognized leading slash command as it's typed.
+- Added `AutocompleteProvider.getRecognizedCommandRanges` and `Editor.getRecognizedCommandRanges` so hosts can color-highlight a fully recognized leading slash command and inline `/skill:name` tokens as they're typed.
 
 ## [18.0.10] - 2026-08-28
 

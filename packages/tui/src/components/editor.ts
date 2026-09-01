@@ -633,11 +633,12 @@ export class Editor implements Component, Focusable {
 		this.#autocompleteProvider = provider;
 	}
 
-	/** Length of the recognized command keyword span on the first line (leading whitespace +
-	 *  `/name`), or null when there isn't one. Hosts use this from `decorateText` to color-highlight
-	 *  a valid slash command as it's typed, independent of whether the autocomplete dropdown is open. */
-	getRecognizedCommandLength(): number | null {
-		return this.#autocompleteProvider?.getRecognizedCommandLength?.(this.#state.lines[0] ?? "") ?? null;
+	/** Half-open `[start, end)` column ranges of recognized command keywords on the given logical
+	 *  line: the leading `/name` on line 0 plus inline `/skill:name` tokens on any line. Hosts use
+	 *  this from `decorateText` to color-highlight valid commands as they're typed, independent of
+	 *  whether the autocomplete dropdown is open. */
+	getRecognizedCommandRanges(line: number): Array<[number, number]> {
+		return this.#autocompleteProvider?.getRecognizedCommandRanges?.(this.#state.lines[line] ?? "", line === 0) ?? [];
 	}
 
 	/** Install prose assistance without changing command/file autocomplete. */

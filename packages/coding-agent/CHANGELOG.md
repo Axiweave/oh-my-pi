@@ -8,7 +8,7 @@
 - Added `plan.keybindingWorkflow` to let the plan shortcut enter standard plan or debate mode.
 - Added `plan.debateMaxRounds` (default 3): after that many rejected plan revisions, a debate review escalates to human approval with the reviewer's unresolved findings instead of looping forever.
 - Added an independent implementation review after debate-plan approval: the agent submits the finished implementation through `xd://propose`, and the reviewer must accept it or the review escalates to the user after the round cap (toggle: `plan.implReview`, default on).
-- Added accent-colored highlighting for a recognized `/command` keyword in the composer, matching Claude Code and Codex.
+- Added accent-colored highlighting for a recognized `/command` keyword and inline `/skill:name` tokens in the composer, matching Claude Code and Codex.
 
 ### Changed
 
