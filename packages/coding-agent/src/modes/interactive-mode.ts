@@ -42,6 +42,7 @@ import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilit
 import {
 	$env,
 	adjustHsv,
+	formatElapsed,
 	formatNumber,
 	getProjectDir,
 	hsvToRgb,
@@ -677,6 +678,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		const name = this.sessionManager.getSessionName();
 		if (!name) return undefined;
 		return `\x1b[2;3m${sanitizeStatusText(name)}\x1b[23;22m`;
+	}
+	/** Per-turn elapsed clock for the working row. Hidden by `tui.workingTimer`,
+	 * between turns, and when the status line's `pi` brand segment already
+	 * renders a turn timer. */
+	#workingTimerTrailer(): string | undefined {
+		if (!settings.get("tui.workingTimer")) return undefined;
+		if (this.statusLine.showsWorkingBrand()) return undefined;
+		const elapsed = this.statusLine.getTurnElapsedMs();
+		if (elapsed === null) return undefined;
+		return `\x1b[2m${formatElapsed(elapsed)}\x1b[22m`;
+	}
+	/** Right-docked working-row suffix: band-mode session title, then the turn
+	 * timer, two cells apart. */
+	#workingRowTrailer(): string | undefined {
+		const title = this.#workingTitleTrailer();
+		const timer = this.#workingTimerTrailer();
+		if (title && timer) return `${title}  ${timer}`;
+		return title ?? timer;
 	}
 	/** Idle stand-in for the working row in band mode: the docked title stays
 	 * readable between turns, in the same spot the loader's trailer uses. */
@@ -5458,7 +5477,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// Each frame adds one visual gap beyond the loader's standard separator.
 				showsWorkingBrand ? [` ${theme.icon.esc} `] : theme.getSpinnerFrames().map(frame => `${frame} `),
 			);
-			this.loadingAnimation.setTrailer(() => this.#workingTitleTrailer());
+			this.loadingAnimation.setTrailer(() => this.#workingRowTrailer());
 			this.statusContainer.addChild(this.loadingAnimation);
 		} else if (!this.statusContainer.children.includes(this.loadingAnimation)) {
 			this.statusContainer.disposeChildren();

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The working row now shows the elapsed time of the current turn on its right edge (`42s`, `5m3s`, `1h1m30s`); toggle with `tui.workingTimer`, hidden when the `pi` status brand already shows a turn timer.
+
 ### Fixed
 
 - Claude marketplace MCP servers now resolve environment placeholders in stdio environment values instead of passing strings such as `${NAME:-}` literally ([#10481](https://github.com/can1357/oh-my-pi/pull/10481) by [@mrexodia](https://github.com/mrexodia)).

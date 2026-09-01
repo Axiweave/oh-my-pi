@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { formatDuration } from "@oh-my-pi/pi-utils/format";
+import { formatDuration, formatElapsed } from "@oh-my-pi/pi-utils/format";
 
 describe("formatDuration", () => {
 	// Codex's wham/usage endpoint returns the prior window's reset_at until the
@@ -23,5 +23,16 @@ describe("formatDuration", () => {
 		expect(formatDuration(3_600_000)).toBe("1h");
 		expect(formatDuration(3_660_000)).toBe("1h1m");
 		expect(formatDuration(2 * 86_400_000 + 3_600_000)).toBe("2d1h");
+	});
+});
+
+describe("formatElapsed", () => {
+	it("renders a whole-second clock and never drops an inner unit", () => {
+		expect(formatElapsed(-5)).toBe("0s");
+		expect(formatElapsed(999)).toBe("0s");
+		expect(formatElapsed(42_000)).toBe("42s");
+		expect(formatElapsed(303_000)).toBe("5m3s");
+		expect(formatElapsed(3_630_000)).toBe("1h0m30s");
+		expect(formatElapsed(3_690_000)).toBe("1h1m30s");
 	});
 });

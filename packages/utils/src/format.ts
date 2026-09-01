@@ -27,6 +27,21 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * Exact elapsed clock in whole seconds: "0s", "42s", "5m3s", "1h0m30s".
+ * Once a larger unit is present, every smaller unit is printed (no gaps),
+ * so `1h0m30s` never collapses to the ambiguous `1h30s`.
+ */
+export function formatElapsed(ms: number): string {
+	const total = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / SEC) : 0;
+	const hours = Math.floor(total / 3600);
+	const minutes = Math.floor((total % 3600) / 60);
+	const seconds = total % 60;
+	if (hours > 0) return `${hours}h${minutes}m${seconds}s`;
+	if (minutes > 0) return `${minutes}m${seconds}s`;
+	return `${seconds}s`;
+}
+
+/**
  * Format a number with K/M/B suffix for compact display.
  * Uses 1 decimal for small leading digits when non-zero, rounded otherwise.
  * Examples: "999", "1K", "1.5K", "25K", "1M", "1.5M", "25M", "1.5B"

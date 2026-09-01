@@ -223,4 +223,33 @@ describe("InteractiveMode working activity", () => {
 			loader.stop();
 		}
 	});
+
+	it("docks the exact turn elapsed clock on the working row and hides it when the setting is off", async () => {
+		const { mode } = await createHarness("Timer session");
+		settings.override("composerStyle.footerMode", "claude3");
+		const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+		try {
+			mode.syncComposerShape();
+			startStableLoader(mode);
+			mode.statusLine.markActivityStart();
+			now.mockReturnValue(1_000_000 + 3_690_000);
+
+			const row = defined(
+				Bun.stripANSI(renderLoader(mode))
+					.split("\n")
+					.find(line => line.includes("Working")),
+			);
+			expect(row.endsWith("1h1m30s")).toBe(true);
+			expect(Bun.stringWidth(row)).toBe(120);
+
+			settings.override("tui.workingTimer", false);
+			mode.loadingAnimation?.setMessage("Timer off");
+			expect(Bun.stripANSI(renderLoader(mode))).not.toContain("1h1m30s");
+		} finally {
+			mode.statusLine.markActivityEnd();
+			settings.clearOverride("tui.workingTimer");
+			settings.clearOverride("composerStyle.footerMode");
+			mode.syncComposerShape();
+		}
+	});
 });

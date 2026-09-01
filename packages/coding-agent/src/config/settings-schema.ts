@@ -1397,6 +1397,17 @@ export const SETTINGS_SCHEMA = {
 				"Keep the input editor and status line docked to the bottom of the screen; when the transcript is short, blank space sits between them instead of the composer floating up",
 		},
 	},
+	"tui.workingTimer": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Working Row Timer",
+			description:
+				"Show the elapsed time of the current turn on the right of the working row while the agent runs; hidden when the status line's pi brand segment already shows a turn timer",
+		},
+	},
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Model
