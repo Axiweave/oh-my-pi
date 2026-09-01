@@ -265,6 +265,9 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
 		return this.#baseProvider.trySyncSlashCompletion?.(textBeforeCursor) ?? null;
 	}
+	getRecognizedCommandLength(lineText: string): number | null {
+		return this.#baseProvider.getRecognizedCommandLength?.(lineText) ?? null;
+	}
 	trySyncInlineReplace(textBeforeCursor: string): { replaceLen: number; insert: string } | null {
 		if (isSettingsInitialized() && !settings.get("emojiAutocomplete")) return null;
 		return tryEmojiInlineReplace(textBeforeCursor);

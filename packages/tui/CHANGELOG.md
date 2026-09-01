@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `AutocompleteProvider.getRecognizedCommandLength` and `Editor.getRecognizedCommandLength` so hosts can color-highlight a fully recognized leading slash command as it's typed.
+
 ## [18.0.10] - 2026-08-28
 
 ### Added

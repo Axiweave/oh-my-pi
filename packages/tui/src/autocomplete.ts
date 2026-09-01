@@ -228,6 +228,10 @@ export interface AutocompleteProvider {
 
 	/** Get inline hint text to show as dim ghost text after the cursor */
 	getInlineHint?(lines: string[], cursorLine: number, cursorCol: number): string | null;
+	/** Length of the recognized command span (leading whitespace + `/name`) when `lineText`
+	 *  starts with a fully known command name or alias — used to color-highlight the keyword in
+	 *  the composer as it's typed. Returns null when there is no exact match. */
+	getRecognizedCommandLength?(lineText: string): number | null;
 	/** Synchronously try to complete a slash command at the start of a line (no async I/O). */
 	/** Returns matched items and the full prefix, or null if not applicable. */
 	trySyncSlashCompletion?(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null;
@@ -1180,6 +1184,19 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		}
 
 		return command.getInlineHint(argumentText);
+	}
+	/** Length of the recognized command span (leading whitespace + `/name`) when `lineText`
+	 *  starts with a fully known command name or alias. See {@link AutocompleteProvider.getRecognizedCommandLength}. */
+	getRecognizedCommandLength(lineText: string): number | null {
+		const slashStart = findLeadingSlashCommandStart(lineText);
+		if (slashStart === null) return null;
+		const commandText = lineText.slice(slashStart);
+		const spaceIndex = commandText.indexOf(" ");
+		const commandName = spaceIndex === -1 ? commandText.slice(1) : commandText.slice(1, spaceIndex);
+		if (!commandName) return null;
+		const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
+		if (!command) return null;
+		return slashStart + 1 + commandName.length;
 	}
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
 		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);

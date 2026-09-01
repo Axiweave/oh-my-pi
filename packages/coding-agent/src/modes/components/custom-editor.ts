@@ -575,10 +575,13 @@ export class CustomEditor extends Editor {
 	#decorationLines: readonly string[] = [""];
 	#queueShorthandActive = false;
 	#queueListActive = false;
+	#recognizedCommandLength: number | null = null;
 
-	/** Decorate magic keywords, attachments, and the queue-composer header/list markers.
-	 *  Queue shorthand reserves its first logical line as a dim `Queueing` label; sequential
-	 *  item markers use the accent color so separate follow-ups remain visible while composing. */
+	/** Decorate magic keywords, attachments, the queue-composer header/list markers, and a
+	 *  recognized leading slash command. Queue shorthand reserves its first logical line as a dim
+	 *  `Queueing` label; sequential item markers use the accent color so separate follow-ups remain
+	 *  visible while composing. A fully recognized `/command` at the start of the draft is
+	 *  accent-colored the same way as `@mention` references, matching Claude Code/Codex. */
 	override decorateText = (text: string, context: EditorTextDecorationContext): string => {
 		const editorText = this.getText();
 		const animated = this.focused && this.#shimmerEnabled() && hasMagicKeyword(editorText);
@@ -590,6 +593,7 @@ export class CustomEditor extends Editor {
 			const queueBody = parseQueueShorthand(editorText);
 			this.#queueShorthandActive = queueBody !== undefined;
 			this.#queueListActive = queueBody !== undefined && isQueuedMessageList(queueBody);
+			this.#recognizedCommandLength = this.getRecognizedCommandLength();
 		}
 		let sourceSearchOffset = 0;
 		const locateSource = (value: string): number => {
@@ -601,13 +605,26 @@ export class CustomEditor extends Editor {
 		return renderPlaceholders(text, {
 			renderText: value => {
 				const sourceOffset = locateSource(value);
+				const absoluteCol = context.startCol + sourceOffset;
+				const commandLen = this.#recognizedCommandLength;
+				let commandKeyword = "";
+				let body = value;
+				if (context.line === 0 && commandLen !== null && absoluteCol < commandLen) {
+					const keywordEnd = Math.min(value.length, commandLen - absoluteCol);
+					commandKeyword = fgOrPlain(
+						"accent",
+						value.slice(0, keywordEnd),
+						`\x1b[1m${value.slice(0, keywordEnd)}\x1b[22m`,
+					);
+					body = value.slice(keywordEnd);
+				}
 				const highlighted = this.#spelling.decorateTypos(
-					value,
+					body,
 					{
 						editorText,
 						lines: this.#decorationLines,
 						line: context.line,
-						startCol: context.startCol + sourceOffset,
+						startCol: absoluteCol + (value.length - body.length),
 					},
 					span => highlightMagicKeywords(span, undefined, phase),
 				);
@@ -623,7 +640,7 @@ export class CustomEditor extends Editor {
 						return `${indent}${fgOrPlain("accent", value.slice(indent.length, markerEnd))}${highlighted.slice(markerEnd)}`;
 					}
 				}
-				return highlighted;
+				return commandKeyword + highlighted;
 			},
 			renderReference: (value, kind, index, form) => {
 				locateSource(value);
