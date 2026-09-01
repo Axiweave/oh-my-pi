@@ -15,6 +15,14 @@ It is not a changelog. Each entry describes a current decision that upstream reb
 
 ## Divergences
 
+### Debate plan workflow with implementation review
+
+- **Decision:** Keep the `/debate` plan workflow: an independent read-only reviewer must reach exact-byte consensus on the plan before human approval, capped at `plan.debateMaxRounds` with deadlock escalation.
+- **Decision:** Extend the contract through execution: after debate approval, the agent submits the finished implementation through `xd://propose` and the reviewer must accept it (toggle: `plan.implReview`, default on).
+- **Why:** Upstream plan mode ends at human approval; this fork wants machine review on both the plan and its implementation with the human as the escalation path.
+- **Key paths:** `packages/coding-agent/src/plan-mode/state.ts`, `packages/coding-agent/src/plan-mode/debate.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/modes/acp/acp-agent.ts`, `packages/coding-agent/src/prompts/agents/impl-reviewer.md`, and `docs/debate-plan-mode.md`.
+- **Checks:** `packages/coding-agent/test/plan-mode/debate.test.ts`, `packages/coding-agent/test/plan-mode/impl-review.test.ts`, `packages/coding-agent/test/agent-session-impl-review.test.ts`, `packages/coding-agent/test/interactive-mode-impl-review.test.ts`, and `packages/coding-agent/test/acp-agent.test.ts`.
+
 ### Claude three-line footer
 
 - **Decision:** Support `composerStyle.footerMode: claude3` across composer shapes and extension shapes.

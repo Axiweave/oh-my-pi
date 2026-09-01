@@ -4864,6 +4864,18 @@ export const SETTINGS_SCHEMA = {
 			condition: "planModeEnabled",
 		},
 	},
+	"plan.implReview": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			group: "Modes",
+			label: "Debate Implementation Review",
+			description:
+				"After a debate plan is approved, require the independent reviewer to accept the finished implementation",
+			condition: "planModeEnabled",
+		},
+	},
 
 	"goal.enabled": {
 		type: "boolean",

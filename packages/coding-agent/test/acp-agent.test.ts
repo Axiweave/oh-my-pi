@@ -15,7 +15,11 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-agent";
 import { resolveApprovedPlan } from "@oh-my-pi/pi-coding-agent/plan-mode/approved-plan";
 import { hashPlanContent } from "@oh-my-pi/pi-coding-agent/plan-mode/debate";
-import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
+import {
+	type ImplReviewState,
+	type PlanModeState,
+	serializeImplReviewState,
+} from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type {
 	AgentSession,
 	AgentSessionEvent,
@@ -347,7 +351,9 @@ class FakeAgentSession {
 		return [];
 	}
 
-	setActiveToolsByName(_toolNames: string[]): void {}
+	setActiveToolsByName(toolNames: string[]): void {
+		this.activeTools = [...toolNames];
+	}
 
 	setClientBridge(_bridge: unknown): void {}
 
@@ -357,6 +363,68 @@ class FakeAgentSession {
 
 	setPlanModeState(state: PlanModeState | undefined): void {
 		this.planModeState = state;
+	}
+
+	implReviewState: ImplReviewState | undefined;
+	activeTools: string[] = ["read"];
+	prepareImplReviewProposalImpl:
+		| ((
+				context: PlanProposalContext,
+		  ) => Promise<{ content: Array<{ type: "text"; text: string }>; details?: unknown }>)
+		| undefined;
+
+	hasBuiltInTool(name: string): boolean {
+		return ["read", "write", "ask"].includes(name);
+	}
+
+	getEnabledToolNames(): string[] {
+		return [...this.activeTools];
+	}
+
+	getImplReviewState(): ImplReviewState | undefined {
+		return this.implReviewState;
+	}
+
+	setImplReviewState(state: ImplReviewState): void {
+		this.implReviewState = state;
+		this.sessionManager.appendModeChange("impl_review", serializeImplReviewState(state));
+	}
+
+	restoreImplReviewState(state: ImplReviewState): void {
+		this.implReviewState = state;
+	}
+
+	clearImplReviewState(): void {
+		this.implReviewState = undefined;
+	}
+
+	beginImplReview(
+		planFilePath: string,
+		options: { planHash: string; planTitle: string; restoreTools?: string[] },
+	): void {
+		this.setImplReviewState({
+			planFilePath,
+			planHash: options.planHash,
+			planTitle: options.planTitle,
+			phase: "implementing",
+			round: 0,
+			...(options.restoreTools ? { restoreTools: options.restoreTools } : {}),
+		});
+	}
+
+	async supersedeImplReview(): Promise<void> {
+		const state = this.implReviewState;
+		if (!state) return;
+		if (state.restoreTools) this.setActiveToolsByName(state.restoreTools);
+		this.setPlanProposalHandler(null);
+		this.implReviewState = undefined;
+	}
+
+	async prepareImplReviewProposal(
+		context: PlanProposalContext,
+	): Promise<{ content: Array<{ type: "text"; text: string }>; details?: unknown }> {
+		if (this.prepareImplReviewProposalImpl) return this.prepareImplReviewProposalImpl(context);
+		return { content: [{ type: "text", text: "review pending" }], details: { outcome: "reviewing" } };
 	}
 
 	planProposalHandler: PlanProposalHandler | undefined;
@@ -1011,6 +1079,180 @@ describe("ACP agent", () => {
 			planHash: hashPlanContent(concurrentContent),
 		});
 		expect(session.planReferencePath).toBeUndefined();
+
+		harness.abortController.abort();
+	});
+
+	async function beginDebateImplReview(options?: { implReview?: boolean }) {
+		const harness = await createHarness({
+			elicitationHandler: async () => ({ action: "accept", content: { value: "Approve and execute" } }),
+		});
+		Settings.instance.set("plan.enabled", true);
+		if (options?.implReview === false) Settings.instance.set("plan.implReview", false);
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
+		const planFilePath = "local://auth-plan.md";
+		const planContent = "# Auth\n\nUse the reviewed flow.";
+		const localOptions = {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		};
+		cleanupRoots.push(resolveLocalUrlToPath("local://", localOptions));
+		await Bun.write(resolveLocalUrlToPath(planFilePath, localOptions), planContent);
+		const planHash = hashPlanContent(planContent);
+		session.preparePlanProposalImpl = async () => {
+			session.setPlanModeState({
+				enabled: true,
+				planFilePath,
+				workflow: "debate",
+				debate: { phase: "consensus", round: 1, planHash, summary: "Ready." },
+			});
+			return {
+				outcome: "ready_for_approval",
+				planContent,
+				planHash,
+				approval: { planFilePath, title: "auth", planExists: true, consensusHash: planHash },
+			};
+		};
+		await session.planProposalHandler!("auth", proposalContext());
+		return { harness, session, created, planFilePath, planHash };
+	}
+
+	it("begins the implementation review after debate approval and routes the proposal slot to it", async () => {
+		const { harness, session, planFilePath, planHash } = await beginDebateImplReview();
+
+		expect(session.implReviewState).toMatchObject({
+			planFilePath,
+			planHash,
+			planTitle: "auth",
+			phase: "implementing",
+			restoreTools: ["read"],
+		});
+		expect(session.activeTools).toContain("write");
+		session.prepareImplReviewProposalImpl = async () => ({
+			content: [{ type: "text", text: "accepted" }],
+			details: { outcome: "consensus" },
+		});
+		const result = await session.planProposalHandler!("auth", proposalContext());
+		expect(result.details).toEqual({ outcome: "consensus" });
+
+		harness.abortController.abort();
+	});
+
+	it("a disabled plan.implReview keeps debate approval review-free", async () => {
+		const { harness, session } = await beginDebateImplReview({ implReview: false });
+
+		expect(session.implReviewState).toBeUndefined();
+		expect(session.activeTools).not.toContain("write");
+		expect(session.planProposalHandler).toBeUndefined();
+
+		harness.abortController.abort();
+	});
+
+	it("re-selecting default keeps the pending implementation review", async () => {
+		const { harness, session, created } = await beginDebateImplReview();
+
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "default" });
+
+		expect(session.implReviewState).toBeDefined();
+		expect(session.planProposalHandler).toBeDefined();
+		expect(session.sessionManager.buildSessionContext().mode).toBe("impl_review");
+
+		harness.abortController.abort();
+	});
+
+	it("entering plan mode supersedes the pending implementation review", async () => {
+		const { harness, session, created } = await beginDebateImplReview();
+
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
+
+		expect(session.implReviewState).toBeUndefined();
+		expect(session.activeTools).toEqual(["read"]);
+		expect(session.planModeState?.enabled).toBe(true);
+
+		harness.abortController.abort();
+	});
+
+	it("load rehydrates a persisted impl_review entry with the write transport", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "implement", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange(
+			"impl_review",
+			serializeImplReviewState({
+				planFilePath: "local://auth-plan.md",
+				planHash: "plan-hash",
+				planTitle: "auth",
+				phase: "implementing",
+				round: 0,
+			}),
+		);
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({ sessionId: stored.sessionId, cwd: harness.cwdA, mcpServers: [] });
+
+		// findSession would return the stored stand-in (same id); the ACP-managed
+		// session is the factory-created one that switched into the stored file.
+		const loaded = harness.sessions.at(-1)!;
+		expect(loaded.implReviewState).toMatchObject({
+			planHash: "plan-hash",
+			phase: "implementing",
+			restoreTools: ["read"],
+		});
+		expect(loaded.activeTools).toContain("write");
+		expect(loaded.planProposalHandler).toBeDefined();
+
+		harness.abortController.abort();
+	});
+
+	it("load discards an invalid impl_review entry", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "implement", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange("impl_review", { bogus: true });
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({ sessionId: stored.sessionId, cwd: harness.cwdA, mcpServers: [] });
+
+		const loaded = harness.sessions.at(-1)!;
+		expect(loaded.implReviewState).toBeUndefined();
+		expect(loaded.sessionManager.buildSessionContext().mode).toBe("none");
+
+		harness.abortController.abort();
+	});
+
+	it("load discards a persisted impl_review entry when plan mode is disabled", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", false);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "implement", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange(
+			"impl_review",
+			serializeImplReviewState({
+				planFilePath: "local://auth-plan.md",
+				planHash: "plan-hash",
+				planTitle: "auth",
+				phase: "implementing",
+				round: 0,
+			}),
+		);
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({ sessionId: stored.sessionId, cwd: harness.cwdA, mcpServers: [] });
+
+		const loaded = harness.sessions.at(-1)!;
+		expect(loaded.implReviewState).toBeUndefined();
+		expect(loaded.activeTools).not.toContain("write");
+		expect(loaded.sessionManager.buildSessionContext().mode).toBe("none");
 
 		harness.abortController.abort();
 	});

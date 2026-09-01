@@ -195,6 +195,32 @@ describe("structured subagent primitive", () => {
 			outputSchemaOverridesAgent: true,
 		});
 	});
+
+	it("resolves the bundled impl-reviewer with read-only tools and the reviewer/slow model chain", async () => {
+		const reviewer = getBundledAgent("impl-reviewer");
+		if (!reviewer) throw new Error("Bundled impl-reviewer agent is missing");
+		mockDiscovery(reviewer);
+
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({
+				agent: "impl-reviewer",
+				outputSchema: PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA,
+				schemaMode: "strict",
+				enableLsp: false,
+				enableIrc: false,
+			}),
+		);
+
+		expect(policy.agent.model).toEqual(["@reviewer", "@slow"]);
+		expect(policy.effectiveAgent.tools).toEqual(["read", "grep", "glob", "web_search", "yield"]);
+		expect(policy.enableIrc).toBe(false);
+		expect(policy.schema).toEqual({
+			schema: PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA,
+			source: "caller",
+			mode: "strict",
+			outputSchemaOverridesAgent: true,
+		});
+	});
 	it("reloads model roles before resolving an agent added during the session", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-task-hot-reload-"));
 		const projectDir = path.join(root, "project");

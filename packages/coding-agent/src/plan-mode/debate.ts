@@ -1,5 +1,5 @@
 import { OmpErrors, type } from "@oh-my-pi/omptype";
-import type { PlanDebateFinding, PlanModeState } from "./state";
+import type { ImplReviewState, PlanDebateFinding, PlanModeState } from "./state";
 
 const reviewEvidenceSchema = type({
 	path: "string > 0",
@@ -255,6 +255,187 @@ export class PlanDebateGate {
 			debate.planHash === attempt.planHash &&
 			debate.activeReviewId === attempt.reviewId &&
 			debate.round === attempt.round
+			? state
+			: undefined;
+	}
+}
+
+export interface ImplReviewRequest {
+	planFilePath: string;
+	planTitle: string;
+	planHash: string;
+	round: number;
+	priorSummary?: string;
+	priorFindings?: PlanDebateFinding[];
+	parentToolCallId: string;
+	signal: AbortSignal;
+}
+
+export type ImplReviewer = (request: ImplReviewRequest) => Promise<unknown>;
+
+export interface ImplReviewProposal {
+	planTitle: string;
+	reviewer: ImplReviewer;
+	signal: AbortSignal;
+	proposalToolCallId: string;
+}
+
+export type ImplReviewGateOutcome =
+	| { outcome: "consensus"; round: number }
+	| { outcome: "changes_requested"; round: number; summary: string; findings: PlanDebateFinding[] }
+	| { outcome: "deadlocked"; round: number; summary: string; findings: PlanDebateFinding[] }
+	| { outcome: "reviewing" }
+	| { outcome: "failed"; error: string };
+
+/** Round-keyed gate for the post-approval implementation review. Plan identity
+ *  (the approved plan hash) is enforced by the caller before the gate runs. */
+export class ImplReviewGate {
+	#inFlight?: Promise<ImplReviewGateOutcome>;
+	readonly #getState: () => ImplReviewState | undefined;
+	readonly #commitState: (state: ImplReviewState) => void;
+	readonly #maxRounds: number;
+
+	constructor(options: {
+		getState: () => ImplReviewState | undefined;
+		commitState: (state: ImplReviewState) => void;
+		maxRounds?: number;
+	}) {
+		this.#getState = options.getState;
+		this.#commitState = options.commitState;
+		this.#maxRounds = Math.max(1, Math.floor(options.maxRounds ?? DEFAULT_PLAN_DEBATE_MAX_ROUNDS));
+	}
+
+	async propose(proposal: ImplReviewProposal): Promise<ImplReviewGateOutcome> {
+		const state = this.#getState();
+		if (!state) {
+			return { outcome: "failed", error: "Implementation review is not active." };
+		}
+		if (state.phase === "consensus") {
+			return { outcome: "consensus", round: state.round };
+		}
+		if (state.phase === "deadlocked") {
+			return {
+				outcome: "deadlocked",
+				round: state.round,
+				summary: state.summary ?? "",
+				findings: state.findings ?? [],
+			};
+		}
+		if (this.#inFlight) return { outcome: "reviewing" };
+
+		const round = state.phase === "failed" ? Math.max(1, state.round) : state.round + 1;
+		const reviewId = crypto.randomUUID();
+		const priorSummary = state.summary;
+		const priorFindings = state.findings;
+		this.#commitState({
+			...state,
+			phase: "reviewing",
+			round,
+			activeReviewId: reviewId,
+			// A retry from `failed` must not carry the old failure into the new
+			// review or a later verdict; the flat state would otherwise keep it.
+			error: undefined,
+			...(priorSummary === undefined ? {} : { summary: priorSummary }),
+			...(priorFindings === undefined ? {} : { findings: priorFindings }),
+		});
+
+		const run = this.#runReview(proposal, {
+			planFilePath: state.planFilePath,
+			reviewId,
+			round,
+			priorSummary,
+			priorFindings,
+		});
+		this.#inFlight = run;
+		try {
+			return await run;
+		} finally {
+			if (this.#inFlight === run) this.#inFlight = undefined;
+		}
+	}
+
+	async #runReview(
+		proposal: ImplReviewProposal,
+		attempt: {
+			planFilePath: string;
+			reviewId: string;
+			round: number;
+			priorSummary?: string;
+			priorFindings?: PlanDebateFinding[];
+		},
+	): Promise<ImplReviewGateOutcome> {
+		try {
+			const pending = this.#getState();
+			const raw = await proposal.reviewer({
+				planFilePath: attempt.planFilePath,
+				planTitle: proposal.planTitle,
+				planHash: pending?.planHash ?? "",
+				round: attempt.round,
+				...(attempt.priorSummary === undefined ? {} : { priorSummary: attempt.priorSummary }),
+				...(attempt.priorFindings === undefined ? {} : { priorFindings: attempt.priorFindings }),
+				parentToolCallId: proposal.proposalToolCallId,
+				signal: proposal.signal,
+			});
+			if (proposal.signal.aborted) throw new Error("The implementation review was cancelled.");
+			const result = reviewResultSchema(raw);
+			if (result instanceof OmpErrors) {
+				throw new Error("The implementation reviewer returned malformed structured output.");
+			}
+			if (result.verdict === "consensus" && result.findings.length > 0) {
+				throw new Error("The implementation reviewer returned findings with a consensus verdict.");
+			}
+			if (result.verdict === "changes_requested" && result.findings.length === 0) {
+				throw new Error("The implementation reviewer requested changes without findings.");
+			}
+			const live = this.#ownedState(attempt);
+			if (!live) return { outcome: "failed", error: "The implementation review became stale." };
+			if (result.verdict === "consensus") {
+				this.#commitState({
+					...live,
+					phase: "consensus",
+					round: attempt.round,
+					activeReviewId: undefined,
+					summary: result.summary,
+					findings: undefined,
+				});
+				return { outcome: "consensus", round: attempt.round };
+			}
+			const deadlocked = attempt.round >= this.#maxRounds;
+			this.#commitState({
+				...live,
+				phase: deadlocked ? "deadlocked" : "changes_requested",
+				round: attempt.round,
+				activeReviewId: undefined,
+				summary: result.summary,
+				findings: result.findings,
+			});
+			return {
+				outcome: deadlocked ? "deadlocked" : "changes_requested",
+				round: attempt.round,
+				summary: result.summary,
+				findings: result.findings,
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const live = this.#ownedState(attempt);
+			if (live) {
+				this.#commitState({
+					...live,
+					phase: "failed",
+					round: attempt.round,
+					activeReviewId: undefined,
+					error: message,
+					...(attempt.priorSummary === undefined ? {} : { summary: attempt.priorSummary }),
+					...(attempt.priorFindings === undefined ? {} : { findings: attempt.priorFindings }),
+				});
+			}
+			return { outcome: "failed", error: message };
+		}
+	}
+
+	#ownedState(attempt: { reviewId: string; round: number }): ImplReviewState | undefined {
+		const state = this.#getState();
+		return state?.phase === "reviewing" && state.activeReviewId === attempt.reviewId && state.round === attempt.round
 			? state
 			: undefined;
 	}

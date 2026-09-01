@@ -152,3 +152,89 @@ export function parsePlanModeState(
 		...(parsed.reentry === undefined ? {} : { reentry: parsed.reentry }),
 	};
 }
+
+export type ImplReviewPhase =
+	| "implementing"
+	| "reviewing"
+	| "changes_requested"
+	| "consensus"
+	| "deadlocked"
+	| "failed";
+
+export interface ImplReviewState {
+	planFilePath: string;
+	planHash: string;
+	planTitle: string;
+	phase: ImplReviewPhase;
+	round: number;
+	activeReviewId?: string;
+	summary?: string;
+	findings?: PlanDebateFinding[];
+	error?: string;
+	restoreTools?: string[];
+}
+
+const serializedImplReviewStateSchema = type({
+	planFilePath: "string > 0",
+	planHash: "string > 0",
+	planTitle: "string > 0",
+	phase: "'implementing' | 'reviewing' | 'changes_requested' | 'consensus' | 'deadlocked' | 'failed'",
+	round: "number.integer >= 0",
+	"activeReviewId?": "string > 0",
+	"summary?": "string",
+	"findings?": planDebateFindingSchema.array(),
+	"error?": "string > 0",
+	"restoreTools?": "string[]",
+});
+
+export function serializeImplReviewState(state: ImplReviewState): Record<string, unknown> {
+	return {
+		planFilePath: state.planFilePath,
+		planHash: state.planHash,
+		planTitle: state.planTitle,
+		phase: state.phase,
+		round: state.round,
+		...(state.activeReviewId === undefined ? {} : { activeReviewId: state.activeReviewId }),
+		...(state.summary === undefined ? {} : { summary: state.summary }),
+		...(state.findings === undefined ? {} : { findings: state.findings }),
+		...(state.error === undefined ? {} : { error: state.error }),
+		...(state.restoreTools === undefined ? {} : { restoreTools: state.restoreTools }),
+	};
+}
+
+export function parseImplReviewState(data: Record<string, unknown> | undefined): ImplReviewState | undefined {
+	const parsed = serializedImplReviewStateSchema(data);
+	if (parsed instanceof OmpErrors) return undefined;
+	const common = {
+		planFilePath: parsed.planFilePath,
+		planHash: parsed.planHash,
+		planTitle: parsed.planTitle,
+		round: parsed.round,
+		...(parsed.summary === undefined ? {} : { summary: parsed.summary }),
+		...(parsed.findings === undefined ? {} : { findings: parsed.findings }),
+		...(parsed.restoreTools === undefined ? {} : { restoreTools: parsed.restoreTools }),
+	};
+	switch (parsed.phase) {
+		case "implementing":
+			return { phase: "implementing", ...common };
+		case "reviewing":
+			if (!parsed.activeReviewId) return undefined;
+			return {
+				phase: "failed",
+				...common,
+				error: "The implementation review stopped before the session resumed.",
+			};
+		case "changes_requested":
+			if (parsed.summary === undefined || !parsed.findings?.length) return undefined;
+			return { phase: "changes_requested", ...common, summary: parsed.summary, findings: parsed.findings };
+		case "deadlocked":
+			if (parsed.summary === undefined || !parsed.findings?.length) return undefined;
+			return { phase: "deadlocked", ...common, summary: parsed.summary, findings: parsed.findings };
+		case "consensus":
+			if (parsed.summary === undefined || (parsed.findings?.length ?? 0) > 0) return undefined;
+			return { phase: "consensus", ...common, summary: parsed.summary };
+		case "failed":
+			if (!parsed.error) return undefined;
+			return { phase: "failed", ...common, error: parsed.error };
+	}
+}

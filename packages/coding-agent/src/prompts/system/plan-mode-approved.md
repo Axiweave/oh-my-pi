@@ -15,6 +15,16 @@ If `todo` fails: fix payload; retry before continuing.
 {{/has}}
 </instruction>
 
+{{#if implReview}}
+<instruction>
+This plan came from debate mode; an independent reviewer must accept the finished implementation.
+After completing every step and its verification, write the plan slug as plain text to `xd://propose` to submit the implementation for review.
+The reviewer returns blocking findings: verify each against the repository, fix the code, resubmit.
+After the round cap the review escalates to the user.
+NEVER declare the task complete before reviewer consensus or escalation.
+</instruction>
+{{/if}}
+
 <critical>
 Inline plan compressed, expired, or unrecoverable: NEVER stop; read `{{planFilePath}}`.
 MUST continue until complete.

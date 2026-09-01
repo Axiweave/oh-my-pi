@@ -137,7 +137,12 @@ import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } fr
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionState } from "./mnemopi/state";
-import { PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA, type PlanDebateReviewerRequest } from "./plan-mode/debate";
+import {
+	type ImplReviewRequest,
+	PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA,
+	type PlanDebateReviewerRequest,
+} from "./plan-mode/debate";
+import implDebateReviewPrompt from "./prompts/system/impl-debate-review.md" with { type: "text" };
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
 import planDebateReviewPrompt from "./prompts/system/plan-debate-review.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
@@ -3661,6 +3666,37 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					result.structuredOutput?.status !== "valid"
 				) {
 					throw new Error(result.error ?? result.stderr ?? "The plan reviewer failed.");
+				}
+				return result.structuredOutput.data;
+			},
+			runImplReviewer: async (request: ImplReviewRequest) => {
+				const execution = await runStructuredSubagent({
+					session: toolSession,
+					invocationKind: "task",
+					agent: "impl-reviewer",
+					identity: { label: "ImplReviewer" },
+					assignment: prompt.render(implDebateReviewPrompt, {
+						planFilePath: request.planFilePath,
+						planTitle: request.planTitle,
+						planHash: request.planHash,
+						round: request.round,
+						priorSummary: request.priorSummary,
+						priorFindings: request.priorFindings ? JSON.stringify(request.priorFindings, null, 2) : undefined,
+					}),
+					outputSchema: PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA,
+					schemaMode: "strict",
+					parentToolCallId: request.parentToolCallId,
+					signal: request.signal,
+					enableIrc: false,
+				});
+				const result = execution.result;
+				if (
+					result.exitCode !== 0 ||
+					result.aborted ||
+					result.error ||
+					result.structuredOutput?.status !== "valid"
+				) {
+					throw new Error(result.error ?? result.stderr ?? "The implementation reviewer failed.");
 				}
 				return result.structuredOutput.data;
 			},

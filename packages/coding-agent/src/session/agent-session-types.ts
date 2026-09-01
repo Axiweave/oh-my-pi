@@ -33,7 +33,7 @@ import type { ExtensionRunner } from "../extensibility/extensions";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
-import type { PlanDebateReviewer } from "../plan-mode/debate";
+import type { ImplReviewer, PlanDebateReviewer } from "../plan-mode/debate";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { XdevState } from "../tools/xdev";
@@ -155,6 +155,8 @@ export interface AgentSessionConfig {
 	planYolo?: PlanYolo;
 	/** Runs the independent structured reviewer for a debate plan proposal. */
 	runPlanDebateReviewer?: PlanDebateReviewer;
+	/** Runs the independent structured reviewer for a debate implementation submission. */
+	runImplReviewer?: ImplReviewer;
 	/** Initial per-family service tiers for the live session. */
 	serviceTierByFamily?: ServiceTierByFamily;
 	/** Prompt templates for expansion. */

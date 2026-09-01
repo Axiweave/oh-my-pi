@@ -61,7 +61,8 @@ import type { MCPServerConfig } from "../../mcp/types";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
 import { hashPlanContent } from "../../plan-mode/debate";
-import { type PlanModeState, serializePlanModeState } from "../../plan-mode/state";
+import { type PlanModeState, parseImplReviewState, serializePlanModeState } from "../../plan-mode/state";
+import acpPlanApprovedPrompt from "../../prompts/system/acp-plan-approved.md" with { type: "text" };
 import planDebateConsensusInvalidatedPrompt from "../../prompts/system/plan-debate-consensus-invalidated.md" with {
 	type: "text",
 };
@@ -766,7 +767,7 @@ export class AcpAgent implements Agent {
 
 	async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
 		const record = this.#getSessionRecord(params.sessionId);
-		this.#applyModeChange(record.session, params.modeId);
+		await this.#applyModeChange(record.session, params.modeId);
 		await this.#connection.sessionUpdate({
 			sessionId: record.session.sessionId,
 			update: this.#buildCurrentModeUpdate(record.session),
@@ -783,7 +784,7 @@ export class AcpAgent implements Agent {
 
 		switch (params.configId) {
 			case MODE_CONFIG_ID:
-				this.#applyModeChange(record.session, params.value);
+				await this.#applyModeChange(record.session, params.value);
 				break;
 			case MODEL_CONFIG_ID:
 				await this.#setModelById(record.session, params.value);
@@ -1333,10 +1334,42 @@ export class AcpAgent implements Agent {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
 			this.#sessions.set(session.sessionId, record);
+			await this.#reconcileImplReview(session);
 			return record;
 		} catch (error) {
 			await this.#disposeSessionRecord(record);
 			throw error;
+		}
+	}
+
+	/** Rehydrate a persisted `impl_review` entry on session load/resume/fork. A
+	 *  fresh session has no mode entries, so this is a no-op there. */
+	async #reconcileImplReview(session: AgentSession): Promise<void> {
+		const ctx = session.sessionManager.buildSessionContext();
+		if (ctx.mode !== "impl_review") return;
+		if (!session.settings.get("plan.enabled") || !session.settings.get("plan.implReview")) {
+			// The feature was toggled off: drop the stale contract instead of
+			// restoring an enforcement loop the user disabled.
+			session.sessionManager.appendModeChange("none");
+			return;
+		}
+		const restored = parseImplReviewState(ctx.modeData);
+		if (!restored) {
+			session.sessionManager.appendModeChange("none");
+			return;
+		}
+		session.restoreImplReviewState(restored);
+		session.setPlanProposalHandler?.(async (_title, context) => session.prepareImplReviewProposal(context));
+		const nonterminal =
+			restored.phase === "implementing" || restored.phase === "changes_requested" || restored.phase === "failed";
+		if (nonterminal && session.hasBuiltInTool("write")) {
+			const active = session.getEnabledToolNames();
+			if (!active.includes("write")) {
+				await session.setActiveToolsByName([...active, "write"]);
+				if (!restored.restoreTools) {
+					session.setImplReviewState({ ...restored, restoreTools: active });
+				}
+			}
 		}
 	}
 
@@ -1853,12 +1886,15 @@ export class AcpAgent implements Agent {
 		return state.workflow === "debate" ? ACP_DEBATE_MODE_ID : ACP_PLAN_MODE_ID;
 	}
 
-	#applyModeChange(session: AgentSession, modeId: string): void {
+	async #applyModeChange(session: AgentSession, modeId: string): Promise<void> {
 		const availableModes = this.#getAvailableModes(session);
 		if (!availableModes.some(mode => mode.id === modeId)) {
 			throw new Error(`Unsupported ACP mode: ${modeId}`);
 		}
 		if (modeId === ACP_PLAN_MODE_ID || modeId === ACP_DEBATE_MODE_ID) {
+			// Plan mode supersedes a pending implementation review; restore its
+			// toolset before the plan-mode state lands.
+			await session.supersedeImplReview();
 			const previous = session.getPlanModeState();
 			const workflow = modeId === ACP_DEBATE_MODE_ID ? "debate" : "parallel";
 			const state: PlanModeState = {
@@ -1878,6 +1914,14 @@ export class AcpAgent implements Agent {
 			session.setPlanModeState(state);
 			session.sessionManager.appendModeChange("plan", serializePlanModeState(state));
 			session.setPlanProposalHandler?.((title, context) => this.#handleAcpPlanProposal(session, title, context));
+		} else if (session.getPlanModeState()?.enabled) {
+			// Real plan exit.
+			session.setPlanProposalHandler?.(null);
+			session.setPlanModeState(undefined);
+			session.sessionManager.appendModeChange("none");
+		} else if (session.getImplReviewState()) {
+			// Re-selecting `default` while an implementation review is pending must
+			// not erase the persisted `impl_review` entry or orphan the handler.
 		} else {
 			session.setPlanProposalHandler?.(null);
 			session.setPlanModeState(undefined);
@@ -1986,10 +2030,31 @@ export class AcpAgent implements Agent {
 				};
 			}
 		}
+		const wasDebate = session.getPlanModeState()?.workflow === "debate";
 		session.setPlanReferencePath(approval.planFilePath);
 		session.setPlanProposalHandler?.(null);
 		session.setPlanModeState(undefined);
 		session.sessionManager.appendModeChange("none");
+		let implReviewStarted = false;
+		if (wasDebate && approval.consensusHash && session.settings.get("plan.implReview")) {
+			// The consensus hash was byte-validated moments earlier. Augment the
+			// execution toolset with the built-in `write` transport when missing so
+			// the implementation can be submitted; restoreTools returns the toolset
+			// to its normal shape once the review settles.
+			const current = session.getEnabledToolNames();
+			let restoreTools: string[] | undefined;
+			if (session.hasBuiltInTool("write") && !current.includes("write")) {
+				await session.setActiveToolsByName([...current, "write"]);
+				restoreTools = current;
+			}
+			session.beginImplReview(approval.planFilePath, {
+				planHash: approval.consensusHash,
+				planTitle: approval.title,
+				...(restoreTools ? { restoreTools } : {}),
+			});
+			session.setPlanProposalHandler?.(async (_title, context) => session.prepareImplReviewProposal(context));
+			implReviewStarted = true;
+		}
 		try {
 			await this.#connection.sessionUpdate({
 				sessionId: session.sessionId,
@@ -2006,7 +2071,10 @@ export class AcpAgent implements Agent {
 			content: [
 				{
 					type: "text",
-					text: `Plan approved at ${approval.planFilePath}. Plan mode exited; proceed with the implementation.`,
+					text: prompt.render(acpPlanApprovedPrompt, {
+						planFilePath: approval.planFilePath,
+						implReview: implReviewStarted,
+					}),
 				},
 			],
 			details: { outcome: proposal.outcome, ...approval },

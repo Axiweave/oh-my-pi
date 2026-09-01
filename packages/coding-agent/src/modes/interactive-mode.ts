@@ -96,7 +96,13 @@ import {
 import { humanizePlanTitle, type PlanApprovalDetails, resolvePlanTitle } from "../plan-mode/approved-plan";
 import { hashPlanContent } from "../plan-mode/debate";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
-import { type PlanModeState, type PlanWorkflow, parsePlanModeState, serializePlanModeState } from "../plan-mode/state";
+import {
+	type PlanModeState,
+	type PlanWorkflow,
+	parseImplReviewState,
+	parsePlanModeState,
+	serializePlanModeState,
+} from "../plan-mode/state";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import planDebateConsensusInvalidatedPrompt from "../prompts/system/plan-debate-consensus-invalidated.md" with {
 	type: "text",
@@ -1323,6 +1329,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setSessionBeforeSwitchReconciler?.(async () => {
 			await this.#liveCommandController.stop();
 			await this.#quiesceVibeForSessionSwitch();
+			// While SessionManager still points at the source session: restore the
+			// toolset a pending implementation review augmented and drop the review.
+			// No entry is appended — the source file keeps its `impl_review` entry
+			// for its own later resume.
+			const implReview = this.session.getImplReviewState();
+			if (implReview) {
+				if (implReview.restoreTools) await this.session.setActiveToolsByName(implReview.restoreTools);
+				this.session.setPlanProposalHandler?.(null);
+				this.session.clearImplReviewState();
+			}
 		});
 		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession({ preserveActiveGoal: true }));
 		await logger.time("InteractiveMode.init:reconcileMode", () => this.#reconcileModeFromSession());
@@ -3045,6 +3061,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#updateGoalModeStatus();
 		}
 
+		if (this.session.getImplReviewState()) {
+			// In-memory backstop only. Never apply `restoreTools` here: this runs
+			// after switchSession already loaded the target session's tools, and a
+			// source-session snapshot must not clobber them (the vibe teardown
+			// below documents the same rule).
+			this.session.setPlanProposalHandler?.(null);
+			this.session.clearImplReviewState();
+		}
+
 		if (this.vibeModeEnabled && !options?.preserveVibe) {
 			const ownerScope = this.#vibeModeOwnerScope;
 			// This runs only from #reconcileModeFromSession, i.e. after switchSession
@@ -3132,9 +3157,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (!this.session.settings.get("plan.enabled")) {
-			// Clear stale plan/plan_paused mode so re-enabling the setting
-			// later doesn't unexpectedly restore an old plan session.
-			if (sessionContext.mode === "plan" || sessionContext.mode === "plan_paused") {
+			// Clear stale plan/plan_paused/impl_review mode so re-enabling the
+			// setting later doesn't unexpectedly restore an old plan session.
+			if (
+				sessionContext.mode === "plan" ||
+				sessionContext.mode === "plan_paused" ||
+				sessionContext.mode === "impl_review"
+			) {
 				this.sessionManager.appendModeChange("none");
 			}
 			return;
@@ -3161,7 +3190,40 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.planModePaused = true;
 			this.#planModeHasEntered = true;
 			this.#updatePlanModeStatus();
+		} else if (sessionContext.mode === "impl_review") {
+			if (!this.session.settings.get("plan.implReview")) {
+				// The feature was toggled off: drop the stale contract instead of
+				// restoring an enforcement loop the user disabled.
+				this.sessionManager.appendModeChange("none");
+				return;
+			}
+			const restored = parseImplReviewState(sessionContext.modeData);
+			if (!restored) {
+				this.sessionManager.appendModeChange("none");
+				return;
+			}
+			this.session.restoreImplReviewState(restored);
+			this.#installImplReviewProposalHandler();
+			const nonterminal =
+				restored.phase === "implementing" || restored.phase === "changes_requested" || restored.phase === "failed";
+			// Terminal phases keep state + handler only; the cached verdict needs
+			// no write transport.
+			if (nonterminal && this.session.hasBuiltInTool("write")) {
+				const active = this.session.getEnabledToolNames();
+				if (!active.includes("write")) {
+					await this.session.setActiveToolsByName([...active, "write"]);
+					if (!restored.restoreTools) {
+						this.session.setImplReviewState({ ...restored, restoreTools: active });
+					}
+				}
+			}
 		}
+	}
+
+	/** Routes `xd://propose` writes to the implementation-review gate. Re-entering
+	 *  plan mode overwrites this slot with the plan handler (mutual exclusion). */
+	#installImplReviewProposalHandler(): void {
+		this.session.setPlanProposalHandler?.(async (_title, context) => this.session.prepareImplReviewProposal(context));
 	}
 
 	async #enterPlanMode(options?: {
@@ -3184,6 +3246,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.planModePaused = false;
 		this.#pausedPlanModeState = undefined;
+		// Plan mode supersedes a pending implementation review. Run before the
+		// previousTools snapshot below so it cannot capture the review's augmented
+		// `write` and leak it past plan exit.
+		await this.session.supersedeImplReview();
 
 		const workflow = options?.workflow ?? options?.restoredState?.workflow ?? "parallel";
 		const planFilePath =
@@ -3411,6 +3477,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Exit vibe mode first.");
 			return;
 		}
+		// Goal mode supersedes a pending implementation review.
+		await this.session.supersedeImplReview();
 		const previousTools = this.session.getEnabledToolNames().filter(name => name !== "goal");
 		const goalTools = [...new Set([...previousTools, "goal"])];
 		this.#goalModePreviousTools = previousTools;
@@ -3786,6 +3854,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			preserveContext?: boolean;
 			compactBeforeExecute?: boolean;
 			executionModel?: ResolvedRoleModel;
+			debate?: boolean;
 		},
 	): Promise<boolean> {
 		const previousTools = this.#planModePreviousTools ?? this.session.getEnabledToolNames();
@@ -3858,9 +3927,30 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Restore the execution tool set, but force-enable `read`: approved-plan
 		// prompts now require loading the durable local:// plan file before work.
-		const executionTools = previousTools.includes("read") ? previousTools : [...previousTools, "read"];
+		let executionTools = previousTools.includes("read") ? previousTools : [...previousTools, "read"];
+		const implReview = options.debate && this.session.settings.get("plan.implReview");
+		// A debate plan owes an implementation submission via `write xd://propose`.
+		// Without this augmentation a deliberately write-inactive configuration
+		// (e.g. Code Mode device-only) could never submit; restoreTools returns
+		// the toolset to its normal shape once the review settles. Built-in-only
+		// guard, same as plan mode's own augmentation.
+		let restoreTools: string[] | undefined;
+		if (implReview && this.session.hasBuiltInTool("write") && !executionTools.includes("write")) {
+			restoreTools = executionTools;
+			executionTools = [...executionTools, "write"];
+		}
 		await this.session.setActiveToolsByName(executionTools);
 		this.session.setPlanReferencePath(options.planFilePath);
+		if (implReview) {
+			// After handleClearCommand/compaction, so the `impl_review` mode_change
+			// entry lands in the surviving session file.
+			this.session.beginImplReview(options.planFilePath, {
+				planHash: hashPlanContent(planContent),
+				planTitle: options.title,
+				...(restoreTools ? { restoreTools } : {}),
+			});
+			this.#installImplReviewProposalHandler();
+		}
 
 		// Resolve the deferred plan-approval model transition. On the compact path
 		// the before-flush hook passed to handleCompactCommand already ran this (so
@@ -3905,6 +3995,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const planModePrompt = prompt.render(planModeApprovedPrompt, {
 			planFilePath: options.planFilePath,
 			contextPreserved: options.preserveContext === true,
+			implReview,
 		});
 		// Close the review overlay only now — after the async title write and plan
 		// prompt are prepared, immediately before the execution turn is queued. The
@@ -4080,6 +4171,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Exit goal mode first.");
 			return;
 		}
+
+		// Vibe mode supersedes a pending implementation review. A no-op on the
+		// reconcile re-entry path — #clearTransientModeState already cleared it.
+		await this.session.supersedeImplReview();
 
 		const vibeRegistry = VibeSessionRegistry.global();
 		const ownerScope = vibeRegistry.ownerScope(this.#vibeParentSession());
@@ -4743,6 +4838,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					preserveContext: choice !== "Approve and execute",
 					compactBeforeExecute: choice === "Approve and compact context",
 					executionModel,
+					debate: planState?.workflow === "debate",
 				});
 				if (executionDispatched) this.#planReviewAnnotationState.delete(annotationStateKey);
 			} catch (error) {

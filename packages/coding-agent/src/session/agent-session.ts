@@ -166,16 +166,25 @@ import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/approved-plan";
 import {
 	hashPlanContent,
+	type ImplReviewer,
+	ImplReviewGate,
 	PlanDebateGate,
 	type PlanDebateGateOutcome,
 	type PlanDebateReviewer,
 } from "../plan-mode/debate";
 import { listPlanFiles, readPlanFile } from "../plan-mode/plan-files";
-import { type PlanModeState, serializePlanModeState } from "../plan-mode/state";
+import {
+	type ImplReviewState,
+	type PlanModeState,
+	serializeImplReviewState,
+	serializePlanModeState,
+} from "../plan-mode/state";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
+import implReviewReminderPrompt from "../prompts/system/impl-review-reminder.md" with { type: "text" };
+import implReviewResultPrompt from "../prompts/system/impl-review-result.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import planDebateProposalResultPrompt from "../prompts/system/plan-debate-proposal-result.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
@@ -572,6 +581,9 @@ export class AgentSession {
 	#planModeState: PlanModeState | undefined;
 	readonly #planDebateGate: PlanDebateGate;
 	readonly #runPlanDebateReviewer?: PlanDebateReviewer;
+	#implReviewState: ImplReviewState | undefined;
+	readonly #implReviewGate: ImplReviewGate;
+	readonly #runImplReviewer?: ImplReviewer;
 	/** Session-scoped `/vision` override; undefined = follow persisted `inspect_image.mode`. */
 	#inspectImageModeOverride: InspectImageMode | undefined;
 	#vibeModeState: VibeModeState | undefined;
@@ -600,6 +612,8 @@ export class AgentSession {
 	#textOutputCommitted = true;
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
+	#implReviewReminderCount = 0;
+	#implReviewReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
 	#replanTitleRefreshInFlight: Promise<void> | undefined = undefined;
 	/** Resolved TITLE_SYSTEM.md override applied to every automatic session-title
@@ -1117,6 +1131,152 @@ export class AgentSession {
 		return listPlanFiles({ localProtocolOptions: this.#localProtocolOptions() });
 	}
 
+	#commitImplReviewState(state: ImplReviewState): void {
+		this.#implReviewState = state;
+		this.sessionManager.appendModeChange("impl_review", serializeImplReviewState(state));
+	}
+
+	/** Starts the post-approval implementation review contract for a debate plan. */
+	beginImplReview(
+		planFilePath: string,
+		options: { planHash: string; planTitle: string; restoreTools?: string[] },
+	): void {
+		this.#commitImplReviewState({
+			planFilePath,
+			planHash: options.planHash,
+			planTitle: options.planTitle,
+			phase: "implementing",
+			round: 0,
+			...(options.restoreTools ? { restoreTools: options.restoreTools } : {}),
+		});
+		this.#resetImplReviewReminders();
+	}
+
+	/** Commits an implementation-review state (interactive restore path). */
+	setImplReviewState(state: ImplReviewState): void {
+		this.#commitImplReviewState(state);
+	}
+
+	getImplReviewState(): ImplReviewState | undefined {
+		return this.#implReviewState;
+	}
+
+	/** Sets the in-memory state only; the persisted `impl_review` entry already exists (load/resume). */
+	restoreImplReviewState(state: ImplReviewState): void {
+		this.#implReviewState = state;
+	}
+
+	clearImplReviewState(options?: { record?: boolean }): void {
+		this.#implReviewState = undefined;
+		this.#resetImplReviewReminders();
+		if (options?.record) this.sessionManager.appendModeChange("none");
+	}
+
+	/** Abandons a pending implementation review before a competing mode takes over.
+	 *  Restores the recorded execution toolset; appends no entry — the caller's own
+	 *  following mode_change supersedes the persisted `impl_review` entry. */
+	async supersedeImplReview(): Promise<void> {
+		const state = this.#implReviewState;
+		if (!state) return;
+		if (state.restoreTools) await this.setActiveToolsByName(state.restoreTools);
+		// Drop the impl proposal slot so a stale `xd://propose` cannot reach a
+		// cleared review; a competing plan entry installs its own handler after.
+		this.setPlanProposalHandler(null);
+		this.clearImplReviewState();
+	}
+
+	/** Validate the approved plan bytes and run the implementation-review gate. */
+	async prepareImplReviewProposal(context: PlanProposalContext): Promise<AgentToolResult<unknown>> {
+		const state = this.#implReviewState;
+		if (!state) throw new ToolError("Implementation review is not active.");
+		const planContent = await this.#readPlanFile(state.planFilePath);
+		if (planContent === null || hashPlanContent(planContent) !== state.planHash) {
+			// Gate untouched, settle enforcement stays active: mutating the plan
+			// cannot bypass the contract, and consensus is impossible against
+			// altered bytes.
+			const guidance = prompt.render(implReviewResultPrompt, {
+				planMismatch: true,
+				planFilePath: state.planFilePath,
+			});
+			return { content: [{ type: "text", text: guidance }], details: { outcome: "plan_mismatch" } };
+		}
+		const reviewer: ImplReviewer =
+			this.#runImplReviewer ??
+			(async () => {
+				throw new Error("This session does not provide an implementation reviewer.");
+			});
+		const outcome = await this.#implReviewGate.propose({
+			planTitle: state.planTitle,
+			reviewer,
+			signal: context.signal,
+			proposalToolCallId: context.toolCallId,
+		});
+		if (outcome.outcome === "consensus") {
+			// The reviewer reads the plan by path while it runs; a mutation during
+			// that window would grant consensus against altered bytes. Re-verify
+			// before the verdict stands; on mismatch drop the tainted verdict and
+			// return to implementing so the cached consensus cannot be replayed.
+			const current = await this.#readPlanFile(state.planFilePath);
+			if (current === null || hashPlanContent(current) !== state.planHash) {
+				const live = this.#implReviewState;
+				if (live) {
+					this.#commitImplReviewState({
+						planFilePath: live.planFilePath,
+						planHash: live.planHash,
+						planTitle: live.planTitle,
+						round: live.round,
+						phase: "implementing",
+						...(live.restoreTools ? { restoreTools: live.restoreTools } : {}),
+					});
+				}
+				const guidance = prompt.render(implReviewResultPrompt, {
+					planMismatch: true,
+					planFilePath: state.planFilePath,
+				});
+				return { content: [{ type: "text", text: guidance }], details: { outcome: "plan_mismatch" } };
+			}
+		}
+		if (outcome.outcome === "consensus" || outcome.outcome === "deadlocked") {
+			this.#resetImplReviewReminders();
+			const live = this.#implReviewState;
+			// Return a deliberately write-inactive configuration to its normal
+			// shape once the review contract is settled.
+			if (live?.restoreTools) {
+				try {
+					await this.setActiveToolsByName(live.restoreTools);
+					const { restoreTools: _restoreTools, ...rest } = live;
+					this.#commitImplReviewState(rest);
+				} catch (error) {
+					// Never hide the terminal verdict behind a tool-restore failure;
+					// restoreTools stays committed so a later restore can retry.
+					logger.warn("Implementation review tool restoration failed", { error });
+				}
+			}
+		}
+		const round = "round" in outcome ? outcome.round : (this.#implReviewState?.round ?? 0);
+		const guidance = prompt.render(implReviewResultPrompt, {
+			consensus: outcome.outcome === "consensus",
+			changesRequested: outcome.outcome === "changes_requested",
+			deadlocked: outcome.outcome === "deadlocked",
+			reviewing: outcome.outcome === "reviewing",
+			failed: outcome.outcome === "failed",
+			round,
+			...(outcome.outcome === "changes_requested" || outcome.outcome === "deadlocked"
+				? { summary: outcome.summary, findings: outcome.findings }
+				: {}),
+			...(outcome.outcome === "failed" ? { error: outcome.error } : {}),
+		});
+		return { content: [{ type: "text", text: guidance }], details: { outcome: outcome.outcome, round } };
+	}
+
+	#resetImplReviewReminders(): void {
+		this.#implReviewReminderCount = 0;
+		this.#implReviewReminderAwaitingProgress = false;
+		// Drop any unconsumed forced decision so the next turn does not inherit
+		// a stale `required` tool choice.
+		this.#toolChoiceQueue.removeByLabel("impl-review-decision");
+	}
+
 	#codeModeState: { namespacesInfo?: unknown };
 
 	constructor(config: AgentSessionConfig) {
@@ -1128,6 +1288,12 @@ export class AgentSession {
 		this.#planDebateGate = new PlanDebateGate({
 			getState: () => this.#planModeState,
 			commitState: state => this.#commitPlanModeState(state),
+			maxRounds: this.settings.get("plan.debateMaxRounds"),
+		});
+		this.#runImplReviewer = config.runImplReviewer;
+		this.#implReviewGate = new ImplReviewGate({
+			getState: () => this.#implReviewState,
+			commitState: state => this.#commitImplReviewState(state),
 			maxRounds: this.settings.get("plan.debateMaxRounds"),
 		});
 		this.#modelRegistry = config.modelRegistry;
@@ -2911,6 +3077,9 @@ export class AgentSession {
 				await this.#goalRuntime.onToolCompleted(event.toolName);
 			}
 			this.#planModeReminderAwaitingProgress = false;
+			// The impl-review reminder allows "continue implementing", so any
+			// completed tool is progress.
+			this.#implReviewReminderAwaitingProgress = false;
 			const dispatch = writeDeviceDispatch(event.toolName, event.result);
 			const proposalReady =
 				dispatch?.tool === PROPOSE_DEVICE_NAME &&
@@ -2922,6 +3091,11 @@ export class AgentSession {
 			if (event.toolName === "ask" || proposalReady) {
 				this.#planModeReminderCount = 0;
 				this.#planModeReminderAwaitingProgress = false;
+			}
+			// Any completed impl proposal is a decision — no ready_for_approval
+			// requirement.
+			if (event.toolName === "ask" || (dispatch?.tool === PROPOSE_DEVICE_NAME && this.#implReviewState)) {
+				this.#implReviewReminderCount = 0;
 			}
 		}
 
@@ -3415,6 +3589,11 @@ export class AgentSession {
 				}
 				const planModeContinuationScheduled = await this.#enforcePlanModeDecisionAtSettle();
 				if (planModeContinuationScheduled) {
+					await emitAgentEndNotification({ willContinue: true });
+					return;
+				}
+				const implReviewContinuationScheduled = await this.#enforceImplReviewDecisionAtSettle();
+				if (implReviewContinuationScheduled) {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
@@ -5346,6 +5525,10 @@ export class AgentSession {
 		if (state?.enabled) {
 			this.#planReferenceSent = false;
 			this.#planReferencePath = state.planFilePath;
+			// Mutual-exclusion backstop: plan mode owns the proposal slot. Tool
+			// restoration is the hosts' job via supersedeImplReview() before they
+			// call setPlanModeState; this only guarantees the invariant.
+			this.#implReviewState = undefined;
 		} else {
 			this.#scrubPlanModeContextMessages();
 			this.#planModeReminderCount = 0;
@@ -5883,6 +6066,8 @@ export class AgentSession {
 			// A user turn owns the next decision; drop a queued forced choice from
 			// a reminder continuation this prompt just preempted.
 			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
+			// Same ownership rule for a pending implementation review.
+			this.#resetImplReviewReminders();
 		}
 
 		// If streaming, queue via steer() or followUp() based on option
@@ -7331,6 +7516,13 @@ export class AgentSession {
 		this.#disconnectFromAgent();
 		let advisorRecordersDetached = false;
 		await this.abort();
+
+		// A fresh session moves the `local://` root, so a pending implementation
+		// review could never resolve its plan again; supersede it (restores the
+		// pre-augmentation toolset and frees the proposal slot). Runs after
+		// disconnect/abort so no in-flight reviewer or turn observes the
+		// toolset mutation mid-stream.
+		await this.supersedeImplReview();
 		this.#cancelOwnAsyncJobs();
 		this.#closeAllProviderSessions("new session");
 		await this.#bash.flushPending();
@@ -7892,6 +8084,71 @@ export class AgentSession {
 			// If the continuation never runs (new prompt, dispose, compaction,
 			// handoff), the forced choice must not leak onto an unrelated turn.
 			onSkip: () => this.#toolChoiceQueue.removeByLabel("plan-mode-decision"),
+		});
+		return true;
+	}
+
+	async #enforceImplReviewDecisionAtSettle(): Promise<boolean> {
+		const state = this.#implReviewState;
+		const pending =
+			state?.phase === "implementing" || state?.phase === "changes_requested" || state?.phase === "failed";
+		if (!pending || this.#planModeState?.enabled) {
+			return false;
+		}
+		const assistantMessage = this.#findLastAssistantMessage();
+		if (!assistantMessage) {
+			return false;
+		}
+		if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
+			return false;
+		}
+
+		const calledDecisionTool = assistantMessage.content.some(
+			content => content.type === "toolCall" && (content.name === "ask" || isProposeToolCall(content)),
+		);
+		if (calledDecisionTool) {
+			this.#implReviewReminderCount = 0;
+			this.#implReviewReminderAwaitingProgress = false;
+			return false;
+		}
+
+		const hasToolCall = assistantMessage.content.some(content => content.type === "toolCall");
+		if (hasToolCall) {
+			return false;
+		}
+		if (this.#implReviewReminderAwaitingProgress) {
+			return false;
+		}
+		if (this.#implReviewReminderCount >= PLAN_MODE_REMINDER_MAX) {
+			logger.debug("Implementation review convergence: reminder cap reached; yielding to user");
+			return false;
+		}
+		const hasRequiredTools = this.#tools.registry.has("ask") && this.#tools.registry.has("write");
+		if (!hasRequiredTools) {
+			logger.warn("Implementation review enforcement skipped because ask/write tools are unavailable", {
+				activeToolNames: this.agent.state.tools.map(tool => tool.name),
+			});
+			return false;
+		}
+
+		this.#implReviewReminderCount++;
+		this.#implReviewReminderAwaitingProgress = true;
+		this.#toolChoiceQueue.pushOnce("required", { label: "impl-review-decision" });
+		const reminderMessage: Message = {
+			role: "developer",
+			content: [{ type: "text", text: implReviewReminderPrompt }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+
+		this.agent.appendMessage(reminderMessage);
+		this.sessionManager.appendMessage(reminderMessage);
+		this.#scheduleAgentContinue({
+			source: "impl-review-reminder",
+			generation: this.#promptGeneration,
+			// If the continuation never runs (new prompt, dispose, compaction,
+			// handoff), the forced choice must not leak onto an unrelated turn.
+			onSkip: () => this.#toolChoiceQueue.removeByLabel("impl-review-decision"),
 		});
 		return true;
 	}

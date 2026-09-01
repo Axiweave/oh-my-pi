@@ -25,6 +25,9 @@ The independent reviewer checks each submitted revision against the request, rep
 7. Human approval opens only for bytes that match the accepted SHA-256 hash.
 8. Any later plan edit invalidates consensus and returns the workflow to drafting.
 9. The user can exit through the existing plan-mode controls.
+10. "Approve and execute" starts the implementation phase under the same contract: the agent implements the approved plan, then submits the finished implementation through `xd://propose`.
+11. The independent reviewer accepts the implementation (consensus) or returns blocking findings; after the round cap the review escalates to the user.
+12. The `plan.implReview` setting (default on) controls the implementation review.
 
 The status line shows `Debate` while this workflow is active. Standard plan mode continues to show `Plan`.
 
@@ -302,6 +305,49 @@ After elicitation, ACP re-reads the plan and checks the hash and live consensus 
 
 This second check closes the time window between reviewer consensus and the user’s ACP response.
 
+## Implementation review
+
+A debate plan does not end at approval. After "Approve and execute", the session enters a post-approval implementation review that reuses the same machinery: the `xd://propose` device, the proposal-handler slot, the structured reviewer runner, the strict output schema, and the `plan.debateMaxRounds` cap. The `plan.implReview` setting (default `true`) turns the whole phase off.
+
+### State machine
+
+`ImplReviewState` lives beside the plan debate state and persists as an `impl_review` mode entry. Its phases:
+
+| Phase | Meaning |
+| --- | --- |
+| `implementing` | The agent executes the approved plan. |
+| `reviewing` | One reviewer owns the current submission. |
+| `changes_requested` | The reviewer returned blocking findings. |
+| `consensus` | The reviewer accepted the implementation. Terminal. |
+| `deadlocked` | The round cap was reached. Terminal; the agent reports to the user and stops resubmitting. |
+| `failed` | The review could not produce a valid decision. Retryable. |
+
+The state also stores the approved plan path, title, SHA-256 hash, round, and an optional `restoreTools` snapshot.
+
+### Plan-hash integrity
+
+Every submission first re-reads the approved plan file and compares its hash with the recorded consensus hash. A mutated or missing plan file returns plan-mismatch guidance without touching the gate: the agent must restore the exact approved bytes and resubmit. The review only ever runs against the approved plan.
+
+### Write transport
+
+A debate approval augments the execution toolset with the built-in `write` tool when it is inactive, so a device-only configuration can still submit through `xd://propose`. The pre-augmentation set persists as `restoreTools`; terminal outcomes and supersede paths restore it.
+
+### Reviewer
+
+The bundled [`prompts/agents/impl-reviewer.md`](../packages/coding-agent/src/prompts/agents/impl-reviewer.md) mirrors the plan reviewer: read-only tools, `@reviewer` then `@slow` model chain, strict caller-owned schema, IRC disabled. It judges the repository end state against the plan steps and the plan's Verification section; no diff is provided.
+
+### Convergence and settle enforcement
+
+`AgentSession` enforces the contract at settle time: while a review is pending, turns that end without progress receive a reminder, capped like plan mode, then a forced `ask`/`write` tool choice. Consensus and deadlock surface as agent guidance only; there is no approval popup, because the work already exists on disk.
+
+### Supersede policy
+
+Entering plan, debate, goal, or vibe mode while a review is pending abandons it uniformly: the toolset is restored, the proposal-handler slot is cleared, and the competing mode's own persisted entry supersedes `impl_review`.
+
+### Persistence and hosts
+
+Both hosts rehydrate a persisted `impl_review` entry on load, resume, and fork. Nonterminal phases re-activate the write transport; a persisted `reviewing` phase restores as retryable `failed`; an invalid entry or a disabled `plan.enabled`/`plan.implReview` clears to `none`. The interactive TUI reconciles in `init`; ACP reconciles in session registration and gates its debate-approval branch the same way. A new session (`/clear`, `/drop`) supersedes a pending review before the `local://` root moves. The gate rehashes the plan after the reviewer returns: a plan mutated mid-review drops the verdict and returns to `implementing`.
+
 ## Failure behavior
 
 | Failure | Result |
@@ -315,6 +361,9 @@ This second check closes the time window between reviewer consensus and the user
 | Another attempt owns the state | Return a stale failure without changing live state. |
 | Plan changes after consensus | Return to `drafting` and require another review. |
 | Plan file disappears before approval | Invalidate consensus and keep debate mode active. |
+| Review deadlocks at the round cap | Terminal `deadlocked`; the agent reports the unresolved findings to the user. |
+| Plan, goal, or vibe entry during a pending implementation review | The review is superseded; the toolset is restored. |
+| Plan file mutates during the implementation phase | Plan-mismatch guidance; the reviewer never runs against altered bytes. |
 
 The system never falls back to unreviewed approval. The user must retry, revise the plan, or exit debate mode.
 
@@ -350,9 +399,9 @@ A persisted `consensus` phase can outlive the accepted bytes. Every approval pat
 
 The canonical local file already stores the plan. Persisting another copy would increase session size and create competing sources of truth.
 
-### Fixed review limit
+### Unlimited review rounds
 
-The current design has no round limit. Cached unchanged rejections prevent accidental paid loops, and each new round requires changed bytes.
+Plan review originally had no round limit; cached unchanged rejections prevented accidental paid loops. The shipped design caps distinct revisions at `plan.debateMaxRounds` (default 3). Reaching the cap records a terminal `deadlocked` state and escalates the unresolved review to the human instead of looping model against model forever.
 
 ## Verification contracts
 
@@ -372,6 +421,9 @@ The focused tests protect these observable contracts:
 - exact-byte ACP approval
 - reviewer tool restrictions and strict schema ownership
 - debate status-line labeling
+- implementation-review gate convergence, deadlock, and integrity
+- implementation-review settle enforcement and reminder cap
+- implementation-review host wiring (interactive and ACP), restore, and supersede
 
 The main gate tests live in [`test/plan-mode/debate.test.ts`](../packages/coding-agent/test/plan-mode/debate.test.ts). Host contracts live beside the existing interactive, ACP, slash-command, and event-controller tests.
 
