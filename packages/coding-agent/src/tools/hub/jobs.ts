@@ -640,7 +640,7 @@ export function jobsRenderResult(
 						const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
 						// Task jobs label themselves with their agent id, which is also
 						// the job id — drop the id column instead of stuttering it twice.
-						const idPart = job.label.trim() === job.id ? "" : ` ${uiTheme.fg("muted", job.id)}`;
+						const idPart = job.label.trim() === job.id ? "" : `  ${uiTheme.fg("muted", job.id)}`;
 						const rawLabelLines = (job.label || "(no label)").split(/\r?\n/);
 						const maxLabelLines = expanded ? LABEL_LINES_EXPANDED : LABEL_LINES_COLLAPSED;
 						const visibleLabelLines = rawLabelLines
