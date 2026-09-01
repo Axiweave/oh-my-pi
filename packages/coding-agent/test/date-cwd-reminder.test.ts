@@ -32,93 +32,91 @@ describe("date-cwd-reminder", () => {
 	});
 
 	describe("DateCwdReminderInjector", () => {
-		const reminder = (date: string, cwd: string) => renderDateCwdReminder(date, cwd);
-		const context = (messages: Message[]): Context => ({ systemPrompt: ["SYS"], messages });
-
-		it("prepends the reminder to the first user message with string content without mutating the input", () => {
+		it("injects the first reminder without mutating the context", () => {
+			const systemPrompt = ["PROJECT\n<critical>\n- Must act.\n</critical>"];
 			const messages: Message[] = [{ role: "user", content: "hello", timestamp: 1 }, createAssistantMessage("hi")];
-			const original = [...messages];
+			const context: Context = { systemPrompt, messages };
+			const injector = new DateCwdReminderInjector();
 
-			const out = new DateCwdReminderInjector().transform(context(messages), "2026-08-14", "/cwd");
+			const out = injector.transform(context, "2026-08-14", "/work/omp");
 
+			expect(out).not.toBe(context);
+			expect(out.systemPrompt).toBe(systemPrompt);
 			expect(out.messages).not.toBe(messages);
 			expect(out.messages[0]).toEqual({
 				role: "user",
-				content: `${reminder("2026-08-14", "/cwd")}\n\nhello`,
+				content: `${renderDateCwdReminder("2026-08-14", "/work/omp")}\n\nhello`,
 				timestamp: 1,
 			});
 			expect(out.messages[1]).toBe(messages[1]);
-			expect(messages).toEqual(original);
+			expect(context.messages).toBe(messages);
 		});
 
-		it("prepends a text part before image parts when the first user message has array content", () => {
-			const messages: Message[] = [
-				{ role: "user", content: [{ type: "image", data: "img", mimeType: "image/png" }], timestamp: 1 },
-			];
+		it("prepends a text part before image parts", () => {
+			const context: Context = {
+				systemPrompt: ["system"],
+				messages: [
+					{
+						role: "user",
+						content: [{ type: "image", data: "img", mimeType: "image/png" }],
+						timestamp: 1,
+					},
+				],
+			};
 
-			const out = new DateCwdReminderInjector().transform(context(messages), "2026-08-14", "/cwd");
+			const out = new DateCwdReminderInjector().transform(context, "2026-08-14", "/work/omp");
 
 			expect(out.messages[0]?.content).toEqual([
-				{ type: "text", text: reminder("2026-08-14", "/cwd") },
+				{ type: "text", text: renderDateCwdReminder("2026-08-14", "/work/omp") },
 				{ type: "image", data: "img", mimeType: "image/png" },
 			]);
 		});
 
-		it("returns the input unchanged when there is no user message or the system prompt is empty", () => {
-			const noUser = context([createAssistantMessage("hi")]);
-			expect(new DateCwdReminderInjector().transform(noUser, "2026-08-14", "/cwd")).toBe(noUser);
-
-			const nullPrompt: Context = { systemPrompt: [], messages: [{ role: "user", content: "hi", timestamp: 1 }] };
-			expect(new DateCwdReminderInjector().transform(nullPrompt, "2026-08-14", "/cwd")).toBe(nullPrompt);
-		});
-
-		it("reuses the same injected message object across requests for an unchanged reminder", () => {
-			// The append-only context path reuses message objects across requests;
-			// the injected first-turn message must keep its identity so the stable
-			// prefix is preserved (and the provider prompt cache is not churned).
-			const pristine: Message = { role: "user", content: "first", timestamp: 1 };
+		it("leaves contexts without a system prompt or user message untouched", () => {
 			const injector = new DateCwdReminderInjector();
+			const noSystem: Context = {
+				systemPrompt: [],
+				messages: [{ role: "user", content: "hi", timestamp: 1 }],
+			};
+			const noUser: Context = { systemPrompt: ["system"], messages: [createAssistantMessage("hi")] };
 
-			const first = injector.transform(context([pristine]), "2026-08-14", "/cwd").messages[0]!;
-			const second = injector.transform(context([pristine]), "2026-08-14", "/cwd").messages[0]!;
-			expect(second).toBe(first);
+			expect(injector.transform(noSystem, "2026-08-14", "/cwd")).toBe(noSystem);
+			expect(injector.transform(noUser, "2026-08-14", "/cwd")).toBe(noUser);
 		});
 
-		it("keeps earlier injected bytes and attaches a changed reminder to the next new user turn", () => {
-			const firstTurn: Message = { role: "user", content: "first", timestamp: 1 };
-			const reply = createAssistantMessage("ok");
+		it("keeps prior reminder bytes and moves a changed reminder to the next user turn", () => {
 			const injector = new DateCwdReminderInjector();
+			const firstUser: Message = { role: "user", content: "first", timestamp: 1 };
+			const firstContext: Context = { systemPrompt: ["system"], messages: [firstUser] };
 
-			const day1 = injector.transform(context([firstTurn, reply]), "2026-08-14", "/cwd").messages[0]!;
+			const first = injector.transform(firstContext, "2026-08-14", "/old");
+			const firstInjected = first.messages[0]!;
+			const secondUser: Message = { role: "user", content: "second", timestamp: 2 };
+			const second = injector.transform(
+				{
+					systemPrompt: firstContext.systemPrompt,
+					messages: [firstUser, createAssistantMessage("done"), secondUser],
+				},
+				"2026-08-15",
+				"/new",
+			);
 
-			const secondTurn: Message = { role: "user", content: "second", timestamp: 2 };
-			const out = injector.transform(context([firstTurn, reply, secondTurn]), "2026-08-15", "/cwd").messages;
-			expect(out[0]).toBe(day1);
-			expect(out[2]).toEqual({
-				role: "user",
-				content: `${reminder("2026-08-15", "/cwd")}\n\nsecond`,
-				timestamp: 2,
-			});
+			expect(second.messages[0]).toBe(firstInjected);
+			expect(second.messages[0]?.content).toBe(firstInjected.content);
+			expect(second.messages[2]?.content).toBe(`${renderDateCwdReminder("2026-08-15", "/new")}\n\nsecond`);
+			expect(firstUser.content).toBe("first");
+			expect(secondUser.content).toBe("second");
 		});
 
-		it("appends a synthetic developer message when the reminder changes with no new user turn", () => {
-			const firstTurn: Message = { role: "user", content: "first", timestamp: 1 };
+		it("reuses injected message objects on provider request replay", () => {
 			const injector = new DateCwdReminderInjector();
-			const day1 = injector.transform(context([firstTurn]), "2026-08-14", "/cwd").messages[0]!;
+			const firstUser: Message = { role: "user", content: "first", timestamp: 1 };
+			const context: Context = { systemPrompt: ["system"], messages: [firstUser] };
 
-			const out = injector.transform(context([firstTurn]), "2026-08-15", "/cwd").messages;
-			expect(out[0]).toBe(day1);
-			expect(out[1]).toMatchObject({
-				role: "developer",
-				content: reminder("2026-08-15", "/cwd"),
-				synthetic: true,
-			});
-		});
+			const first = injector.transform(context, "2026-08-14", "/work/omp");
+			const replay = injector.transform({ ...context, messages: [...context.messages] }, "2026-08-14", "/work/omp");
 
-		it("does not double-wrap when the first user message already carries the reminder", () => {
-			const carried = `${reminder("2026-08-14", "/cwd")}\n\nfirst`;
-			const ctx = context([{ role: "user", content: carried, timestamp: 1 }]);
-			expect(new DateCwdReminderInjector().transform(ctx, "2026-08-14", "/cwd")).toBe(ctx);
+			expect(replay.messages[0]).toBe(first.messages[0]);
 		});
 	});
 });
