@@ -4,7 +4,7 @@
 
 ### Added
 
-- The working row now shows the elapsed time of the current turn on its right edge (`42s`, `5m3s`, `1h1m30s`); toggle with `tui.workingTimer`, hidden when the `pi` status brand already shows a turn timer.
+- The working row now shows the elapsed time of the current turn on its right edge (`42s`, `5m3s`, `1h1m30s`); toggle with `tui.workingTimer`, delay with `tui.workingTimerMinSeconds`, hidden when the `pi` status brand already shows a turn timer.
 
 ### Fixed
 

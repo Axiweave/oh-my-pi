@@ -680,13 +680,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return `\x1b[2;3m${sanitizeStatusText(name)}\x1b[23;22m`;
 	}
 	/** Per-turn elapsed clock for the working row. Hidden by `tui.workingTimer`,
-	 * between turns, and when the status line's `pi` brand segment already
-	 * renders a turn timer. */
+	 * until `tui.workingTimerMinSeconds` has elapsed, between turns, and when
+	 * the status line's `pi` brand segment already renders a turn timer. */
 	#workingTimerTrailer(): string | undefined {
 		if (!settings.get("tui.workingTimer")) return undefined;
 		if (this.statusLine.showsWorkingBrand()) return undefined;
 		const elapsed = this.statusLine.getTurnElapsedMs();
 		if (elapsed === null) return undefined;
+		if (elapsed < settings.get("tui.workingTimerMinSeconds") * 1000) return undefined;
 		return `\x1b[2m${formatElapsed(elapsed)}\x1b[22m`;
 	}
 	/** Right-docked working-row suffix: band-mode session title, then the turn

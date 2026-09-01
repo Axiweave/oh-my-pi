@@ -1408,6 +1408,22 @@ export const SETTINGS_SCHEMA = {
 				"Show the elapsed time of the current turn on the right of the working row while the agent runs; hidden when the status line's pi brand segment already shows a turn timer",
 		},
 	},
+	"tui.workingTimerMinSeconds": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Working Row Timer Delay",
+			description: "Seconds a turn must run before the working row timer appears; 0 shows it immediately",
+			options: [
+				{ value: "0", label: "Always" },
+				{ value: "10", label: "10 seconds" },
+				{ value: "30", label: "30 seconds" },
+				{ value: "60", label: "1 minute" },
+			],
+		},
+	},
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Model

@@ -245,9 +245,19 @@ describe("InteractiveMode working activity", () => {
 			settings.override("tui.workingTimer", false);
 			mode.loadingAnimation?.setMessage("Timer off");
 			expect(Bun.stripANSI(renderLoader(mode))).not.toContain("1h1m30s");
+
+			settings.clearOverride("tui.workingTimer");
+			settings.override("tui.workingTimerMinSeconds", 30);
+			now.mockReturnValue(1_000_000 + 29_000);
+			mode.loadingAnimation?.setMessage("Timer pending");
+			expect(Bun.stripANSI(renderLoader(mode))).not.toContain("29s");
+			now.mockReturnValue(1_000_000 + 30_000);
+			mode.loadingAnimation?.setMessage("Timer shown");
+			expect(Bun.stripANSI(renderLoader(mode))).toContain("30s");
 		} finally {
 			mode.statusLine.markActivityEnd();
 			settings.clearOverride("tui.workingTimer");
+			settings.clearOverride("tui.workingTimerMinSeconds");
 			settings.clearOverride("composerStyle.footerMode");
 			mode.syncComposerShape();
 		}
