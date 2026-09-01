@@ -264,15 +264,14 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		expect(priorBlocks.find(b => b.type === "redacted_thinking")).toBeUndefined();
 	});
 
-	it("demotes invalid official Anthropic prior signatures to bare Claude prose after a model switch", () => {
+	it("preserves same-deployment cross-model prior signatures for the server-side binding check", () => {
 		// official Anthropic → official Anthropic sibling, with the signed turn
-		// no longer latest. The source signature is bound to the issuing
-		// Anthropic model, so replaying it after the switch must not emit
-		// native thinking or `<thinking>` tags — Anthropic's
-		// `reasoning_extraction` classifier flags wrapped chain-of-thought
-		// across the whole Claude family (Fable refuses outright,
-		// Opus/Sonnet/Haiku/Mythos leak it as visible reasoning). Every
-		// Anthropic-dialect target therefore receives bare assistant prose.
+		// no longer latest. Anthropic binds reasoning signatures to its
+		// deployment and model lineage; first-party deployments accept
+		// same-deployment cross-model signatures and perform their own one-way
+		// model compatibility check (thinking-binding-controls), so the replay
+		// keeps the native thinking block and its signature instead of
+		// stripping and demoting to prose.
 		const cases = [
 			{ id: "claude-opus-4-8", name: "Claude Opus 4.8" },
 			{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
@@ -288,9 +287,9 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				name: targetCase.name,
 				baseUrl: "https://api.anthropic.com",
 			});
-			// Source model differs from the target so the transition triggers
-			// signature stripping + demotion. Pick a source with a different
-			// bare id from the target regardless of which target we're on.
+			// Source model differs from the target so the transition exercises the
+			// same-deployment signature path. Pick a source with a different bare
+			// id from the target regardless of which target we're on.
 			const sourceModel = targetCase.id === "claude-sonnet-4-6" ? "claude-opus-4-8" : "claude-sonnet-4-6";
 			const reasoning = `Need to preserve the plan while switching to ${targetCase.name}.`;
 			const messages: Message[] = [
@@ -315,14 +314,14 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			const assistants = params.filter(p => p.role === "assistant");
 			expect(assistants).toHaveLength(2);
 			const priorBlocks = assistants[0].content as WireBlock[];
+			const thinking = priorBlocks.find(b => b.type === "thinking") as
+				| { type: "thinking"; thinking: string; signature: string }
+				| undefined;
+			expect(thinking?.thinking).toBe(reasoning);
+			expect(thinking?.signature).toBe("sig_source");
+			// No demoted prose duplicate of the reasoning may ride alongside.
 			const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
-			expect(text?.text).toBe(renderDemotedThinking(targetCase.id, reasoning));
-			expect(text?.text).toBe(reasoning);
-			expect(text?.text).not.toContain("<thinking>");
-			expect(text?.text).not.toContain("</thinking>");
-			expect(text?.text).not.toContain("<think>");
-			expect(text?.text).not.toContain("</think>");
-			expect(priorBlocks.find(b => b.type === "thinking")).toBeUndefined();
+			expect(text).toBeUndefined();
 		}
 	});
 

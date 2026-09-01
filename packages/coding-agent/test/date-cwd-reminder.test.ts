@@ -7,11 +7,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import {
-	injectDateCwdReminder,
-	renderDateCwdReminder,
-	withDateCwdReminder,
-} from "@oh-my-pi/pi-coding-agent/session/date-cwd-reminder";
+import { DateCwdReminderInjector, renderDateCwdReminder } from "@oh-my-pi/pi-coding-agent/session/date-cwd-reminder";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { formatLocalCalendarDate } from "@oh-my-pi/pi-coding-agent/utils/local-date";
 import { normalizePromptPath } from "@oh-my-pi/pi-coding-agent/utils/prompt-path";
@@ -35,95 +31,94 @@ describe("date-cwd-reminder", () => {
 		});
 	});
 
-	describe("injectDateCwdReminder", () => {
+	describe("DateCwdReminderInjector", () => {
+		const reminder = (date: string, cwd: string) => renderDateCwdReminder(date, cwd);
+		const context = (messages: Message[]): Context => ({ systemPrompt: ["SYS"], messages });
+
 		it("prepends the reminder to the first user message with string content without mutating the input", () => {
 			const messages: Message[] = [{ role: "user", content: "hello", timestamp: 1 }, createAssistantMessage("hi")];
 			const original = [...messages];
 
-			const out = injectDateCwdReminder(messages, "<system-reminder>x</system-reminder>");
+			const out = new DateCwdReminderInjector().transform(context(messages), "2026-08-14", "/cwd");
 
-			expect(out).not.toBe(messages);
-			expect(out[0]).toEqual({
+			expect(out.messages).not.toBe(messages);
+			expect(out.messages[0]).toEqual({
 				role: "user",
-				content: "<system-reminder>x</system-reminder>\n\nhello",
+				content: `${reminder("2026-08-14", "/cwd")}\n\nhello`,
 				timestamp: 1,
 			});
-			expect(out[1]).toBe(messages[1]);
+			expect(out.messages[1]).toBe(messages[1]);
 			expect(messages).toEqual(original);
 		});
 
 		it("prepends a text part before image parts when the first user message has array content", () => {
 			const messages: Message[] = [
-				{
-					role: "user",
-					content: [{ type: "image", data: "img", mimeType: "image/png" }],
-					timestamp: 1,
-				},
+				{ role: "user", content: [{ type: "image", data: "img", mimeType: "image/png" }], timestamp: 1 },
 			];
 
-			const out = injectDateCwdReminder(messages, "<system-reminder>x</system-reminder>");
+			const out = new DateCwdReminderInjector().transform(context(messages), "2026-08-14", "/cwd");
 
-			expect(out[0]?.content).toEqual([
-				{ type: "text", text: "<system-reminder>x</system-reminder>" },
+			expect(out.messages[0]?.content).toEqual([
+				{ type: "text", text: reminder("2026-08-14", "/cwd") },
 				{ type: "image", data: "img", mimeType: "image/png" },
 			]);
 		});
 
-		it("returns the input unchanged when there is no user message", () => {
-			const messages: Message[] = [createAssistantMessage("hi")];
+		it("returns the input unchanged when there is no user message or the system prompt is empty", () => {
+			const noUser = context([createAssistantMessage("hi")]);
+			expect(new DateCwdReminderInjector().transform(noUser, "2026-08-14", "/cwd")).toBe(noUser);
 
-			expect(injectDateCwdReminder(messages, "<system-reminder>x</system-reminder>")).toBe(messages);
-			expect(injectDateCwdReminder([], "<system-reminder>x</system-reminder>")).toEqual([]);
+			const nullPrompt: Context = { systemPrompt: [], messages: [{ role: "user", content: "hi", timestamp: 1 }] };
+			expect(new DateCwdReminderInjector().transform(nullPrompt, "2026-08-14", "/cwd")).toBe(nullPrompt);
 		});
 
-		it("reuses the same injected message object for the same pristine first user message and reminder", () => {
-			// The append-only context path hands back fresh array copies every turn
-			// but reuses the same message objects; the injected first-turn message
-			// must keep its identity so the stable prefix is preserved (and the
-			// provider prompt cache is not churned by fresh clones).
+		it("reuses the same injected message object across requests for an unchanged reminder", () => {
+			// The append-only context path reuses message objects across requests;
+			// the injected first-turn message must keep its identity so the stable
+			// prefix is preserved (and the provider prompt cache is not churned).
 			const pristine: Message = { role: "user", content: "first", timestamp: 1 };
-			const reminder = "<system-reminder>x</system-reminder>";
+			const injector = new DateCwdReminderInjector();
 
-			const first = injectDateCwdReminder([pristine], reminder)[0]!;
-			const second = injectDateCwdReminder([pristine], reminder)[0]!;
+			const first = injector.transform(context([pristine]), "2026-08-14", "/cwd").messages[0]!;
+			const second = injector.transform(context([pristine]), "2026-08-14", "/cwd").messages[0]!;
 			expect(second).toBe(first);
+		});
 
-			// A changed reminder (e.g. midnight rollover) must re-inject fresh.
-			const refreshed = injectDateCwdReminder([pristine], "<system-reminder>y</system-reminder>")[0]!;
-			expect(refreshed).not.toBe(first);
-			expect(refreshed.content).toContain("y");
+		it("keeps earlier injected bytes and attaches a changed reminder to the next new user turn", () => {
+			const firstTurn: Message = { role: "user", content: "first", timestamp: 1 };
+			const reply = createAssistantMessage("ok");
+			const injector = new DateCwdReminderInjector();
+
+			const day1 = injector.transform(context([firstTurn, reply]), "2026-08-14", "/cwd").messages[0]!;
+
+			const secondTurn: Message = { role: "user", content: "second", timestamp: 2 };
+			const out = injector.transform(context([firstTurn, reply, secondTurn]), "2026-08-15", "/cwd").messages;
+			expect(out[0]).toBe(day1);
+			expect(out[2]).toEqual({
+				role: "user",
+				content: `${reminder("2026-08-15", "/cwd")}\n\nsecond`,
+				timestamp: 2,
+			});
+		});
+
+		it("appends a synthetic developer message when the reminder changes with no new user turn", () => {
+			const firstTurn: Message = { role: "user", content: "first", timestamp: 1 };
+			const injector = new DateCwdReminderInjector();
+			const day1 = injector.transform(context([firstTurn]), "2026-08-14", "/cwd").messages[0]!;
+
+			const out = injector.transform(context([firstTurn]), "2026-08-15", "/cwd").messages;
+			expect(out[0]).toBe(day1);
+			expect(out[1]).toMatchObject({
+				role: "developer",
+				content: reminder("2026-08-15", "/cwd"),
+				synthetic: true,
+			});
 		});
 
 		it("does not double-wrap when the first user message already carries the reminder", () => {
-			const reminder = "<system-reminder>x</system-reminder>";
-			const messages: Message[] = [{ role: "user", content: `${reminder}\n\nfirst`, timestamp: 1 }];
-
-			expect(injectDateCwdReminder(messages, reminder)).toBe(messages);
-		});
-	});
-
-	describe("withDateCwdReminder", () => {
-		it("leaves NULL_PROMPT-style contexts (empty system prompt) untouched", () => {
-			const context: Context = { systemPrompt: [], messages: [{ role: "user", content: "hi", timestamp: 1 }] };
-			expect(withDateCwdReminder(context, "2026-08-14", "/cwd")).toBe(context);
-		});
-
-		it("injects the reminder into the first user message and keeps the system prompt bytes", () => {
-			const systemPrompt = ["PROJECT\n<critical>\n- Must act.\n</critical>"];
-			const context: Context = {
-				systemPrompt,
-				messages: [{ role: "user", content: "do the thing", timestamp: 1 }],
-			};
-
-			const out = withDateCwdReminder(context, "2026-08-14", "/work/omp");
-
-			expect(out).not.toBe(context);
-			expect(out.systemPrompt).toBe(systemPrompt);
-			expect(out.messages[0]).toEqual({
-				role: "user",
-				content: `${renderDateCwdReminder("2026-08-14", "/work/omp")}\n\ndo the thing`,
-				timestamp: 1,
-			});
+			const carried = `${reminder("2026-08-14", "/cwd")}\n\nfirst`;
+			const ctx = context([{ role: "user", content: carried, timestamp: 1 }]);
+			expect(new DateCwdReminderInjector().transform(ctx, "2026-08-14", "/cwd")).toBe(ctx);
 		});
 	});
 });

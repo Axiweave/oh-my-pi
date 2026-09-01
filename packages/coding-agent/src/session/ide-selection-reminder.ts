@@ -18,12 +18,11 @@
  * disambiguate same-named files in different directories; UI surfaces (the
  * status line badge) basename it separately for display.
  */
-import type { Context } from "@oh-my-pi/pi-ai";
+import type { Context, Message } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { IDESelection } from "../mcp/ide-selection";
 import ideOpenedFileTemplate from "../prompts/system/ide-opened-file.md" with { type: "text" };
 import ideSelectionTemplate from "../prompts/system/ide-selection.md" with { type: "text" };
-import { injectDateCwdReminder } from "./date-cwd-reminder";
 
 const MAX_SELECTION_LENGTH = 2000;
 
@@ -49,6 +48,41 @@ export function renderIdeOpenedFileReminder(filePath: string): string {
 }
 
 /**
+ * Stateless first-user-message injector (memoized on the pristine message so
+ * the append-only context path sees a stable identity for an unchanged
+ * reminder). Formerly `injectDateCwdReminder`; the date/cwd path moved to the
+ * stateful `DateCwdReminderInjector`, but the IDE reminder is inherently
+ * volatile, so it keeps the stateless prepend.
+ */
+const injectCache = new WeakMap<Message, { reminder: string; injected: Message }>();
+
+function injectFirstUserReminder(messages: Message[], reminder: string): Message[] {
+	const index = messages.findIndex(message => message.role === "user");
+	if (index < 0) return messages;
+	const first = messages[index]!;
+	if (typeof first.content === "string") {
+		if (first.content.startsWith(reminder)) return messages;
+	} else if (first.content[0]?.type === "text" && first.content[0].text === reminder) {
+		return messages;
+	}
+	const cached = injectCache.get(first);
+	if (cached !== undefined && cached.reminder === reminder) {
+		const out = messages.slice();
+		out[index] = cached.injected;
+		return out;
+	}
+	const content =
+		typeof first.content === "string"
+			? `${reminder}\n\n${first.content}`
+			: ([{ type: "text", text: reminder }, ...first.content] as Message["content"]);
+	const injected = { ...first, content } as Message;
+	injectCache.set(first, { reminder, injected });
+	const out = messages.slice();
+	out[index] = injected;
+	return out;
+}
+
+/**
  * Prepends an IDE reminder to the first user message of `context`, returning
  * a new context. A non-empty `selection` wins; otherwise `openedFile` (the
  * file currently open with no selection) renders a lighter reminder. Returns
@@ -64,6 +98,6 @@ export function withIdeSelectionReminder(
 	if (!context.systemPrompt || context.systemPrompt.length === 0) return context;
 	if (context.messages.length === 0) return context;
 	const reminder = selection ? renderIdeSelectionReminder(selection) : renderIdeOpenedFileReminder(openedFile!);
-	const messages = injectDateCwdReminder(context.messages, reminder);
+	const messages = injectFirstUserReminder(context.messages, reminder);
 	return messages === context.messages ? context : { ...context, messages };
 }

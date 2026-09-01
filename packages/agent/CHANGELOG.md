@@ -6,6 +6,12 @@
 
 - Added removable message-context transforms so hosts can apply session-specific provider filtering after agent construction.
 
+## [18.0.11] - 2026-08-29
+
+### Fixed
+
+- Fixed agent startup and context compaction failures for models with unrecognized tokenizer encodings.
+
 ## [18.0.10] - 2026-08-28
 
 ### Added

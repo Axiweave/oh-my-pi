@@ -63,9 +63,7 @@ import { theme } from "../../modes/theme/theme";
 import { hashPlanContent } from "../../plan-mode/debate";
 import { type PlanModeState, parseImplReviewState, serializePlanModeState } from "../../plan-mode/state";
 import acpPlanApprovedPrompt from "../../prompts/system/acp-plan-approved.md" with { type: "text" };
-import planDebateConsensusInvalidatedPrompt from "../../prompts/system/plan-debate-consensus-invalidated.md" with {
-	type: "text",
-};
+import planDebateConsensusInvalidatedPrompt from "../../prompts/system/plan-debate-consensus-invalidated.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { BlobStore, resolveImageDataSync } from "../../session/blob-store";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -280,14 +278,12 @@ function buildAcpSpeechModelsCatalog(): Record<string, unknown> {
 			speechVoiceSetting: "speech.voice",
 			defaultModel: DEFAULT_TTS_LOCAL_MODEL_KEY,
 			defaultVoice: DEFAULT_TTS_VOICE,
-			models: TTS_LOCAL_MODELS.map(
-				({ key, label, description, voices: modelVoices }): AcpSpeechTtsModelOption => ({
-					value: key,
-					label,
-					description,
-					voices: modelVoices.map(({ id, label: voiceLabel }) => ({ value: id, label: voiceLabel })),
-				}),
-			),
+			models: TTS_LOCAL_MODELS.map(({ key, label, description, voices: modelVoices }): AcpSpeechTtsModelOption => ({
+				value: key,
+				label,
+				description,
+				voices: modelVoices.map(({ id, label: voiceLabel }) => ({ value: id, label: voiceLabel })),
+			})),
 			voices,
 		},
 	};

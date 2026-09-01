@@ -941,12 +941,10 @@ describe("ACP agent", () => {
 	});
 
 	it("keeps debate mode active and skips elicitation when the reviewer requests changes", async () => {
-		const elicit = vi.fn(
-			async (): Promise<CreateElicitationResponse> => ({
-				action: "accept",
-				content: { value: "Approve and execute" },
-			}),
-		);
+		const elicit = vi.fn(async (): Promise<CreateElicitationResponse> => ({
+			action: "accept",
+			content: { value: "Approve and execute" },
+		}));
 		const harness = await createHarness({ elicitationHandler: elicit });
 		Settings.instance.set("plan.enabled", true);
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
