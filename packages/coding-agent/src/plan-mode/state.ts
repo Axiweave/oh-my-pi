@@ -33,6 +33,12 @@ export type PlanDebateState =
 			summary: string;
 			findings: PlanDebateFinding[];
 	  })
+	| (PlanDebateStateBase & {
+			phase: "deadlocked";
+			planHash: string;
+			summary: string;
+			findings: PlanDebateFinding[];
+	  })
 	| (PlanDebateStateBase & { phase: "consensus"; planHash: string; summary: string })
 	| (PlanDebateStateBase & { phase: "failed"; planHash: string; error: string });
 
@@ -58,7 +64,7 @@ const planDebateFindingSchema = type({
 	evidence: planDebateEvidenceSchema.array(),
 });
 const serializedDebateStateSchema = type({
-	phase: "'drafting' | 'reviewing' | 'changes_requested' | 'consensus' | 'failed'",
+	phase: "'drafting' | 'reviewing' | 'changes_requested' | 'deadlocked' | 'consensus' | 'failed'",
 	round: "number.integer >= 0",
 	"planHash?": "string > 0",
 	"activeReviewId?": "string > 0",
@@ -96,6 +102,15 @@ function parseDebateState(value: typeof serializedDebateStateSchema.infer): Plan
 			if (!value.planHash || value.summary === undefined || !value.findings?.length) return undefined;
 			return {
 				phase: "changes_requested",
+				...common,
+				planHash: value.planHash,
+				summary: value.summary,
+				findings: value.findings,
+			};
+		case "deadlocked":
+			if (!value.planHash || value.summary === undefined || !value.findings?.length) return undefined;
+			return {
+				phase: "deadlocked",
 				...common,
 				planHash: value.planHash,
 				summary: value.summary,

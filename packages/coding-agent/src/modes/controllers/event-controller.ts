@@ -1812,6 +1812,7 @@ export class EventController {
 						...("consensusHash" in details && typeof details.consensusHash === "string"
 							? { consensusHash: details.consensusHash }
 							: {}),
+						...("deadlocked" in details && details.deadlocked === true ? { deadlocked: true } : {}),
 					})
 					.catch(err => {
 						logger.warn("Plan approval dispatch failed", {

@@ -73,6 +73,7 @@ New request primary; existing plan reference only. NEVER reconcile old plan whil
 4. **Verify** — check each finding against the repository and user request.
 5. **Revise** — update the same plan and resubmit changed bytes.
 6. **Escalate** — use `{{askToolName}}` only when a finding requires a user decision.
+7. **Deadlock** — after the configured round cap, an unresolved review escalates to human approval with the reviewer's findings attached; wait for the human decision instead of resubmitting unchanged bytes.
 </procedure>
 {{else}}
 {{#if iterative}}

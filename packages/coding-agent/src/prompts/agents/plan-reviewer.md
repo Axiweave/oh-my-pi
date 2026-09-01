@@ -18,3 +18,9 @@ Return `consensus` only when the plan is complete, feasible, internally consiste
 Return `changes_requested` only for blocking defects.
 Each finding must cite repository evidence and state the required plan change.
 Do not report style preferences or optional improvements.
+
+Convergence rules for later rounds:
+
+- On round 2 and later, first re-check each prior finding against the current plan and drop the resolved ones.
+- Do not renew a resolved finding without new repository evidence.
+- Hold each new finding to the same blocking-defect bar as round 1; the round cap escalates an unresolved review to the human, so never soften a verdict to force agreement.

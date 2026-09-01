@@ -511,7 +511,7 @@ export type PlanProposalOutcome =
 			planHash: string;
 			approval: PlanApprovalDetails;
 	  }
-	| (Exclude<PlanDebateGateOutcome, { outcome: "ready_for_approval" }> & { guidance: string });
+	| (Exclude<PlanDebateGateOutcome, { outcome: "ready_for_approval" | "deadlocked" }> & { guidance: string });
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -1073,7 +1073,7 @@ export class AgentSession {
 			signal: context.signal,
 			proposalToolCallId: context.toolCallId,
 		});
-		if (outcome.outcome === "ready_for_approval") {
+		if (outcome.outcome === "ready_for_approval" || outcome.outcome === "deadlocked") {
 			return {
 				outcome: "ready_for_approval",
 				planContent: resolved.planContent,
@@ -1083,6 +1083,7 @@ export class AgentSession {
 					title: resolved.title,
 					planExists: true,
 					consensusHash: outcome.planHash,
+					...(outcome.outcome === "deadlocked" ? { deadlocked: true } : {}),
 				},
 			};
 		}
@@ -1127,6 +1128,7 @@ export class AgentSession {
 		this.#planDebateGate = new PlanDebateGate({
 			getState: () => this.#planModeState,
 			commitState: state => this.#commitPlanModeState(state),
+			maxRounds: this.settings.get("plan.debateMaxRounds"),
 		});
 		this.#modelRegistry = config.modelRegistry;
 		this.#extensionRoots =
@@ -7823,7 +7825,9 @@ export class AgentSession {
 		if (toolCall.name === "ask") return true;
 		if (!isProposeToolCall(toolCall)) return false;
 		const state = this.#planModeState;
-		return state?.workflow !== "debate" || state.debate?.phase === "consensus";
+		return (
+			state?.workflow !== "debate" || state.debate?.phase === "consensus" || state.debate?.phase === "deadlocked"
+		);
 	}
 
 	async #enforcePlanModeDecisionAtSettle(): Promise<boolean> {

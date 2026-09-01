@@ -88,8 +88,13 @@ export interface PlanDebateProposal {
 export type PlanDebateGateOutcome =
 	| { outcome: "ready_for_approval"; planHash: string }
 	| { outcome: "changes_requested"; planHash: string; summary: string; findings: PlanDebateFinding[] }
+	| { outcome: "deadlocked"; planHash: string; summary: string; findings: PlanDebateFinding[] }
 	| { outcome: "reviewing"; planHash: string }
 	| { outcome: "failed"; planHash: string; error: string };
+
+/** Distinct plan revisions the reviewer may reject before the gate escalates
+ *  the unresolved review to human approval instead of looping forever. */
+export const DEFAULT_PLAN_DEBATE_MAX_ROUNDS = 3;
 
 export function hashPlanContent(planContent: string): string {
 	return Bun.SHA256.hash(planContent, "hex");
@@ -99,13 +104,16 @@ export class PlanDebateGate {
 	#inFlight?: Promise<PlanDebateGateOutcome>;
 	readonly #getState: () => PlanModeState | undefined;
 	readonly #commitState: (state: PlanModeState) => void;
+	readonly #maxRounds: number;
 
 	constructor(options: {
 		getState: () => PlanModeState | undefined;
 		commitState: (state: PlanModeState) => void;
+		maxRounds?: number;
 	}) {
 		this.#getState = options.getState;
 		this.#commitState = options.commitState;
+		this.#maxRounds = Math.max(1, Math.floor(options.maxRounds ?? DEFAULT_PLAN_DEBATE_MAX_ROUNDS));
 	}
 
 	async propose(proposal: PlanDebateProposal): Promise<PlanDebateGateOutcome> {
@@ -125,6 +133,9 @@ export class PlanDebateGate {
 				summary: debate.summary,
 				findings: debate.findings,
 			};
+		}
+		if (debate?.phase === "deadlocked" && debate.planHash === planHash) {
+			return { outcome: "deadlocked", planHash, summary: debate.summary, findings: debate.findings };
 		}
 		if (this.#inFlight) return { outcome: "reviewing", planHash };
 
@@ -198,10 +209,11 @@ export class PlanDebateGate {
 				});
 				return { outcome: "ready_for_approval", planHash: attempt.planHash };
 			}
+			const deadlocked = attempt.round >= this.#maxRounds;
 			this.#commitState({
 				...live,
 				debate: {
-					phase: "changes_requested",
+					phase: deadlocked ? "deadlocked" : "changes_requested",
 					round: attempt.round,
 					planHash: attempt.planHash,
 					summary: result.summary,
@@ -209,7 +221,7 @@ export class PlanDebateGate {
 				},
 			});
 			return {
-				outcome: "changes_requested",
+				outcome: deadlocked ? "deadlocked" : "changes_requested",
 				planHash: attempt.planHash,
 				summary: result.summary,
 				findings: result.findings,

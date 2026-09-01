@@ -4508,23 +4508,28 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (state?.workflow === "debate") {
-			const consensus = state.debate?.phase === "consensus" ? state.debate : undefined;
-			if (!consensus) {
+			const reviewed =
+				state.debate?.phase === "consensus" || state.debate?.phase === "deadlocked" ? state.debate : undefined;
+			if (!reviewed) {
 				this.showWarning("The independent reviewer has not accepted the current plan.");
 				return;
 			}
-			if (hashPlanContent(planContent) !== consensus.planHash) {
+			if (hashPlanContent(planContent) !== reviewed.planHash) {
 				await this.#invalidateDebateConsensus(planFilePath, planContent);
 				return;
 			}
 		}
 		const { title } = resolvePlanTitle({ planContent, planFilePath });
+		const debateState = state?.workflow === "debate" ? state.debate : undefined;
 		await this.handlePlanApproval({
 			planFilePath,
 			title,
 			planExists: true,
-			...(state?.workflow === "debate" && state.debate?.phase === "consensus"
-				? { consensusHash: state.debate.planHash }
+			...(debateState?.phase === "consensus" || debateState?.phase === "deadlocked"
+				? {
+						consensusHash: debateState.planHash,
+						...(debateState.phase === "deadlocked" ? { deadlocked: true } : {}),
+					}
 				: {}),
 		});
 	}
@@ -4555,15 +4560,25 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		const debateConsensusHash = planState?.workflow === "debate" ? details.consensusHash : undefined;
+		const debateReviewed =
+			planState?.workflow === "debate" &&
+			(planState.debate?.phase === "consensus" || planState.debate?.phase === "deadlocked")
+				? planState.debate
+				: undefined;
 		if (
 			planState?.workflow === "debate" &&
 			(!debateConsensusHash ||
-				planState.debate?.phase !== "consensus" ||
-				planState.debate.planHash !== debateConsensusHash ||
+				!debateReviewed ||
+				debateReviewed.planHash !== debateConsensusHash ||
 				hashPlanContent(planContent) !== debateConsensusHash)
 		) {
 			await this.#invalidateDebateConsensus(planFilePath, planContent);
 			return;
+		}
+		if (details.deadlocked && debateReviewed?.phase === "deadlocked") {
+			this.showWarning(
+				`The independent reviewer did not accept this plan after ${debateReviewed.round} rounds. The decision is yours; unresolved findings remain.`,
+			);
 		}
 
 		// Promote the reviewed path so later refinement targets the same plan.
@@ -4678,7 +4693,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						!diskStillReviewed ||
 						!overlayStillReviewed ||
 						liveState?.workflow !== "debate" ||
-						liveState.debate?.phase !== "consensus" ||
+						(liveState.debate?.phase !== "consensus" && liveState.debate?.phase !== "deadlocked") ||
 						liveState.debate.planHash !== debateConsensusHash
 					) {
 						// Do not overwrite a concurrent disk edit with the stale overlay buffer.

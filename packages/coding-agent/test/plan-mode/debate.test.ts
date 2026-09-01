@@ -21,7 +21,7 @@ const changes = {
 	],
 };
 
-function createGate(reviewer: PlanDebateReviewer) {
+function createGate(reviewer: PlanDebateReviewer, options?: { maxRounds?: number }) {
 	let state: PlanModeState | undefined = {
 		enabled: true,
 		planFilePath: "local://debate-plan.md",
@@ -33,6 +33,7 @@ function createGate(reviewer: PlanDebateReviewer) {
 		commitState: next => {
 			state = next;
 		},
+		...(options?.maxRounds === undefined ? {} : { maxRounds: options.maxRounds }),
 	});
 	const controller = new AbortController();
 	const propose = (planContent: string, signal = controller.signal) =>
@@ -86,6 +87,50 @@ describe("PlanDebateGate", () => {
 		expect(first).toEqual({ outcome: "ready_for_approval", planHash: hashPlanContent("approved bytes") });
 		expect(second).toEqual(first);
 		expect(calls).toBe(1);
+	});
+
+	it("escalates to a deadlock at the round cap and stops re-reviewing the same bytes", async () => {
+		let calls = 0;
+		const harness = createGate(
+			async () => {
+				calls++;
+				return changes;
+			},
+			{ maxRounds: 2 },
+		);
+
+		expect((await harness.propose("draft one")).outcome).toBe("changes_requested");
+		expect(await harness.propose("draft two")).toEqual({
+			outcome: "deadlocked",
+			planHash: hashPlanContent("draft two"),
+			summary: changes.summary,
+			findings: changes.findings,
+		});
+		expect(harness.getState()?.debate).toMatchObject({ phase: "deadlocked", round: 2 });
+
+		// Same bytes never trigger another review; the human decision stays unlocked.
+		expect((await harness.propose("draft two")).outcome).toBe("deadlocked");
+		expect(calls).toBe(2);
+
+		// A changed plan past the cap gets exactly one more review, then escalates again.
+		expect((await harness.propose("draft three")).outcome).toBe("deadlocked");
+		expect(calls).toBe(3);
+	});
+
+	it("persists a deadlocked debate across session resume", () => {
+		const serialized = serializePlanModeState({
+			enabled: true,
+			planFilePath: "local://debate-plan.md",
+			workflow: "debate",
+			debate: {
+				phase: "deadlocked",
+				round: 3,
+				planHash: "abc",
+				summary: changes.summary,
+				findings: changes.findings,
+			},
+		});
+		expect(parsePlanModeState(serialized)?.debate).toMatchObject({ phase: "deadlocked", round: 3, planHash: "abc" });
 	});
 
 	it("runs one review and rejects stale completion after mode re-entry", async () => {

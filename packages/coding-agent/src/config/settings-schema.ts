@@ -4852,6 +4852,18 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	"plan.debateMaxRounds": {
+		type: "number",
+		default: 3,
+		ui: {
+			tab: "tasks",
+			group: "Modes",
+			label: "Debate Max Rounds",
+			description:
+				"Distinct plan revisions the reviewer may reject before the unresolved review escalates to human approval",
+			condition: "planModeEnabled",
+		},
+	},
 
 	"goal.enabled": {
 		type: "boolean",

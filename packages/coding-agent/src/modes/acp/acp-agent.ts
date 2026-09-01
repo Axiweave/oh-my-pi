@@ -1911,14 +1911,52 @@ export class AcpAgent implements Agent {
 			};
 		}
 		const { approval, planContent, planHash } = proposal;
-		const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, approval.title, planContent);
+		const liveDebate = session.getPlanModeState()?.debate;
+		const deadlockNote =
+			approval.deadlocked && liveDebate?.phase === "deadlocked"
+				? [
+						`Warning: the independent reviewer did not accept this plan after ${liveDebate.round} rounds.`,
+						`Summary: ${liveDebate.summary}`,
+						...liveDebate.findings
+							.slice(0, 3)
+							.map(
+								finding =>
+									`- ${finding.title}: ${finding.problem.length > 140 ? `${finding.problem.slice(0, 140)}…` : finding.problem}`,
+							),
+						...(liveDebate.findings.length > 3 ? [`- …and ${liveDebate.findings.length - 3} more`] : []),
+					].join("\n")
+				: undefined;
+		const supportsApprovalForm = this.#clientCapabilities?.elicitation?.form != null;
+		if (deadlockNote !== undefined && !supportsApprovalForm) {
+			// Terminal: this client has no approval surface, so no human can
+			// arbitrate the deadlocked review. Keep the deadlocked state — an
+			// unchanged resubmission hits the gate cache without another review,
+			// and only a genuine revision re-enters review.
+			return {
+				content: [
+					{
+						type: "text",
+						text: `${deadlockNote}\n\nThis client has no plan approval surface, so a deadlocked plan cannot be approved here. Do not resubmit unchanged bytes. Wait for a user decision: revise the plan to satisfy the remaining findings, or the user switches to a client or mode with plan approval support.`,
+					},
+				],
+				details: { outcome: "deadlocked", planHash },
+			};
+		}
+		const approved = await this.#requestAcpPlanApprovalChoice(
+			session.sessionId,
+			approval.title,
+			planContent,
+			deadlockNote,
+		);
 		if (!approved) {
 			this.#markAcpPlanDrafting(session, approval.planFilePath, planContent);
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Plan refinement requested. Update the plan file, then write ${approval.title} to xd://propose again when ready.`,
+						text: deadlockNote
+							? `Plan approval was not granted for the deadlocked review. Address the remaining reviewer findings in the plan file, then write ${approval.title} to xd://propose again.`
+							: `Plan refinement requested. Update the plan file, then write ${approval.title} to xd://propose again when ready.`,
 					},
 				],
 				details: { outcome: "changes_requested", planHash },
@@ -1931,7 +1969,7 @@ export class AcpAgent implements Agent {
 				currentContent === null ||
 				hashPlanContent(currentContent) !== approval.consensusHash ||
 				liveState?.workflow !== "debate" ||
-				liveState.debate?.phase !== "consensus" ||
+				(liveState.debate?.phase !== "consensus" && liveState.debate?.phase !== "deadlocked") ||
 				liveState.debate.planHash !== approval.consensusHash
 			) {
 				this.#markAcpPlanDrafting(session, approval.planFilePath, currentContent ?? undefined);
@@ -2032,17 +2070,27 @@ export class AcpAgent implements Agent {
 	 * keeps plan mode active and surfaces guidance text to the agent. Clients
 	 * without `elicitation.form` support auto-approve because there is no
 	 * confirmation surface available; without that, plan mode would strand
-	 * the agent (the bug this method exists to fix).
+	 * the agent (the bug this method exists to fix). Exception: a deadlocked
+	 * review (`deadlockNote` set) never auto-approves — executing a plan the
+	 * independent reviewer rejected requires an explicit human choice, so a
+	 * form-less client falls to refine semantics and the agent must address
+	 * the remaining findings instead.
 	 */
-	async #requestAcpPlanApprovalChoice(sessionId: string, title: string, planContent: string): Promise<boolean> {
+	async #requestAcpPlanApprovalChoice(
+		sessionId: string,
+		title: string,
+		planContent: string,
+		deadlockNote?: string,
+	): Promise<boolean> {
 		const supportsForm = this.#clientCapabilities?.elicitation?.form != null;
-		if (!supportsForm) return true;
+		if (!supportsForm) return deadlockNote === undefined;
 		// Include a short preview of the plan so the user has context in the
 		// dialog. Keep the body bounded — Zed renders elicitation messages
 		// inline and a multi-thousand-line plan blows out the dialog.
 		const previewLines = planContent.split("\n").slice(0, 12).join("\n");
 		const ellipsis = planContent.split("\n").length > 12 ? "\n…" : "";
-		const message = `Approve plan "${title}" and start implementation?\n\n${previewLines}${ellipsis}`;
+		const notice = deadlockNote ? `${deadlockNote}\n\n` : "";
+		const message = `Approve plan "${title}" and start implementation?\n\n${notice}${previewLines}${ellipsis}`;
 		const value = await elicitFromAcpClient(
 			this.#connection,
 			sessionId,

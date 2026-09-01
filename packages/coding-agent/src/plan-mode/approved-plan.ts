@@ -11,6 +11,8 @@ export interface PlanApprovalDetails {
 	title: string;
 	planExists: boolean;
 	consensusHash?: string;
+	/** The reviewer never accepted; the round cap escalated the decision to the human. */
+	deadlocked?: boolean;
 }
 
 /** Validate and normalize the agent-supplied plan title into a safe filename stem.

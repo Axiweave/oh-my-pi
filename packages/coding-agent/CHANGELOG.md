@@ -6,6 +6,7 @@
 
 - Added `/debate` plan mode, which requires an independent slow-model review and exact-plan consensus before human approval.
 - Added `plan.keybindingWorkflow` to let the plan shortcut enter standard plan or debate mode.
+- Added `plan.debateMaxRounds` (default 3): after that many rejected plan revisions, a debate review escalates to human approval with the reviewer's unresolved findings instead of looping forever.
 - Added accent-colored highlighting for a recognized `/command` keyword in the composer, matching Claude Code and Codex.
 
 ### Changed
