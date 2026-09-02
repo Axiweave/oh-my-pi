@@ -435,6 +435,7 @@ From `settings-schema.ts`:
 - `compaction.remoteStreamingV2Enabled` = `true`
 - `compaction.v2RetainedMessageBudget` = `64000`
 - `compaction.thresholdPercent` = `-1` and `compaction.thresholdTokens` = `-1`; a positive fixed token limit takes precedence over percentage, and otherwise the reserve-based threshold is used.
+- `compaction.modelOverrides` = `{}`; per-model threshold policies keyed by `provider/model-id` or wildcard. See [compaction-model-overrides.md](./compaction-model-overrides.md).
 - `compaction.idleEnabled` = `false`
 - `compaction.idleThresholdTokens` = `200000`
 - `compaction.idleTimeoutSeconds` = `300`

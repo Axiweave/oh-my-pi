@@ -620,6 +620,7 @@ compaction:
   midTurnEnabled: true # check thresholds between tool-loop provider requests
   thresholdPercent: -1 # -1 = default reserve-based behavior
   thresholdTokens: -1 # fixed token limit when > 0
+  modelOverrides: {} # per-model threshold policies, see compaction-model-overrides.md
 memory:
   backend: off # off, local, hindsight, mnemopi
 ```
@@ -634,6 +635,7 @@ memory:
 | `compaction.thresholdPercent` | number  | `-1`                                     | Percent-of-context trigger; `-1` = reserve-based default.                                                                                                                                                                                 |
 | `compaction.thresholdTokens`  | number  | `-1`                                     | Fixed token trigger when `> 0`.                                                                                                                                                                                                           |
 | `compaction.reserveTokens`    | number  | _(unset)_                                | Absolute reserve floor. When unset, the effective reserve is the larger of `16384` and 15% of the context window; if that default would leave no practical small-window budget, it falls back to the 15% reserve.                         |
+| `compaction.modelOverrides`   | record  | `{}`                                     | Maps `provider/model-id`, `provider/*`, or `*/model-id` to a `{thresholdTokens, thresholdPercent, reserveTokens}` policy. Exact key beats wildcards. A match replaces the whole global threshold policy. See [compaction-model-overrides.md](./compaction-model-overrides.md). |
 | `compaction.keepRecentTokens` | number  | `20000`                                  | Recent tokens always preserved.                                                                                                                                                                                                           |
 | `compaction.autoContinue`     | boolean | `true`                                   | Continue automatically after compaction.                                                                                                                                                                                                  |
 | `memory.backend`              | enum    | `off`                                    | `off`, `local`, `hindsight`, `mnemopi`. Each backend has its own `hindsight.*` / `mnemopi.*` / `memories.*` tuning keys.                                                                                                                  |
