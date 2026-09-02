@@ -6,7 +6,7 @@ import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { Skill } from "../../extensibility/skills";
 import type { AgentSession } from "../../session/agent-session";
-import { resolveSpeculationMethod } from "../../session/compaction-methods";
+import { resolveCompactionSettings, resolveSpeculationMethod } from "../../session/compaction-methods";
 import { estimateInlineSavings, type SnapcompactSavingsEstimate } from "../../session/snapcompact-inline";
 import { resolveSpeculationLeadTokens } from "../../session/speculation-lead";
 import type { Tool } from "../../tools";
@@ -67,7 +67,7 @@ export function computeCompactionBoundaries(
 	model?: Model | null,
 ): CompactionBoundaries | null {
 	if (!(contextWindow > 0)) return null;
-	const configured = settings.getGroup("compaction");
+	const configured = resolveCompactionSettings(settings, model);
 	const compactionSettings = configured as CompactionSettings;
 	if (!configured.enabled || compactionSettings.strategy === "off") return null;
 	const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
@@ -315,7 +315,7 @@ export function computeContextBreakdown(
 
 	let autoCompactBufferTokens = 0;
 	if (contextWindow > 0) {
-		const compactionSettings = session.settings.getGroup("compaction") as CompactionSettings;
+		const compactionSettings = resolveCompactionSettings(session.settings, model) as CompactionSettings;
 		if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
 			const threshold = resolveThresholdTokens(contextWindow, compactionSettings);
 			autoCompactBufferTokens = Math.max(0, contextWindow - threshold);

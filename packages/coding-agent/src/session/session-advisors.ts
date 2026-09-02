@@ -84,7 +84,7 @@ import {
 } from "../thinking";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { ClientBridge } from "./client-bridge";
-import { resolveCompactionMethodOrder } from "./compaction-methods";
+import { resolveCompactionMethodOrder, resolveCompactionSettings } from "./compaction-methods";
 import type { CustomMessage, CustomMessagePayload } from "./messages";
 import { isAdvisorCard, isTerminalTextAssistantAnswer } from "./queued-messages";
 import {
@@ -1560,12 +1560,12 @@ export class SessionAdvisors {
 		const agent = advisor.agent;
 		const incomingTokens = agent.tokenizer.countMessage(incoming);
 
-		const compactionSettings = this.#host.settings.getGroup("compaction");
+		const advisorModel = agent.state.model;
+		const compactionSettings = resolveCompactionSettings(this.#host.settings, advisorModel);
 		if (!compactionSettings.enabled || resolveCompactionMethodOrder(compactionSettings.methodOrder).length === 0) {
 			return false;
 		}
 
-		const advisorModel = agent.state.model;
 		const contextWindow = advisorModel.contextWindow ?? 0;
 		if (contextWindow <= 0) return false;
 
@@ -1594,7 +1594,11 @@ export class SessionAdvisors {
 			const newModel = agent.state.model;
 			const newWindow = newModel.contextWindow ?? 0;
 			if (newWindow > 0) {
-				const stillNeedsCompaction = shouldCompact(contextTokens, newWindow, compactionSettings);
+				const stillNeedsCompaction = shouldCompact(
+					contextTokens,
+					newWindow,
+					resolveCompactionSettings(this.#host.settings, newModel),
+				);
 				if (!stillNeedsCompaction) return false;
 			}
 		}

@@ -74,6 +74,7 @@ import {
 	canUseRemoteCompaction,
 	DEFAULT_COMPACTION_METHOD_ORDER,
 	resolveCompactionMethodOrder,
+	resolveCompactionSettings,
 	resolveMethodSettings,
 	resolveSpeculationMethod,
 } from "./compaction-methods";
@@ -371,6 +372,10 @@ export class SessionMaintenance {
 		return this.#host.model();
 	}
 
+	get #compactionSettings() {
+		return resolveCompactionSettings(this.#host.settings, this.#model);
+	}
+
 	get #tokenizer() {
 		return this.#host.agent.tokenizer;
 	}
@@ -444,7 +449,7 @@ export class SessionMaintenance {
 			this.#tokenizer,
 			this.#withPlanProtection({
 				...DEFAULT_PRUNE_CONFIG,
-				pruneUseless: this.#host.settings.getGroup("compaction").dropUseless,
+				pruneUseless: this.#compactionSettings.dropUseless,
 				// Cache-stable boundary: never re-write the warm, already-sent prefix
 				// (deep stale/age victims) or summarized-away entries every turn.
 				keepBoundaryId,
@@ -478,7 +483,7 @@ export class SessionMaintenance {
 	 * provider prompt cache.
 	 */
 	async #pruneStaleToolResults(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
-		const { supersedeReads, dropUseless } = this.#host.settings.getGroup("compaction");
+		const { supersedeReads, dropUseless } = this.#compactionSettings;
 		if (!supersedeReads && !dropUseless) return undefined;
 		const branchEntries = this.#host.sessionManager.getBranch();
 		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
@@ -754,7 +759,7 @@ export class SessionMaintenance {
 				throw new Error("No model selected");
 			}
 
-			const compactionSettings = this.#host.settings.getGroup("compaction");
+			const compactionSettings = this.#compactionSettings;
 			methods = resolveCompactionMethodOrder(compactMode?.overrides.methodOrder ?? compactionSettings.methodOrder);
 			const explicitSnapcompact = compactMode?.name === "snapcompact";
 			let selectedMethod: CompactionMethod | undefined;
@@ -1181,7 +1186,7 @@ export class SessionMaintenance {
 		const entries = this.#host.sessionManager.getBranch();
 		const messageCount = entries.filter(e => e.type === "message").length;
 		if (messageCount < 2) throw new Error("Nothing to hand off (no messages yet)");
-		const compactionSettings = this.#host.settings.getGroup("compaction");
+		const compactionSettings = this.#compactionSettings;
 		const preparation = prepareCompaction(
 			entries,
 			resolveMethodSettings(compactionSettings, "handoff"),
@@ -1220,7 +1225,7 @@ export class SessionMaintenance {
 	 */
 	maybeStartSpeculativeCompaction(contextTokens: number, contextWindow: number): void {
 		if (contextWindow <= 0 || this.#host.isDisposed()) return;
-		const settings = this.#host.settings.getGroup("compaction");
+		const settings = this.#compactionSettings;
 		if (!settings.enabled || settings.asyncEnabled === false || !hasConfiguredCompactionMethod(settings)) return;
 		if (this.isCompacting || this.#host.isGeneratingHandoff()) return;
 		// Extensions that intercept compaction (cancel/replace) keep exact
@@ -1280,7 +1285,7 @@ export class SessionMaintenance {
 	 */
 	deferThresholdCompactionToSpeculation(contextTokens: number, contextWindow: number): boolean {
 		if (contextWindow <= 0 || this.#host.isDisposed()) return false;
-		const settings = this.#host.settings.getGroup("compaction");
+		const settings = this.#compactionSettings;
 		if (!settings.enabled || settings.asyncEnabled === false || !hasConfiguredCompactionMethod(settings))
 			return false;
 		if (this.isCompacting || this.#host.isGeneratingHandoff()) return false;
@@ -1315,7 +1320,7 @@ export class SessionMaintenance {
 		};
 		const model = this.#model;
 		if (!model) return clear();
-		const settings = this.#host.settings.getGroup("compaction");
+		const settings = this.#compactionSettings;
 		const effectiveSettings = resolveMethodSettings(settings, method);
 		const branch = this.#host.sessionManager.getBranch();
 		const snapshotLeafId = branch[branch.length - 1]?.id;
@@ -1410,7 +1415,7 @@ export class SessionMaintenance {
 	#armedSpeculationValid(armed: ArmedSpeculation): boolean {
 		const model = this.#model;
 		if (!model) return false;
-		const settings = this.#host.settings.getGroup("compaction");
+		const settings = this.#compactionSettings;
 		if (
 			armed.result.preserveData &&
 			!remotePreserveReusable(armed.result.preserveData, model, resolveMethodSettings(settings, armed.method))
@@ -1440,7 +1445,7 @@ export class SessionMaintenance {
 			run.controller.abort();
 			return undefined;
 		}
-		const settings = this.#host.settings.getGroup("compaction");
+		const settings = this.#compactionSettings;
 		if (settings.asyncEnabled === false) return undefined;
 		if (this.#host.extensionRunner?.hasHandlers("session_before_compact")) return undefined;
 		return this.#armedSpeculationValid(run.armed) ? run.armed : undefined;
@@ -1579,7 +1584,7 @@ export class SessionMaintenance {
 		if (!model) return;
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
-		const compactionSettings = this.#host.settings.getGroup("compaction");
+		const compactionSettings = this.#compactionSettings;
 		const contextTokens = this.#estimatePrePromptContextTokens(messages, contextWindow);
 		const pendingMidTurnDeadEnd = this.#midTurnDeadEndPendingPrePrompt;
 		this.#midTurnDeadEndPendingPrePrompt = false;
@@ -1662,7 +1667,7 @@ export class SessionMaintenance {
 		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
 
-		const compactionSettings = this.#host.settings.getGroup("compaction");
+		const compactionSettings = this.#compactionSettings;
 		if (
 			!compactionSettings.enabled ||
 			!hasConfiguredCompactionMethod(compactionSettings) ||
@@ -1855,7 +1860,7 @@ export class SessionMaintenance {
 			}
 
 			// No promotion target available fall through to compaction
-			const compactionSettings = this.#host.settings.getGroup("compaction");
+			const compactionSettings = this.#compactionSettings;
 			if (compactionSettings.enabled && hasConfiguredCompactionMethod(compactionSettings)) {
 				return await this.#host.runRecoveryCompactionWithRollback("overflow", assistantMessage, allowDefer, {
 					autoContinue,
@@ -1954,7 +1959,7 @@ export class SessionMaintenance {
 				return COMPACTION_CHECK_CONTINUATION;
 			}
 
-			const incompleteCompactionSettings = this.#host.settings.getGroup("compaction");
+			const incompleteCompactionSettings = this.#compactionSettings;
 			if (incompleteCompactionSettings.enabled && hasConfiguredCompactionMethod(incompleteCompactionSettings)) {
 				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
@@ -1978,7 +1983,7 @@ export class SessionMaintenance {
 		// setting.
 		const supersedeResult = await this.#pruneStaleToolResults();
 
-		const compactionSettings = this.#host.settings.getGroup("compaction");
+		const compactionSettings = this.#compactionSettings;
 		if (!compactionSettings.enabled || !hasConfiguredCompactionMethod(compactionSettings))
 			return COMPACTION_CHECK_NONE;
 
@@ -2504,7 +2509,7 @@ export class SessionMaintenance {
 	#compactionCreatedHeadroom(): boolean {
 		const contextWindow = this.#model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return true;
-		const compactionSettings = this.#host.settings.getGroup("compaction");
+		const compactionSettings = this.#compactionSettings;
 		const residualTokens = compactionContextTokens(
 			this.#host.getContextUsage({ contextWindow })?.tokens ?? 0,
 			this.#estimateStoredContextTokens(),
@@ -2553,7 +2558,7 @@ export class SessionMaintenance {
 		const storedExcludedTokens = activeExcludedMessage
 			? this.#tokenizer.countMessage(activeExcludedMessage, { excludeEncryptedReasoning: true })
 			: 0;
-		const compactionSettings = this.#host.settings.getGroup("compaction");
+		const compactionSettings = this.#compactionSettings;
 		const residualTokens = compactionContextTokens(
 			Math.max(0, (this.#host.getContextUsage({ contextWindow })?.tokens ?? 0) - providerExcludedTokens),
 			Math.max(0, this.#estimateStoredContextTokens() - storedExcludedTokens),
@@ -2609,7 +2614,7 @@ export class SessionMaintenance {
 		// a threshold-derived frame budget.
 		const frameRescue = await this.#rescueSnapcompactFrameOverflow(
 			this.#host.sessionManager.getBranch(),
-			resolveMethodSettings(this.#host.settings.getGroup("compaction"), "snapcompact"),
+			resolveMethodSettings(this.#compactionSettings, "snapcompact"),
 			signal,
 		);
 		if (frameRescue !== undefined && options.hasProgress()) return true;
@@ -2892,7 +2897,7 @@ export class SessionMaintenance {
 			fallbackFromShake?: boolean;
 		} = {},
 	): Promise<CompactionCheckResult> {
-		const compactionSettings = this.#host.settings.getGroup("compaction");
+		const compactionSettings = this.#compactionSettings;
 		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		const methods = resolveCompactionMethodOrder(compactionSettings.methodOrder);
 		if (methods.length === 0) return COMPACTION_CHECK_NONE;
@@ -3968,7 +3973,7 @@ export class SessionMaintenance {
 			// without that pre-shake savings, shake can advance to the next preference
 			// even though the post-prune history is already inside the recovery band.
 			const contextWindow = this.#model?.contextWindow ?? 0;
-			const compactionSettings = this.#host.settings.getGroup("compaction");
+			const compactionSettings = this.#compactionSettings;
 			let stillOverThreshold = false;
 			if (contextWindow > 0) {
 				if (typeof triggerContextTokens === "number" && Number.isFinite(triggerContextTokens)) {

@@ -1024,4 +1024,56 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(continueSpy).toHaveBeenCalledTimes(1);
 		await session.waitForIdle();
 	});
+
+	for (const [label, key, expectThreshold] of [
+		["honors a matching compaction.modelOverrides threshold", "anthropic/*", true],
+		["ignores a non-matching compaction.modelOverrides threshold", "openai/*", false],
+	] as const) {
+		it(label, async () => {
+			const now = Date.now();
+			session.setGoalModeState({
+				enabled: true,
+				mode: "active",
+				goal: {
+					id: "goal-model-override-threshold",
+					objective: "continue until compacted",
+					status: "active",
+					tokensUsed: 0,
+					timeUsedSeconds: 0,
+					createdAt: now,
+					updatedAt: now,
+				},
+			});
+			session.settings.set("compaction.thresholdTokens", 150_000);
+			session.settings.set("compaction.thresholdPercent", -1);
+			session.settings.set("contextPromotion.enabled", false);
+			session.settings.set("compaction.modelOverrides", { [key]: { thresholdTokens: 76_384 } });
+
+			const assistantMsg = {
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "I should continue investigating another module." }],
+				api: "anthropic-messages" as const,
+				provider: "anthropic" as const,
+				model: "claude-sonnet-4-5",
+				stopReason: "stop" as const,
+				usage: {
+					input: 5000,
+					output: 1000,
+					cacheRead: 85000,
+					cacheWrite: 0,
+					totalTokens: 91000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: now,
+			};
+
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+			await session.waitForIdle();
+
+			if (expectThreshold) expect(getRuntimeSignals()).toContain("compaction:start:threshold");
+			else expect(getRuntimeSignals()).not.toContain("compaction:start:threshold");
+		});
+	}
 });

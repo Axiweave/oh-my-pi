@@ -5,7 +5,9 @@ import {
 	shouldUseProviderNativeCompaction,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
-import type { CompactionSettings } from "../config/settings-schema";
+import { globMatch } from "@oh-my-pi/pi-catalog/compat/cascade";
+import type { Settings } from "../config/settings";
+import type { CompactionModelOverride, CompactionSettings } from "../config/settings-schema";
 
 /** Choices presented by the ordered compaction-method setting. */
 export const COMPACTION_METHOD_CHOICES = [
@@ -128,4 +130,46 @@ export function resolveSpeculationMethod(
 		return candidate === "remote" || candidate === "handoff" || candidate === "soft" ? candidate : undefined;
 	}
 	return undefined;
+}
+
+function finiteOr<T>(value: unknown, fallback: T): number | T {
+	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/** First `compaction.modelOverrides` entry for `key` (lowercased `provider/id`): exact key wins, else first glob match in declaration order. */
+function matchCompactionModelOverride(
+	overrides: Record<string, CompactionModelOverride>,
+	key: string,
+): CompactionModelOverride | undefined {
+	let match: CompactionModelOverride | undefined;
+	for (const pattern in overrides) {
+		if (!Object.hasOwn(overrides, pattern)) continue;
+		const override = overrides[pattern];
+		if (typeof override !== "object" || override === null || Array.isArray(override)) continue;
+		const lower = pattern.toLowerCase();
+		if (lower === key) return override;
+		if (match === undefined && globMatch(lower, key)) match = override;
+	}
+	return match;
+}
+
+/**
+ * Compaction settings for `model`: the global group with the matching
+ * `compaction.modelOverrides` threshold policy applied. A match replaces all
+ * three threshold keys, so an override naming only `thresholdPercent` is not
+ * shadowed by a global `thresholdTokens`.
+ */
+export function resolveCompactionSettings(settings: Settings, model: Model | null | undefined): CompactionSettings {
+	const group = settings.getGroup("compaction");
+	if (!model) return group;
+	const overrides = group.modelOverrides;
+	if (typeof overrides !== "object" || overrides === null || Array.isArray(overrides)) return group;
+	const override = matchCompactionModelOverride(overrides, `${model.provider}/${model.id}`.toLowerCase());
+	if (!override) return group;
+	return {
+		...group,
+		thresholdTokens: finiteOr(override.thresholdTokens, -1),
+		thresholdPercent: finiteOr(override.thresholdPercent, -1),
+		reserveTokens: finiteOr(override.reserveTokens, undefined),
+	};
 }

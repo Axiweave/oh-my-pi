@@ -2639,6 +2639,17 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	"compaction.modelOverrides": {
+		type: "record",
+		default: {} as Record<string, CompactionModelOverride>,
+		ui: {
+			tab: "context",
+			group: "Compaction",
+			label: "Per-Model Thresholds",
+			description:
+				'JSON object mapping model selectors ("provider/model-id") or wildcards ("provider/*", "*/model-id") to a threshold policy {thresholdTokens, thresholdPercent, reserveTokens}, e.g. {"openai/*":{"thresholdTokens":250000},"anthropic/*":{"thresholdTokens":200000}}. An exact key beats wildcards; otherwise the first matching key wins. A matching entry replaces the global threshold policy: keys it omits use their defaults (-1 / unset), not the global values.',
+		},
+	},
 
 	"compaction.handoffSaveToDisk": {
 		type: "boolean",
@@ -6247,12 +6258,20 @@ export type Personality = SettingValue<"personality">;
 // Typed Group Definitions
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** Threshold policy for one model selector pattern in `compaction.modelOverrides`. */
+export interface CompactionModelOverride {
+	thresholdTokens?: number;
+	thresholdPercent?: number;
+	reserveTokens?: number;
+}
+
 export interface CompactionSettings {
 	enabled: boolean;
 	methodOrder: CompactionMethod[];
 	thresholdPercent: number;
 	thresholdTokens: number;
 	reserveTokens: number | undefined;
+	modelOverrides: Record<string, CompactionModelOverride>;
 	keepRecentTokens: number;
 	midTurnEnabled: boolean;
 	asyncEnabled: boolean;
