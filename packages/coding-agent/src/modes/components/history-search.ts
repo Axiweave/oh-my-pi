@@ -149,17 +149,26 @@ class HistoryResultsList implements Component {
 
 export class HistorySearchComponent extends OverlayPanel {
 	#historyStorage: HistoryStorage;
+	#currentCwd: string;
+	#scope: "folder" | "all" = "folder";
 	#searchInput: Input;
 	#results: HistoryEntry[] = [];
 	#selectedIndex = 0;
 	#resultsList: HistoryResultsList;
+	#footer: Text;
 	#onSelect: (prompt: string) => void;
 	#onCancel: () => void;
 	#resultLimit = 100;
 
-	constructor(historyStorage: HistoryStorage, onSelect: (prompt: string) => void, onCancel: () => void) {
-		super("History");
+	constructor(
+		historyStorage: HistoryStorage,
+		currentCwd: string,
+		onSelect: (prompt: string) => void,
+		onCancel: () => void,
+	) {
+		super("History (current folder)");
 		this.#historyStorage = historyStorage;
+		this.#currentCwd = currentCwd;
 		this.#onSelect = onSelect;
 		this.#onCancel = onCancel;
 
@@ -175,22 +184,28 @@ export class HistorySearchComponent extends OverlayPanel {
 		};
 
 		this.#resultsList = new HistoryResultsList();
-
-		const dot = theme.fg("dim", theme.sep.dot);
-		const hint = [rawKeyHint("↑↓", "navigate"), rawKeyHint("enter", "select"), rawKeyHint("esc", "cancel")].join(dot);
+		this.#footer = new Text("", 0, 0);
+		this.#refreshScopeChrome();
 
 		this.addChild(new Spacer(1));
 		this.addChild(this.#searchInput);
 		this.addChild(new Spacer(1));
 		this.addChild(this.#resultsList);
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(hint, 0, 0));
+		this.addChild(this.#footer);
 		this.addChild(new Spacer(1));
 
 		this.#updateResults();
 	}
 
 	handleInput(keyData: string): void {
+		if (matchesKey(keyData, "tab")) {
+			this.#scope = this.#scope === "folder" ? "all" : "folder";
+			this.#refreshScopeChrome();
+			this.#updateResults();
+			return;
+		}
+
 		if (matchesSelectUp(keyData)) {
 			if (this.#results.length === 0) return;
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
@@ -250,11 +265,26 @@ export class HistorySearchComponent extends OverlayPanel {
 		this.#updateResults();
 	}
 
+	#refreshScopeChrome(): void {
+		this.title = this.#scope === "folder" ? "History (current folder)" : "History (all projects)";
+		const dot = theme.fg("dim", theme.sep.dot);
+		const targetScope = this.#scope === "folder" ? "all projects" : "current folder";
+		this.#footer.setText(
+			[
+				rawKeyHint("↑↓", "navigate"),
+				rawKeyHint("enter", "select"),
+				rawKeyHint("esc", "cancel"),
+				rawKeyHint("tab", targetScope),
+			].join(dot),
+		);
+	}
+
 	#updateResults(): void {
 		const query = this.#searchInput.getValue().trim();
+		const cwd = this.#scope === "folder" ? this.#currentCwd : undefined;
 		this.#results = query
-			? this.#historyStorage.search(query, this.#resultLimit)
-			: this.#historyStorage.getRecent(this.#resultLimit);
+			? this.#historyStorage.search(query, this.#resultLimit, cwd)
+			: this.#historyStorage.getRecent(this.#resultLimit, cwd);
 		this.#selectedIndex = 0;
 		this.#resultsList.setResults(this.#results, this.#selectedIndex, query ? queryTokens(query) : []);
 	}

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -16,6 +16,7 @@ import { setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const CTRL_N = "\x0e";
+const HISTORY_CWD = "/projects/history-navigation";
 const CTRL_P = "\x10";
 const TEST_KEYBINDINGS = KeybindingsManager.inMemory({
 	"tui.select.up": "ctrl+p",
@@ -99,16 +100,8 @@ async function createHistoryStorage(prompts: string[]): Promise<HistoryStorage> 
 	tempDirs.push(dir);
 	HistoryStorage.close();
 	const storage = HistoryStorage.open(dir.join("history.db"));
-	// add() batches writes behind a 100ms AsyncDrain timer. Drive that timer with
-	// fake timers so the flush is instant instead of waiting real wall-clock time.
-	vi.useFakeTimers();
-	try {
-		const writes = prompts.map(prompt => storage.add(prompt));
-		vi.advanceTimersByTime(100);
-		await Promise.all(writes);
-	} finally {
-		vi.useRealTimers();
-	}
+	const writes = prompts.map(prompt => storage.add(prompt, HISTORY_CWD));
+	await Promise.all(writes);
 	return storage;
 }
 
@@ -351,6 +344,7 @@ describe("selector navigation keybindings", () => {
 		const storage = await createHistoryStorage(["old prompt", "middle prompt", "new prompt"]);
 		const selector = new HistorySearchComponent(
 			storage,
+			HISTORY_CWD,
 			prompt => selected.push(prompt),
 			() => {},
 		);
@@ -367,6 +361,7 @@ describe("selector navigation keybindings", () => {
 		const storage = await createHistoryStorage(Array.from({ length: 15 }, (_, i) => `p${i}`));
 		const selector = new HistorySearchComponent(
 			storage,
+			HISTORY_CWD,
 			prompt => selected.push(prompt),
 			() => {},
 		);

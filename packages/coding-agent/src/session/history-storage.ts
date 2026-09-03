@@ -1,7 +1,14 @@
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { checkpointWal, getDbBusyTimeoutMs, getHistoryDbPath, logger, postmortem } from "@oh-my-pi/pi-utils";
+import {
+	checkpointWal,
+	getDbBusyTimeoutMs,
+	getHistoryDbPath,
+	logger,
+	normalizePathForComparison,
+	postmortem,
+} from "@oh-my-pi/pi-utils";
 
 /** A unique prompt with provenance from its most recent submission. */
 export interface HistoryEntry {
@@ -22,6 +29,13 @@ type HistoryRow = {
 	prompt: string;
 	created_at: number;
 	cwd: string | null;
+	session_id: string | null;
+};
+
+type HistoryLocationRow = {
+	prompt: string;
+	cwd: string;
+	created_at: number;
 	session_id: string | null;
 };
 
@@ -46,9 +60,9 @@ function normalizePrompt(prompt: string): string {
 		.trim();
 }
 /** Bumped when stored rows need the one-time dump-and-rebuild pass on open; see `#rebuildHistory`. */
-const HISTORY_DATA_VERSION = 1;
+const HISTORY_DATA_VERSION = 2;
 
-/** Canonical `history` schema; `#rebuildHistory` recreates the table from this exact DDL. */
+/** Canonical history schema; `#rebuildHistory` recreates both tables from this exact DDL. */
 const HISTORY_TABLE_DDL = `
 CREATE TABLE IF NOT EXISTS history (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,11 +72,21 @@ CREATE TABLE IF NOT EXISTS history (
 	session_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
+CREATE TABLE IF NOT EXISTS history_locations (
+	prompt TEXT NOT NULL,
+	cwd TEXT NOT NULL,
+	created_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH}),
+	session_id TEXT,
+	PRIMARY KEY (prompt, cwd),
+	FOREIGN KEY (prompt) REFERENCES history(prompt) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_history_locations_cwd_created_at
+	ON history_locations(cwd, created_at DESC, prompt);
 `;
 
 let cancelExitCleanup: (() => void) | undefined;
 
-/** Stores searchable prompts with only their latest project and session metadata. */
+/** Stores searchable prompts with their latest global and per-folder provenance. */
 export class HistoryStorage {
 	#db: Database;
 	static #instance?: HistoryStorage;
@@ -70,10 +94,14 @@ export class HistoryStorage {
 
 	// Prepared statements
 	#upsertRowStmt: Statement;
+	#upsertLocationStmt: Statement;
 	#recentStmt: Statement;
+	#scopedRecentStmt: Statement;
 	#searchStmt: Statement;
+	#scopedSearchStmt: Statement;
 	// Cache substring-fallback prepared statements keyed by token count.
 	#substringStmts = new Map<number, Statement>();
+	#scopedSubstringStmts = new Map<number, Statement>();
 
 	private constructor(dbPath: string) {
 		this.#ensureDir(dbPath);
@@ -115,12 +143,36 @@ END;
 		this.#searchStmt = this.#db.prepare(
 			"SELECT h.id, h.prompt, h.created_at, h.cwd, h.session_id FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? ORDER BY h.created_at DESC, h.id DESC LIMIT ?",
 		);
+		this.#scopedRecentStmt = this.#db.prepare(`
+SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id
+FROM history_locations l
+JOIN history h ON h.prompt = l.prompt
+WHERE l.cwd = ?
+ORDER BY l.created_at DESC, h.id DESC
+LIMIT ?
+		`);
+		this.#scopedSearchStmt = this.#db.prepare(`
+SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id
+FROM history_fts f
+JOIN history h ON h.id = f.rowid
+JOIN history_locations l ON l.prompt = h.prompt
+WHERE history_fts MATCH ? AND l.cwd = ?
+ORDER BY l.created_at DESC, h.id DESC
+LIMIT ?
+		`);
 		this.#upsertRowStmt = this.#db.prepare(`
 INSERT INTO history (prompt, created_at, cwd, session_id)
 VALUES (?, ${SQLITE_NOW_EPOCH}, ?, ?)
 ON CONFLICT(prompt) DO UPDATE SET
 	created_at = excluded.created_at,
 	cwd = excluded.cwd,
+	session_id = excluded.session_id
+		`);
+		this.#upsertLocationStmt = this.#db.prepare(`
+INSERT INTO history_locations (prompt, cwd, created_at, session_id)
+VALUES (?, ?, ${SQLITE_NOW_EPOCH}, ?)
+ON CONFLICT(prompt, cwd) DO UPDATE SET
+	created_at = excluded.created_at,
 	session_id = excluded.session_id
 		`);
 	}
@@ -152,9 +204,14 @@ ON CONFLICT(prompt) DO UPDATE SET
 		checkpointWal(this.#db);
 		for (const stmt of this.#substringStmts.values()) stmt.finalize();
 		this.#substringStmts.clear();
+		for (const stmt of this.#scopedSubstringStmts.values()) stmt.finalize();
+		this.#scopedSubstringStmts.clear();
 		this.#upsertRowStmt.finalize();
+		this.#upsertLocationStmt.finalize();
 		this.#recentStmt.finalize();
+		this.#scopedRecentStmt.finalize();
 		this.#searchStmt.finalize();
+		this.#scopedSearchStmt.finalize();
 		this.#db.close();
 	}
 
@@ -162,6 +219,13 @@ ON CONFLICT(prompt) DO UPDATE SET
 		this.#db.transaction((rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>) => {
 			for (const row of rows) {
 				this.#upsertRowStmt.run(row.prompt, row.cwd ?? null, row.sessionId ?? null);
+				if (row.cwd) {
+					this.#upsertLocationStmt.run(
+						row.prompt,
+						normalizePathForComparison(row.cwd),
+						row.sessionId ?? null,
+					);
+				}
 			}
 		})(rows);
 	}
@@ -194,12 +258,15 @@ ON CONFLICT(prompt) DO UPDATE SET
 	}
 
 	/** Returns unique prompts ordered by their most recent submission. */
-	getRecent(limit: number): HistoryEntry[] {
+	getRecent(limit: number, cwd?: string): HistoryEntry[] {
 		const safeLimit = this.#normalizeLimit(limit);
 		if (safeLimit === 0) return [];
 
 		try {
-			const rows = this.#recentStmt.all(safeLimit) as HistoryRow[];
+			const rows =
+				cwd === undefined
+					? (this.#recentStmt.all(safeLimit) as HistoryRow[])
+					: (this.#scopedRecentStmt.all(normalizePathForComparison(cwd), safeLimit) as HistoryRow[]);
 			return rows.map(row => this.#toEntry(row));
 		} catch (error) {
 			logger.error("HistoryStorage getRecent failed", { error: String(error) });
@@ -208,12 +275,13 @@ ON CONFLICT(prompt) DO UPDATE SET
 	}
 
 	/** Finds unique prompts matching every query token, newest first. */
-	search(query: string, limit: number): HistoryEntry[] {
+	search(query: string, limit: number, cwd?: string): HistoryEntry[] {
 		const safeLimit = this.#normalizeLimit(limit);
 		if (safeLimit === 0) return [];
 
 		const tokens = this.#tokenize(query);
 		if (tokens.length === 0) return [];
+		const normalizedCwd = cwd === undefined ? undefined : normalizePathForComparison(cwd);
 
 		// 1. FTS5 prefix match (token AND, prefix-wildcard per token).
 		//    Handles punctuation by tokenizing query the same way unicode61 tokenizer
@@ -221,7 +289,10 @@ ON CONFLICT(prompt) DO UPDATE SET
 		const ftsQuery = tokens.map(tok => `"${tok.replace(/"/g, '""')}"*`).join(" ");
 		let ftsRows: HistoryRow[] = [];
 		try {
-			ftsRows = this.#searchStmt.all(ftsQuery, safeLimit) as HistoryRow[];
+			ftsRows =
+				normalizedCwd === undefined
+					? (this.#searchStmt.all(ftsQuery, safeLimit) as HistoryRow[])
+					: (this.#scopedSearchStmt.all(ftsQuery, normalizedCwd, safeLimit) as HistoryRow[]);
 		} catch (error) {
 			// Malformed FTS expression - fall through to substring path.
 			logger.debug("HistoryStorage FTS query failed, using substring only", { error: String(error) });
@@ -232,7 +303,7 @@ ON CONFLICT(prompt) DO UPDATE SET
 		//    by safeLimit, ordered by recency - no full-table load into JS.
 		let subRows: HistoryRow[] = [];
 		try {
-			subRows = this.#searchSubstring(tokens, safeLimit);
+			subRows = this.#searchSubstring(tokens, safeLimit, normalizedCwd);
 		} catch (error) {
 			logger.error("HistoryStorage substring search failed", { error: String(error) });
 		}
@@ -285,26 +356,29 @@ ON CONFLICT(prompt) DO UPDATE SET
 	/**
 	 * One-time dump-and-rebuild pass, gated by `PRAGMA user_version` (owned by
 	 * this pass — nothing else versions history.db). Dumps every row, folds each
-	 * prompt through {@link normalizePrompt} in JS, keeps the most recent
-	 * submission per normalized prompt (the upsert's "latest wins" rule), and
-	 * recreates the table from {@link HISTORY_TABLE_DDL}. Subsumes every legacy
-	 * shape at once — unixepoch defaults, missing session_id, non-unique prompt,
-	 * per-line trailing padding — without per-shape SQL migrations. Returns
-	 * whether it ran so the caller can rebuild the FTS index.
+	 * prompt through {@link normalizePrompt} in JS, keeps the most recent global
+	 * submission per prompt and per-folder submission per prompt/location pair,
+	 * and recreates both tables from {@link HISTORY_TABLE_DDL}. Subsumes every
+	 * legacy shape at once. Returns whether it ran so the caller can rebuild FTS.
 	 */
 	#rebuildHistory(): boolean {
 		const versionRow = this.#db.prepare("PRAGMA user_version").get() as { user_version: number };
 		if (versionRow.user_version >= HISTORY_DATA_VERSION) return false;
 		let rows: HistoryRow[];
+		let storedLocations: HistoryLocationRow[];
 		try {
 			const sessionIdSelection = this.#historySchemaHasColumn("session_id") ? "session_id" : "NULL AS session_id";
 			rows = this.#db
 				.prepare(`SELECT id, prompt, created_at, cwd, ${sessionIdSelection} FROM history`)
 				.all() as HistoryRow[];
+			storedLocations = this.#db
+				.prepare("SELECT prompt, cwd, created_at, session_id FROM history_locations")
+				.all() as HistoryLocationRow[];
 		} catch (error) {
 			logger.error("HistoryStorage rebuild dump failed", { error: String(error) });
 			return false;
 		}
+
 		const winners = new Map<string, HistoryRow>();
 		for (const row of rows) {
 			const prompt = normalizePrompt(row.prompt);
@@ -317,18 +391,59 @@ ON CONFLICT(prompt) DO UPDATE SET
 				(row.created_at === incumbent.created_at && row.id > incumbent.id);
 			if (rowWins) winners.set(prompt, { ...row, prompt });
 		}
+
+		let locationOrder = 0;
+		const locationWinners = new Map<string, HistoryLocationRow & { order: number }>();
+		const collectLocation = (row: HistoryLocationRow): void => {
+			if (!row.cwd) return;
+			const prompt = normalizePrompt(row.prompt);
+			if (!prompt) return;
+			const cwd = normalizePathForComparison(row.cwd);
+			const candidate = { ...row, prompt, cwd, order: locationOrder++ };
+			const key = JSON.stringify([prompt, cwd]);
+			const incumbent = locationWinners.get(key);
+			if (
+				!incumbent ||
+				candidate.created_at > incumbent.created_at ||
+				(candidate.created_at === incumbent.created_at && candidate.order > incumbent.order)
+			) {
+				locationWinners.set(key, candidate);
+			}
+		};
+		for (const row of rows) {
+			collectLocation({
+				prompt: row.prompt,
+				cwd: row.cwd ?? "",
+				created_at: row.created_at,
+				session_id: row.session_id,
+			});
+		}
+		for (const row of storedLocations) collectLocation(row);
+
 		this.#db.transaction(() => {
+			this.#db.run("DROP INDEX IF EXISTS idx_history_locations_cwd_created_at");
 			this.#db.run("DROP INDEX IF EXISTS idx_history_created_at");
 			this.#db.run("DROP TRIGGER IF EXISTS history_ai");
 			this.#db.run("DROP TABLE IF EXISTS history_fts");
+			this.#db.run("DROP TABLE IF EXISTS history_locations");
 			this.#db.run("DROP TABLE history");
 			this.#db.run(HISTORY_TABLE_DDL);
-			const insert = this.#db.prepare(
+			const insertHistory = this.#db.prepare(
 				"INSERT INTO history (id, prompt, created_at, cwd, session_id) VALUES (?, ?, ?, ?, ?)",
 			);
 			for (const row of winners.values()) {
-				insert.run(row.id, row.prompt, row.created_at, row.cwd, row.session_id);
+				insertHistory.run(row.id, row.prompt, row.created_at, row.cwd, row.session_id);
 			}
+			insertHistory.finalize();
+			const insertLocation = this.#db.prepare(
+				"INSERT INTO history_locations (prompt, cwd, created_at, session_id) VALUES (?, ?, ?, ?)",
+			);
+			for (const row of locationWinners.values()) {
+				if (winners.has(row.prompt)) {
+					insertLocation.run(row.prompt, row.cwd, row.created_at, row.session_id);
+				}
+			}
+			insertLocation.finalize();
 			this.#db.run(`PRAGMA user_version = ${HISTORY_DATA_VERSION}`);
 		})();
 		if (winners.size < rows.length) {
@@ -355,21 +470,34 @@ ON CONFLICT(prompt) DO UPDATE SET
 			.filter(tok => tok.length > 0);
 	}
 
-	#searchSubstring(tokens: string[], limit: number): HistoryRow[] {
-		const stmt = this.#getSubstringStmt(tokens.length);
-		const params: unknown[] = tokens.map(tok => `%${escapeLikePattern(tok)}%`);
-		params.push(limit);
+	#searchSubstring(tokens: string[], limit: number, cwd?: string): HistoryRow[] {
+		const stmt = this.#getSubstringStmt(tokens.length, cwd !== undefined);
+		const params: unknown[] = [];
+		if (cwd !== undefined) params.push(cwd);
+		params.push(...tokens.map(tok => `%${escapeLikePattern(tok)}%`), limit);
 		return stmt.all(...(params as [string, ...unknown[]])) as HistoryRow[];
 	}
 
-	#getSubstringStmt(tokenCount: number): Statement {
-		let stmt = this.#substringStmts.get(tokenCount);
+	#getSubstringStmt(tokenCount: number, scoped: boolean): Statement {
+		const statements = scoped ? this.#scopedSubstringStmts : this.#substringStmts;
+		let stmt = statements.get(tokenCount);
 		if (stmt) return stmt;
-		const whereClause = Array(tokenCount).fill("prompt LIKE ? ESCAPE '\\' COLLATE NOCASE").join(" AND ");
-		stmt = this.#db.prepare(
-			`SELECT id, prompt, created_at, cwd, session_id FROM history WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
-		);
-		this.#substringStmts.set(tokenCount, stmt);
+		const promptColumn = scoped ? "h.prompt" : "prompt";
+		const whereClause = Array(tokenCount)
+			.fill(`${promptColumn} LIKE ? ESCAPE '\\' COLLATE NOCASE`)
+			.join(" AND ");
+		stmt = scoped
+			? this.#db.prepare(`
+SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id
+FROM history h
+JOIN history_locations l ON l.prompt = h.prompt
+WHERE l.cwd = ? AND ${whereClause}
+ORDER BY l.created_at DESC, h.id DESC
+LIMIT ?`)
+			: this.#db.prepare(
+					`SELECT id, prompt, created_at, cwd, session_id FROM history WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+				);
+		statements.set(tokenCount, stmt);
 		return stmt;
 	}
 

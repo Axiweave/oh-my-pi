@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -131,5 +132,70 @@ describe("HistoryStorage.search", () => {
 		// Combined: only `go commit changes` satisfies both as substrings.
 		const results = storage.search("go mit", 10);
 		expect(results.map(r => r.prompt)).toEqual(["go commit changes"]);
+	});
+
+	describe("project scope", () => {
+		it("returns only prompts associated with the normalized current folder", async () => {
+			const storage = await freshStorage();
+			await storage.add("current folder prompt", "/projects/current/./");
+			await storage.add("other folder prompt", "/projects/other");
+			await storage.add("prompt without a folder");
+
+			expect(storage.getRecent(10, "/projects/current")).toEqual([
+				expect.objectContaining({
+					prompt: "current folder prompt",
+					cwd: "/projects/current",
+				}),
+			]);
+		});
+
+		it("keeps prefix and token-AND substring matching inside one folder", async () => {
+			const storage = await freshStorage();
+			await storage.add("commit and amend current", "/projects/current");
+			await storage.add("commit only current", "/projects/current");
+			await storage.add("commit and amend other", "/projects/other");
+
+			expect(storage.search("com", 10, "/projects/current").map(entry => entry.prompt)).toEqual([
+				"commit only current",
+				"commit and amend current",
+			]);
+			expect(storage.search("mit amend", 10, "/projects/current").map(entry => entry.prompt)).toEqual([
+				"commit and amend current",
+			]);
+		});
+
+		it("uses location recency and retains shared prompts in every folder", async () => {
+			const storage = await freshStorage();
+			await storage.add("shared prompt", "/projects/a/./", "a-session");
+			await storage.add("other local prompt", "/projects/a", "other-session");
+			await storage.add("shared prompt", "/projects/b", "b-session");
+			if (!tempDir) throw new Error("temporary history directory is unavailable");
+			const db = new Database(tempDir.join("history.db"));
+			try {
+				const update = db.prepare("UPDATE history_locations SET created_at = ? WHERE prompt = ? AND cwd = ?");
+				update.run(30, "shared prompt", "/projects/a");
+				update.run(20, "other local prompt", "/projects/a");
+				update.run(40, "shared prompt", "/projects/b");
+			} finally {
+				db.close();
+			}
+
+			expect(storage.getRecent(1, "/projects/a/../a")).toEqual([
+				expect.objectContaining({
+					prompt: "shared prompt",
+					created_at: 30,
+					cwd: "/projects/a",
+					sessionId: "a-session",
+				}),
+			]);
+			expect(storage.getRecent(10, "/projects/b").map(entry => entry.prompt)).toEqual(["shared prompt"]);
+
+			const globalShared = storage.getRecent(10).filter(entry => entry.prompt === "shared prompt");
+			expect(globalShared).toHaveLength(1);
+			expect(globalShared[0]).toMatchObject({
+				cwd: "/projects/b",
+				sessionId: "b-session",
+			});
+		});
 	});
 });

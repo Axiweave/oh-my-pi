@@ -59,6 +59,54 @@ it("migrates legacy history schema away from unixepoch defaults", async () => {
 		db.close();
 	}
 });
+
+it("migrates version-one databases with the location table and index", () => {
+	tempDir = TempDir.createSync("@omp-history-storage-v1-");
+	const dbPath = tempDir.join("history.db");
+	const legacyDb = new Database(dbPath);
+	legacyDb.exec(`
+		CREATE TABLE history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			prompt TEXT NOT NULL UNIQUE,
+			created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
+			cwd TEXT,
+			session_id TEXT
+		);
+		INSERT INTO history (prompt, created_at, cwd, session_id)
+		VALUES ('version one prompt', 7, '/projects/version-one', 'version-one-session');
+		PRAGMA user_version = 1;
+	`);
+	legacyDb.close();
+
+	const storage = HistoryStorage.open(dbPath);
+	expect(storage.getRecent(10, "/projects/version-one")).toEqual([
+		{
+			id: 1,
+			prompt: "version one prompt",
+			created_at: 7,
+			cwd: "/projects/version-one",
+			sessionId: "version-one-session",
+		},
+	]);
+
+	const db = new Database(dbPath, { readonly: true });
+	try {
+		const table = db
+			.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'history_locations'")
+			.get() as { present?: number } | undefined;
+		const index = db
+			.prepare(
+				"SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = 'idx_history_locations_cwd_created_at'",
+			)
+			.get() as { present?: number } | undefined;
+		const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
+		expect(table?.present).toBe(1);
+		expect(index?.present).toBe(1);
+		expect(version.user_version).toBe(2);
+	} finally {
+		db.close();
+	}
+});
 it("collapses duplicate prompts and keeps the latest project metadata", async () => {
 	tempDir = TempDir.createSync("@omp-history-storage-deduplicate-");
 	const dbPath = tempDir.join("history.db");
@@ -86,6 +134,22 @@ it("collapses duplicate prompts and keeps the latest project metadata", async ()
 			cwd: "/projects/second",
 			sessionId: "second-session",
 		},
+	]);
+	expect(storage.getRecent(10, "/projects/first")).toEqual([
+		expect.objectContaining({
+			prompt: "shared prompt",
+			created_at: 1,
+			cwd: "/projects/first",
+			sessionId: "first-session",
+		}),
+	]);
+	expect(storage.getRecent(10, "/projects/second")).toEqual([
+		expect.objectContaining({
+			prompt: "shared prompt",
+			created_at: 2,
+			cwd: "/projects/second",
+			sessionId: "second-session",
+		}),
 	]);
 
 	await storage.add("shared prompt", "/projects/latest", "latest-session");

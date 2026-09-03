@@ -394,6 +394,7 @@ export class SelectorController {
 		this.showSelector(done => {
 			const component = new HistorySearchComponent(
 				historyStorage,
+				getProjectDir(),
 				prompt => {
 					done();
 					this.ctx.editor.setText(prompt);

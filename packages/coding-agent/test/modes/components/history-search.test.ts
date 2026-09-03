@@ -8,9 +8,10 @@ beforeAll(async () => {
 });
 
 const NOW_SECONDS = Math.floor(Date.now() / 1000);
+const TEST_CWD = "/projects/current";
 
-function makeEntry(id: number, prompt: string, ageSeconds = 0): HistoryEntry {
-	return { id, prompt, created_at: NOW_SECONDS - ageSeconds };
+function makeEntry(id: number, prompt: string, ageSeconds = 0, cwd = TEST_CWD): HistoryEntry {
+	return { id, prompt, created_at: NOW_SECONDS - ageSeconds, cwd };
 }
 
 /** Minimal in-memory stand-in matching the two methods the component touches. */
@@ -21,10 +22,17 @@ function fakeStorage(entries: HistoryEntry[]): HistoryStorage {
 			.split(/[^\p{L}\p{N}]+/u)
 			.filter(Boolean);
 	return {
-		getRecent: (limit: number) => entries.slice(0, limit),
-		search: (query: string, limit: number) => {
+		getRecent: (limit: number, cwd?: string) =>
+			entries.filter(entry => cwd === undefined || entry.cwd === cwd).slice(0, limit),
+		search: (query: string, limit: number, cwd?: string) => {
 			const tokens = tokenize(query);
-			return entries.filter(e => tokens.every(t => e.prompt.toLowerCase().includes(t))).slice(0, limit);
+			return entries
+				.filter(
+					entry =>
+						(cwd === undefined || entry.cwd === cwd) &&
+						tokens.every(token => entry.prompt.toLowerCase().includes(token)),
+				)
+				.slice(0, limit);
 		},
 	} as unknown as HistoryStorage;
 }
@@ -43,6 +51,7 @@ describe("HistorySearchComponent", () => {
 	it("paints the selected row with the selectedBg highlight bar and a relative timestamp", () => {
 		const component = new HistorySearchComponent(
 			fakeStorage([makeEntry(1, "deploy the release"), makeEntry(2, "older prompt", 7200)]),
+			TEST_CWD,
 			() => {},
 			() => {},
 		);
@@ -60,6 +69,7 @@ describe("HistorySearchComponent", () => {
 	it("highlights the matched query tokens within results", () => {
 		const component = new HistorySearchComponent(
 			fakeStorage([makeEntry(1, "deploy the needle rollback"), makeEntry(2, "routine status update")]),
+			TEST_CWD,
 			() => {},
 			() => {},
 		);
@@ -76,6 +86,7 @@ describe("HistorySearchComponent", () => {
 	it("distinguishes an empty query from an unmatched query", () => {
 		const empty = new HistorySearchComponent(
 			fakeStorage([]),
+			TEST_CWD,
 			() => {},
 			() => {},
 		);
@@ -83,10 +94,46 @@ describe("HistorySearchComponent", () => {
 
 		const unmatched = new HistorySearchComponent(
 			fakeStorage([makeEntry(1, "deploy the release")]),
+			TEST_CWD,
 			() => {},
 			() => {},
 		);
 		type(unmatched, "zzzz");
 		expect(render(unmatched).plain).toContain("No matching history");
+	});
+
+	it("toggles scopes with Tab without changing the query", () => {
+		const component = new HistorySearchComponent(
+			fakeStorage([
+				makeEntry(1, "deploy current service"),
+				makeEntry(2, "deploy other service", 0, "/projects/other"),
+				makeEntry(3, "unrelated global prompt", 0, "/projects/other"),
+			]),
+			TEST_CWD,
+			() => {},
+			() => {},
+		);
+		type(component, "deploy");
+
+		const local = render(component).plain;
+		expect(local).toContain("History (current folder)");
+		expect(local).toContain("deploy current service");
+		expect(local).not.toContain("deploy other service");
+		expect(local).toContain("tab all projects");
+
+		component.handleInput("\t");
+		const global = render(component).plain;
+		expect(global).toContain("History (all projects)");
+		expect(global).toContain("deploy current service");
+		expect(global).toContain("deploy other service");
+		expect(global).not.toContain("unrelated global prompt");
+		expect(global).toContain("tab current folder");
+
+		component.handleInput("\t");
+		const localAgain = render(component).plain;
+		expect(localAgain).toContain("History (current folder)");
+		expect(localAgain).toContain("deploy current service");
+		expect(localAgain).not.toContain("deploy other service");
+		expect(localAgain).toContain("tab all projects");
 	});
 });

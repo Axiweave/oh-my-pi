@@ -15,6 +15,14 @@ It is not a changelog. Each entry describes a current decision that upstream reb
 
 ## Divergences
 
+### Project-local prompt history
+
+- **Decision:** Start Ctrl-R history in the active working directory and let Tab switch to all projects without changing the query.
+- **Decision:** Keep each prompt unique globally while preserving its membership and latest metadata in every recorded working directory.
+- **Why:** Local-first results remove unrelated project prompts, while the global scope keeps cross-project recall available.
+- **Key paths:** `packages/coding-agent/src/session/history-storage.ts`, `packages/coding-agent/src/modes/components/history-search.ts`, and `packages/coding-agent/src/modes/controllers/selector-controller.ts`.
+- **Checks:** `packages/coding-agent/test/history-storage-search.test.ts`, `packages/coding-agent/test/history-storage-sqlite-compat.test.ts`, `packages/coding-agent/test/modes/components/history-search.test.ts`, and `packages/coding-agent/test/keybindings-selector-navigation.test.ts`.
+
 ### Debate plan workflow with implementation review
 
 - **Decision:** Keep the `/debate` plan workflow: an independent read-only reviewer must reach exact-byte consensus on the plan before human approval, capped at `plan.debateMaxRounds` with deadlock escalation.
