@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { shouldSkipHistory } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 
-describe("shouldSkipHistory — security filter for slash command history", () => {
+describe("shouldSkipHistory — slash command history filter", () => {
 	it("skips /login with a redirect URL argument (contains OAuth code/state)", () => {
 		expect(shouldSkipHistory("/login http://localhost:1455/auth/callback?code=abc&state=xyz")).toBe(true);
 	});
@@ -34,17 +34,24 @@ describe("shouldSkipHistory — security filter for slash command history", () =
 		expect(shouldSkipHistory("/join")).toBe(false);
 	});
 
-	it("skips /mcp add with --token flag (contains bearer token)", () => {
+	it("skips non-interactive /mcp add forms even without --token", () => {
+		expect(shouldSkipHistory("/mcp add myserver --url http://x")).toBe(true);
+		expect(shouldSkipHistory("/mcp add myserver -- env API_KEY=secret server")).toBe(true);
 		expect(shouldSkipHistory("/mcp add myserver --url http://x --token sk-secret123")).toBe(true);
 	});
 
-	it("does not skip /mcp add without --token", () => {
-		expect(shouldSkipHistory("/mcp add myserver --url http://x")).toBe(false);
+	it("does not skip interactive /mcp add without configuration arguments", () => {
+		expect(shouldSkipHistory("/mcp add")).toBe(false);
 	});
 
 	it("does not skip /mcp without add subcommand", () => {
 		expect(shouldSkipHistory("/mcp list")).toBe(false);
 		expect(shouldSkipHistory("/mcp reload")).toBe(false);
+	});
+
+	it("skips transient lifecycle commands and their aliases", () => {
+		const commands = ["/new", "/fresh", "/clear", "/drop", "/retry", "/exit", "/quit", "/q", "/restart"];
+		expect(commands.filter(command => !shouldSkipHistory(command))).toEqual([]);
 	});
 
 	it("does not skip ordinary slash commands", () => {

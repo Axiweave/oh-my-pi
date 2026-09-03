@@ -49,17 +49,25 @@ import {
 } from "../../utils/video";
 import { resizeImage } from "../../utils/image-resize";
 
+const HISTORY_EXCLUDED_BUILTINS: Readonly<Record<string, true>> = {
+	new: true,
+	fresh: true,
+	clear: true,
+	drop: true,
+	retry: true,
+	exit: true,
+	quit: true,
+	restart: true,
+};
+
 /**
- * Slash commands that may carry secrets in their arguments should never be
- * persisted to history.
+ * Return true for slash commands that are unsafe or not useful to recall.
  *
- * - /login accepts three callback forms (redirect URL, query string, raw auth
- *   code) — all can contain OAuth code=/state= params.
- * - /join <link> carries a 32-byte room key and optional write token.
- * - /mcp add --token <token> carries a bearer token.
+ * Lifecycle commands depend on transient session state and can be destructive
+ * when repeated. Credential-bearing commands must not persist their arguments.
  *
- * The command name is extracted the same way as parseSlashCommand() — splitting
- * on the earliest whitespace or colon — so /login:?code=... is correctly matched.
+ * The command name uses the builtin registry so aliases such as `/q` follow
+ * their canonical command without duplicate entries in the exclusion table.
  */
 export function shouldSkipHistory(slashText: string): boolean {
 	if (!slashText.startsWith("/")) return false;
@@ -69,15 +77,20 @@ export function shouldSkipHistory(slashText: string): boolean {
 	const firstColon = body.indexOf(":");
 	const sep = firstWs === -1 ? firstColon : firstColon === -1 ? firstWs : Math.min(firstWs, firstColon);
 	const name = sep === -1 ? body : body.slice(0, sep);
+	const canonicalName = lookupBuiltinSlashCommand(name)?.name ?? name;
 	const hasArgs = sep !== -1;
+	if (Object.hasOwn(HISTORY_EXCLUDED_BUILTINS, canonicalName)) return true;
 	// /login <anything> — parseCallbackInput() accepts redirect URLs, query
 	// strings (?code=...), and raw auth codes, all of which carry secrets.
-	if (name === "login" && hasArgs) return true;
+	if (canonicalName === "login" && hasArgs) return true;
 	// /join <link> — the link carries the 32-byte room key and write token.
-	if (name === "join" && hasArgs) return true;
-	if (name === "mcp") {
+	if (canonicalName === "join" && hasArgs) return true;
+	if (canonicalName === "mcp") {
 		const args = body.slice(sep + 1).trim();
-		return args.startsWith("add") && /--token\s/.test(args);
+		const [subcommand, ...commandArgs] = args.split(/\s+/);
+		// Non-interactive add arguments can carry credentials in URLs or command
+		// environment variables even when the dedicated --token flag is absent.
+		return subcommand === "add" && commandArgs.length > 0;
 	}
 	return false;
 }

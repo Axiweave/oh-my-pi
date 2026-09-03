@@ -116,15 +116,14 @@ describe("input controller — slash command history (#3148)", () => {
 		expect(addToHistory).toHaveBeenCalledWith("/mcp list");
 	});
 
-	it("does NOT record /mcp add with a --token (would leak the bearer token)", async () => {
+	it("does not record non-interactive /mcp add arguments", async () => {
 		const { ctx, editor, addToHistory, handleMCPCommand } = makeCtx();
 		controllerFor(ctx);
+		const command = "/mcp add srv --url http://x";
 
-		await editor.onSubmit?.("/mcp add srv --url http://x --token sk-secret123");
+		await editor.onSubmit?.(command);
 
-		// Command still executes...
-		expect(handleMCPCommand).toHaveBeenCalledWith("/mcp add srv --url http://x --token sk-secret123");
-		// ...but the secret-bearing text is kept out of recallable history.
+		expect(handleMCPCommand).toHaveBeenCalledWith(command);
 		expect(addToHistory).not.toHaveBeenCalled();
 	});
 
