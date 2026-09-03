@@ -6,6 +6,10 @@
 
 - The working row now shows the elapsed time of the current turn on its right edge (`42s`, `5m3s`, `1h1m30s`); toggle with `tui.workingTimer`, delay with `tui.workingTimerMinSeconds`, hidden when the `pi` status brand already shows a turn timer.
 
+### Changed
+
+- `/guided-goal` now keeps the exact submitted slash command visible in the transcript while its rewritten interview brief remains hidden.
+
 ## [18.1.5] - 2026-09-03
 
 ### Added

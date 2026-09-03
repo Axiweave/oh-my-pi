@@ -955,6 +955,10 @@ export class EventController {
 				if (event.message.userInitiated) this.#turnStartedAt = event.message.timestamp;
 				else this.#turnStartedAt = undefined;
 			}
+			if (this.ctx.getUserMessageText(event.message)) {
+				this.ctx.addMessageToChat(event.message);
+				this.ctx.ui.requestRender(true);
+			}
 		} else if (event.message.role === "fileMention") {
 			this.#resetReadGroup();
 			this.ctx.addMessageToChat(event.message);

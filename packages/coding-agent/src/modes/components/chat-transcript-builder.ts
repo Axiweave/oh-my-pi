@@ -26,6 +26,7 @@ import {
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
+	syntheticPromptDisplayText,
 } from "../../session/messages";
 import type { SessionMessageEntry } from "../../session/session-entries";
 import { theme } from "../theme/theme";
@@ -296,9 +297,11 @@ export class ChatTranscriptBuilder {
 				// A user prompt closes the poll-displacement window, same as the live path.
 				if (message.role === "user") this.#resolveWaitingPoll();
 				if (message.role === "user") this.#resolveTodoSnapshot();
-				const textContent = message.role === "user" ? userMessageText(message) : "";
+				const developerDisplayText = message.role === "developer" ? syntheticPromptDisplayText(message) : undefined;
+				const textContent = message.role === "user" ? userMessageText(message) : (developerDisplayText ?? "");
 				if (textContent) {
-					const isSynthetic = message.role === "developer" ? true : (message.synthetic ?? false);
+					const isSynthetic =
+						message.role === "developer" ? developerDisplayText === undefined : (message.synthetic ?? false);
 					// Synthetic (agent-attributed) inputs — chiefly the advisor's `Session
 					// update` replay dumps — can be hundreds of KiB of Markdown each.
 					// Rendering their full body on cold open blocked the TUI (issue #6308);

@@ -47,6 +47,13 @@ export const PREWALK_PLAN_MESSAGE_TYPE = "prewalk-plan";
 export const CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE = "core-plan-mode-context";
 const LEGACY_CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 
+/** Return the literal user text attached to a visible synthetic developer prompt. */
+export function syntheticPromptDisplayText(message: Message): string | undefined {
+	if (message.role !== "developer") return undefined;
+	const displayText = (message as Message & { displayText?: unknown }).displayText;
+	return typeof displayText === "string" && displayText.length > 0 ? displayText : undefined;
+}
+
 /** Identify core-owned plan constraints, including entries persisted before the marker was namespaced. */
 export function isCorePlanModeContextMessage(message: AgentMessage): boolean {
 	if (message.role !== "custom") return false;
@@ -1319,13 +1326,18 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 		case "branchSummary":
 		case "compactionSummary":
 		case "user":
-		case "developer":
 		case "toolResult": {
 			// Core roles share one transformer with agent-core —
 			// duplicating them here is how snapcompact frames once
 			// silently fell off the provider request.
 			const converted = convertMessageToLlm(m);
 			return converted ? [converted] : [];
+		}
+		case "developer": {
+			const converted = convertMessageToLlm(m);
+			if (!converted || syntheticPromptDisplayText(m) === undefined) return converted ? [converted] : [];
+			const { displayText: _displayText, ...providerMessage } = converted as Message & { displayText?: string };
+			return [providerMessage as Message];
 		}
 		default:
 			m satisfies never;

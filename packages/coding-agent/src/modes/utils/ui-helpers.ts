@@ -54,6 +54,7 @@ import {
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
+	syntheticPromptDisplayText,
 } from "../../session/messages";
 import type { SessionContext, StrippedToolCallsMarker } from "../../session/session-context";
 import { replaceTabs } from "../../tools/render-utils";
@@ -121,8 +122,10 @@ function imageLinksForMessage(
 export class UiHelpers {
 	constructor(private ctx: InteractiveModeContext) {}
 
-	/** Extract text content from a user message */
+	/** Extract text content from a user message or a visible synthetic prompt. */
 	getUserMessageText(message: Message): string {
+		const displayText = syntheticPromptDisplayText(message);
+		if (displayText !== undefined) return displayText;
 		if (message.role !== "user") return "";
 		const textBlocks =
 			typeof message.content === "string"
@@ -276,7 +279,10 @@ export class UiHelpers {
 			case "developer": {
 				const textContent = this.ctx.getUserMessageText(message);
 				if (textContent) {
-					const isSynthetic = message.role === "developer" ? true : (message.synthetic ?? false);
+					const isSynthetic =
+						message.role === "developer"
+							? syntheticPromptDisplayText(message) === undefined
+							: (message.synthetic ?? false);
 					const cached = options?.reuseSettledComponent
 						? this.ctx.transcriptMessageComponents.get(message)
 						: undefined;

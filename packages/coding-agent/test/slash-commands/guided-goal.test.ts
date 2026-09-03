@@ -41,7 +41,11 @@ describe("/guided-goal slash command", () => {
 		resolve(true);
 		expect(await dispatched).toBe(true);
 		expect(harness.clearDraft).not.toHaveBeenCalled();
-		expect(harness.handleGuidedGoalCommand).toHaveBeenCalledWith("ship the release", input);
+		expect(harness.handleGuidedGoalCommand).toHaveBeenCalledWith(
+			"ship the release",
+			input,
+			"/guided-goal ship the release",
+		);
 	});
 
 	it("passes no objective for a bare invocation", async () => {
@@ -50,6 +54,6 @@ describe("/guided-goal slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/guided-goal   ", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.handleGuidedGoalCommand).toHaveBeenCalledWith(undefined, undefined);
+		expect(harness.handleGuidedGoalCommand).toHaveBeenCalledWith(undefined, undefined, "/guided-goal   ");
 	});
 });

@@ -12,6 +12,7 @@ import {
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 	stripImagesFromMessage,
+	syntheticPromptDisplayText,
 } from "../../src/session/messages";
 
 function customMessage(customType: string, attribution: "agent" | "user"): CustomMessage<SkillPromptDetails> {
@@ -58,6 +59,30 @@ function interruptedThinkingContinuity(): CustomMessage {
 		timestamp: 2,
 	};
 }
+
+describe("syntheticPromptDisplayText", () => {
+	it("keeps literal display text out of the provider message", () => {
+		const message = {
+			role: "developer" as const,
+			content: [{ type: "text" as const, text: "rewritten interview brief" }],
+			attribution: "agent" as const,
+			timestamp: 1,
+			synthetic: true,
+			displayText: "/guided-goal   ship it",
+		};
+
+		expect(syntheticPromptDisplayText(message)).toBe("/guided-goal   ship it");
+		expect(convertToLlm([message])).toEqual([
+			{
+				role: "developer",
+				content: [{ type: "text", text: "rewritten interview brief" }],
+				attribution: "agent",
+				timestamp: 1,
+				synthetic: true,
+			},
+		]);
+	});
+});
 
 describe("filterCorePlanModeContextMessages", () => {
 	it("preserves the legacy extension context while removing core plan constraints", () => {

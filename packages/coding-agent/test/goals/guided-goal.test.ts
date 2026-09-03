@@ -103,26 +103,29 @@ describe("guided goal setup", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("kicks off the interview as a hidden developer prompt and exposes the goal tool", async () => {
+	it("keeps the literal invocation visible while sending the hidden interview brief", async () => {
 		const harness = await createHarness();
 		try {
 			const promptSpy = vi.spyOn(harness.session, "prompt").mockResolvedValue(true);
 			const images: ImageContent[] = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
+			const displayText = "/guided-goal automate flaky test triage";
 
-			await harness.mode.handleGuidedGoalCommand("automate flaky test triage", {
-				images,
-				imageLinks: ["file:///shot.png"],
-			});
+			await harness.mode.handleGuidedGoalCommand(
+				"automate flaky test triage",
+				{
+					images,
+					imageLinks: ["file:///shot.png"],
+				},
+				displayText,
+			);
 
 			expect(promptSpy).toHaveBeenCalledTimes(1);
 			const [text, promptOptions] = promptSpy.mock.calls[0]!;
-			expect(promptOptions).toEqual({ synthetic: true, images });
-			// The rough objective rides inside the kickoff, and the kickoff tells the
-			// agent how to finish: `goal` tool, op create.
+			expect(promptOptions).toEqual({ synthetic: true, images, displayText, userInitiated: true });
+			// The rough objective rides inside the hidden kickoff while the UI keeps
+			// the exact slash command that the user submitted.
 			expect(text).toContain("automate flaky test triage");
 			expect(text).toContain('op: "create"');
-			// The goal tool is activated up front so the agent can create the goal
-			// once the interview concludes.
 			expect(harness.session.getEnabledToolNames()).toContain("goal");
 		} finally {
 			await harness.cleanup();
@@ -151,11 +154,12 @@ describe("guided goal setup", () => {
 			const promptSpy = vi.spyOn(harness.session, "prompt").mockResolvedValue(true);
 			const followUp = vi.spyOn(harness.session, "followUp").mockResolvedValue();
 
-			await harness.mode.handleGuidedGoalCommand("ship it");
+			const displayText = "/guided-goal   ship it";
+			await harness.mode.handleGuidedGoalCommand("ship it", undefined, displayText);
 
 			expect(promptSpy).not.toHaveBeenCalled();
 			expect(followUp).toHaveBeenCalledTimes(1);
-			expect(followUp.mock.calls[0]?.[2]).toEqual({ synthetic: true });
+			expect(followUp.mock.calls[0]?.[2]).toEqual({ synthetic: true, displayText, userInitiated: true });
 		} finally {
 			await harness.cleanup();
 		}
@@ -167,10 +171,11 @@ describe("guided goal setup", () => {
 			vi.spyOn(harness.session, "prompt").mockRejectedValue(new AgentBusyError());
 			const followUp = vi.spyOn(harness.session, "followUp").mockResolvedValue();
 
-			await harness.mode.handleGuidedGoalCommand("ship it");
+			const displayText = "/guided-goal ship it";
+			await harness.mode.handleGuidedGoalCommand("ship it", undefined, displayText);
 
 			expect(followUp).toHaveBeenCalledTimes(1);
-			expect(followUp.mock.calls[0]?.[2]).toEqual({ synthetic: true });
+			expect(followUp.mock.calls[0]?.[2]).toEqual({ synthetic: true, displayText, userInitiated: true });
 		} finally {
 			await harness.cleanup();
 		}

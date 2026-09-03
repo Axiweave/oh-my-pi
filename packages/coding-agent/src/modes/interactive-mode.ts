@@ -4342,6 +4342,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async handleGuidedGoalCommand(
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		displayText = rest?.trim() ? `/guided-goal ${rest.trim()}` : "/guided-goal",
 	): Promise<boolean> {
 		try {
 			if (this.planModeEnabled || this.planModePaused) {
@@ -4382,13 +4383,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			const kickoff = prompt.render(guidedGoalInterviewPrompt, { initial: rest?.trim() || undefined });
 			const images = input?.images?.length ? input.images : undefined;
 			if (this.session.isStreaming) {
-				await this.session.followUp(kickoff, images, { synthetic: true });
+				await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
 			} else {
 				try {
-					await this.session.prompt(kickoff, images ? { synthetic: true, images } : { synthetic: true });
+					await this.session.prompt(kickoff, {
+						synthetic: true,
+						images,
+						displayText,
+						userInitiated: true,
+					});
 				} catch (error) {
 					if (!(error instanceof AgentBusyError)) throw error;
-					await this.session.followUp(kickoff, images, { synthetic: true });
+					await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
 				}
 			}
 			return true;

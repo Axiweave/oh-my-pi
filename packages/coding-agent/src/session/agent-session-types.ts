@@ -342,6 +342,8 @@ export interface PromptOptions {
 	synthetic?: boolean;
 	/** Whether this prompt is a deliberate user action. */
 	userInitiated?: boolean;
+	/** Literal user text to show for a synthetic prompt while keeping its developer content hidden. */
+	displayText?: string;
 	/** Explicit billing/initiator attribution. */
 	attribution?: MessageAttribution;
 	/** Skip pre-send compaction checks for this prompt. */
@@ -366,6 +368,10 @@ export interface FollowUpOptions {
 	expandPromptTemplates?: boolean;
 	/** Explicit billing/initiator attribution. */
 	attribution?: MessageAttribution;
+	/** Literal user text to show when the queued synthetic prompt starts. */
+	displayText?: string;
+	/** Whether this queued synthetic prompt came from a deliberate user action. */
+	userInitiated?: boolean;
 }
 
 /** Result from a handoff operation. */

@@ -366,7 +366,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			await runWithDetachedModeDraft(command, runtime, () =>
-				runtime.ctx.handleGuidedGoalCommand(command.args || undefined, runtime.input),
+				runtime.ctx.handleGuidedGoalCommand(command.args || undefined, runtime.input, command.text),
 			);
 		},
 	},

@@ -6252,6 +6252,7 @@ export class AgentSession {
 					timestamp: submittedAt,
 					synthetic: true,
 					userInitiated: options?.userInitiated === true ? true : undefined,
+					...(options.displayText ? { displayText: options.displayText } : {}),
 				}
 			: {
 					role: "user" as const,
@@ -6833,8 +6834,8 @@ export class AgentSession {
 			: undefined;
 		this.#allowQueuedMessageDrainRetry();
 		if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-		this.agent.followUp({
-			role: "developer",
+		const message = {
+			role: "developer" as const,
 			content,
 			attribution: options.attribution ?? "agent",
 			timestamp: Date.now(),
@@ -6842,7 +6843,10 @@ export class AgentSession {
 			// behind a busy turn): replay uses the marker to clear the preceding
 			// user's prompt anchor, matching the live agent_start clear.
 			synthetic: true,
-		});
+			userInitiated: options.userInitiated === true ? true : undefined,
+			...(options.displayText ? { displayText: options.displayText } : {}),
+		};
+		this.agent.followUp(message);
 		this.#scheduleIdleQueueDrain();
 	}
 
