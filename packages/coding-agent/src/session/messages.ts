@@ -68,6 +68,9 @@ export function filterCorePlanModeContextMessages(messages: AgentMessage[], acti
 	return messages.filter((message, index) => !isCorePlanModeContextMessage(message) || index === keepIndex);
 }
 
+/** Custom message type for the transient Vibe mode directive. */
+export const VIBE_MODE_CONTEXT_MESSAGE_TYPE = "vibe-mode-context";
+
 /**
  * Logs provider-error turns so their actual cause is available outside the
  * session transcript. No-op for non-error stop reasons.

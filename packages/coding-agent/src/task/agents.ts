@@ -6,7 +6,6 @@
 import { Effort } from "@oh-my-pi/pi-ai";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import { parseAgentFields } from "../discovery/helpers";
-import designerMd from "../prompts/agents/designer.md" with { type: "text" };
 // Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
 import implReviewerMd from "../prompts/agents/impl-reviewer.md" with { type: "text" };
@@ -46,7 +45,6 @@ function buildAgentContent(def: EmbeddedAgentDef): string {
 
 const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "scout.md", template: scoutMd },
-	{ fileName: "designer.md", template: designerMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "plan-reviewer.md", template: planReviewerMd },
 	{ fileName: "impl-reviewer.md", template: implReviewerMd },
