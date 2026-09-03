@@ -390,6 +390,7 @@ export class ChatTranscriptBuilder {
 		assistantComponent.setImagesVisible(settings.get("terminal.showImages"));
 		assistantComponent.setToolResultImagesVisible(!settings.get("display.hideToolActivity"));
 		this.#trackExpandable(assistantComponent);
+		assistantComponent.pickReactionTarget(this.container.children);
 		this.container.addChild(assistantComponent);
 
 		if (settings.get("display.cacheMissMarker")) {
@@ -462,8 +463,6 @@ export class ChatTranscriptBuilder {
 					// Stable ids and Kitty placeholder cells keep images anchored
 					// while the transcript viewport scrolls and reflows.
 					showImages: settings.get("terminal.showImages"),
-					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
-					editAllowFuzzy: settings.get("edit.fuzzyMatch"),
 				},
 				this.deps.getTool?.(content.name),
 				this.deps.ui,
@@ -555,7 +554,8 @@ export class ChatTranscriptBuilder {
 		if (
 			message.customType === "irc:incoming" ||
 			message.customType === "irc:autoreply" ||
-			message.customType === "irc:relay"
+			message.customType === "irc:relay" ||
+			message.customType === "irc:workpool"
 		) {
 			this.container.addChild(buildIrcMessageCard(message, () => this.#expanded));
 			return;

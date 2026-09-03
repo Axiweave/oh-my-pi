@@ -6,6 +6,16 @@
 
 - Added removable message-context transforms so hosts can apply session-specific provider filtering after agent construction.
 
+## [18.1.6] - 2026-09-03
+
+### Added
+
+- Added support for streaming tool argument updates, providing more responsive tool-call progress.
+
+### Changed
+
+- Improved steering behavior so queued steering commands preserve already-emitted non-interruptible tool calls while aborting or skipping only interruptible waits.
+
 ## [18.1.2] - 2026-09-01
 
 ### Fixed
