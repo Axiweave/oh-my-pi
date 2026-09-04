@@ -2062,6 +2062,35 @@ export class Editor implements Component, Focusable {
 		this.#resetKillSequence();
 		this.#setTextInternal(text);
 	}
+
+	setLeadingSlashCommand(command: string): void {
+		this.#exitHistoryForEditing();
+		const line = this.#state.lines[0] ?? "";
+		const start = findLeadingSlashCommandStart(line);
+		const tokenEnd = start === null ? -1 : line.slice(start).search(/\s/u);
+		const oldEnd = start === null ? 0 : tokenEnd === -1 ? line.length : start + tokenEnd;
+		const replacement = `/${command}${start === null || oldEnd === line.length ? " " : ""}`;
+		const nextLine = line.slice(0, start ?? 0) + replacement + line.slice(oldEnd);
+		if (nextLine === line) return;
+
+		this.#resetKillSequence();
+		this.#recordUndoState();
+		this.#state.lines[0] = nextLine;
+		if (this.#state.cursorLine === 0) {
+			if (start === null && this.#state.cursorCol > 0) {
+				this.#setCursorCol(this.#state.cursorCol + replacement.length);
+			} else if (start !== null && this.#state.cursorCol >= start) {
+				this.#setCursorCol(
+					this.#state.cursorCol <= oldEnd
+						? start + replacement.length
+						: this.#state.cursorCol + replacement.length - (oldEnd - start),
+				);
+			}
+		}
+		this.#cancelAutocomplete();
+		this.onAutocompleteUpdate?.();
+		this.onChange?.(this.getText());
+	}
 	submit(): void {
 		if (this.disableSubmit) return;
 		this.#submitValue();

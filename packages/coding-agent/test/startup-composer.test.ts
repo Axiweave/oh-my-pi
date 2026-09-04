@@ -13,6 +13,7 @@ import {
 	takeStartupComposerLease,
 } from "@oh-my-pi/pi-coding-agent/modes/startup-composer";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { StdinBuffer } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { createTestSession } from "./utilities";
 
@@ -106,6 +107,48 @@ describe("Composer prepaint", () => {
 
 		composer.ui.stop();
 		expect(terminal.stops).toBe(1);
+	});
+
+	it("applies split prompt control packets without moving the body cursor", () => {
+		const terminal = new CountingTerminal();
+		const composer = new Composer({ preferences: config, terminal });
+		const stdin = new StdinBuffer();
+		stdin.on("data", data => terminal.sendInput(data));
+		composer.start();
+
+		try {
+			terminal.sendInput("/aaaa bbb cc");
+			terminal.sendInput("\x1b[D");
+			terminal.sendInput("\x1b[D");
+			stdin.process("\x1b_pi:prompt;long");
+			stdin.process("er\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/longer bbb cc");
+			terminal.sendInput("X");
+			expect(composer.editor.getExpandedText()).toBe("/longer bbb Xcc");
+
+			composer.editor.setText("bbb cc");
+			terminal.sendInput("\x1b[D");
+			terminal.sendInput("\x1b[D");
+			stdin.process("\x1b_pi:prompt;dddd\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/dddd bbb cc");
+			terminal.sendInput("X");
+			expect(composer.editor.getExpandedText()).toBe("/dddd bbb Xcc");
+
+			const draft = composer.editor.getExpandedText();
+			const cursor = composer.editor.getCursor();
+			stdin.process("\x1b_pi:prompt;bad name\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe(draft);
+			expect(composer.editor.getCursor()).toEqual(cursor);
+
+			composer.editor.setText("body");
+			composer.editor.moveToMessageStart();
+			stdin.process("\x1b_pi:prompt;zero\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/zero body");
+			expect(composer.editor.getCursor()).toEqual({ line: 0, col: 0 });
+		} finally {
+			stdin.destroy();
+			composer.stop();
+		}
 	});
 
 	it("adopts the live draft with final theme, keybindings, and submit behavior", async () => {

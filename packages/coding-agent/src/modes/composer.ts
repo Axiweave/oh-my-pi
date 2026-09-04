@@ -218,6 +218,15 @@ export class Composer implements TerminalFrameProvider {
 			options.tuiOptions,
 		);
 		this.ui.setFrameProvider(this);
+		this.ui.addInputListener(data => {
+			if (!data.startsWith("\x1b_pi:prompt;")) return;
+			const match = /^\x1b_pi:prompt;([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
+			if (match && this.ui.getFocused() === this.editor) {
+				this.editor.setLeadingSlashCommand(match[1] ?? "");
+				this.ui.requestRender();
+			}
+			return { consume: true };
+		});
 		this.ui.setMaxInlineImages(this.#preferences.maxInlineImages);
 		this.ui.setResizeScrollback(this.#preferences.resizeScrollback);
 

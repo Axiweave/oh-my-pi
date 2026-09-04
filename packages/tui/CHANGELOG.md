@@ -5,6 +5,7 @@
 ### Added
 
 - Added `AutocompleteProvider.getRecognizedCommandRanges` and `Editor.getRecognizedCommandRanges` so hosts can color-highlight a fully recognized leading slash command and inline `/skill:name` tokens as they're typed.
+- Added `Editor.setLeadingSlashCommand` so hosts can replace or insert a draft's leading slash command without moving its body cursor.
 
 ## [18.1.9] - 2026-09-04
 
