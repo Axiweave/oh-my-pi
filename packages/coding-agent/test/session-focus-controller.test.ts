@@ -1,9 +1,59 @@
 import { describe, expect, it } from "bun:test";
+import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import type { McpConnectionStatusEvent } from "@oh-my-pi/pi-coding-agent/mcp/startup-events";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+
+/** Fake `ide` MCP connection returned by {@link fakeIdeManager}. */
+interface FakeIdeManager {
+	manager: MCPManager;
+	sent: unknown[];
+	listeners: Array<(event: McpConnectionStatusEvent) => void>;
+	fire: (event: McpConnectionStatusEvent) => void;
+}
+
+/** Shared fake `ide` MCP connection: `sent` collects `params.state` in call order. */
+function fakeIdeManager({
+	connected = true,
+	notify,
+}: {
+	connected?: boolean;
+	notify?: (method: string, params: Record<string, unknown>) => Promise<void>;
+} = {}): FakeIdeManager {
+	const sent: unknown[] = [];
+	const listeners: Array<(event: McpConnectionStatusEvent) => void> = [];
+	const manager = {
+		getConnection: (name: string) =>
+			connected && name === "ide"
+				? {
+						transport: {
+							notify: async (method: string, params: Record<string, unknown>) => {
+								sent.push(params.state);
+								await notify?.(method, params);
+							},
+						},
+					}
+				: undefined,
+		addConnectionStatusListener: (fn: (event: McpConnectionStatusEvent) => void) => {
+			listeners.push(fn);
+			return () => {
+				const index = listeners.indexOf(fn);
+				if (index !== -1) listeners.splice(index, 1);
+			};
+		},
+	} as unknown as MCPManager;
+	return {
+		manager,
+		sent,
+		listeners,
+		fire: (event: McpConnectionStatusEvent) => {
+			for (const listener of listeners) listener(event);
+		},
+	};
+}
 
 interface SessionStub {
 	session: AgentSession;
@@ -54,6 +104,7 @@ interface Harness {
 		renderInitialMessages: () => number;
 		mainUnsubscribe: () => number;
 	};
+	fake: FakeIdeManager;
 }
 
 function makeHarness(options: { renderInitialMessages?: () => void | Promise<void> } = {}): Harness {
@@ -65,6 +116,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 	let resetTranscriptAnchors = 0;
 	let renderInitialMessages = 0;
 	let mainUnsubscribe = 0;
+	const fake = fakeIdeManager();
 
 	const ctx = {
 		session: main.session,
@@ -99,6 +151,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 		ui: { requestRender() {} },
 		showStatus() {},
 		collabGuest: undefined,
+		mcpManager: fake.manager,
 	} as unknown as InteractiveModeContext;
 
 	const registry = new AgentRegistry();
@@ -113,6 +166,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 		handledEvents,
 		setSessionCalls,
 		reloadTodoSessions,
+		fake,
 		counts: {
 			clearTransientSessionUi: () => clearTransientSessionUi,
 			resetTranscriptAnchors: () => resetTranscriptAnchors,
@@ -267,5 +321,16 @@ describe("SessionFocusController", () => {
 			[worker.session, "Worker"],
 			[h.main.session, undefined],
 		]);
+	});
+
+	it("focusing a non-streaming session reports idle to the IDE", async () => {
+		const h = makeHarness();
+		const worker = makeSessionStub({ isStreaming: false });
+		registerSub(h.registry, "Worker", worker.session, MAIN_AGENT_ID);
+
+		await h.controller.focusAgent("Worker");
+		await flushAsync();
+
+		expect(h.fake.sent).toEqual(["idle"]);
 	});
 });

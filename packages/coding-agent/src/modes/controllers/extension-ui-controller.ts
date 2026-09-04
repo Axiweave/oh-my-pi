@@ -32,6 +32,7 @@ import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, them
 import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
+import { publishIdeSessionState } from "../../mcp/ide-state";
 
 const MAX_WIDGET_LINES = 10;
 const ASK_OTHER_OPTION = "Other (type your own)";
@@ -1244,6 +1245,7 @@ export class ExtensionUiController {
 				hide?.();
 				this.#dialogActive = false;
 				this.#advanceDialogQueue();
+				this.#publishDialogState();
 			}
 			resolve(value);
 		};
@@ -1256,6 +1258,7 @@ export class ExtensionUiController {
 			}
 			started = true;
 			this.#dialogActive = true;
+			this.#publishDialogState();
 			try {
 				hide = present(settle);
 			} catch (error) {
@@ -1264,6 +1267,7 @@ export class ExtensionUiController {
 				this.#dialogActive = false;
 				reject(error);
 				this.#advanceDialogQueue();
+				this.#publishDialogState();
 			}
 		};
 
@@ -1283,5 +1287,13 @@ export class ExtensionUiController {
 
 	#advanceDialogQueue(): void {
 		this.#dialogQueue.shift()?.();
+	}
+
+	/** `needs-input` while a modal dialog is presented; otherwise back to the turn state. */
+	#publishDialogState(): void {
+		publishIdeSessionState(
+			this.ctx.mcpManager,
+			this.#dialogActive ? "needs-input" : this.ctx.session.isStreaming ? "working" : "idle",
+		);
 	}
 }

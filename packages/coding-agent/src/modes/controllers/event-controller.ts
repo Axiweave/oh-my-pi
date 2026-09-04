@@ -41,6 +41,7 @@ import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { setTerminalTitleState } from "../../utils/title-generator";
+import { publishIdeSessionState } from "../../mcp/ide-state";
 import { createAssistantMessageComponent } from "../utils/interactive-context-helpers";
 import {
 	assistantHasVisibleContent,
@@ -868,6 +869,7 @@ export class EventController {
 		this.#setTerminalProgress(true);
 		this.ctx.ensureLoadingAnimation();
 		setTerminalTitleState("working");
+		publishIdeSessionState(this.ctx.mcpManager, "working");
 		this.ctx.ui.requestRender();
 	}
 
@@ -1960,6 +1962,7 @@ export class EventController {
 		this.#scheduleIdleRecap();
 		this.sendErrorNotification(event);
 		this.sendCompletionNotification(event);
+		this.#publishIdeTurnState(event);
 	}
 
 	/**
@@ -2448,5 +2451,14 @@ export class EventController {
 			type: "completion",
 			actions: "focus",
 		});
+	}
+
+	#publishIdeTurnState(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
+		// Same liveness gates as sendErrorNotification: a non-terminal agent_end
+		// (a queued job will wake the session) or a pending retry keeps the turn alive.
+		if (event.isTerminal === false || this.#retryPending) return;
+		const last = event.messages.findLast((message): message is AssistantMessage => message.role === "assistant");
+		const state = last?.stopReason === "error" ? "failed" : last?.stopReason === "aborted" ? "idle" : "done";
+		publishIdeSessionState(this.ctx.mcpManager, state);
 	}
 }

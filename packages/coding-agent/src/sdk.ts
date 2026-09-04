@@ -139,6 +139,7 @@ import {
 	parseMCPToolName,
 } from "./mcp";
 import { getCurrentIdeFile, getCurrentIdeSelection, subscribeIdeSelection } from "./mcp/ide-selection";
+import { subscribeIdeState } from "./mcp/ide-state";
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
@@ -4033,6 +4034,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		let unsubscribeMcpNotifications: (() => void) | undefined;
 		let unregisterMcpPostmortem: (() => void) | undefined;
 		let unsubscribeIdeSelection: (() => void) | undefined;
+		let unsubscribeIdeState: (() => void) | undefined;
 
 		{
 			const originalDispose = session.dispose.bind(session);
@@ -4067,6 +4069,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					unsubscribeMcpNotifications?.();
 					unregisterMcpPostmortem?.();
 					unsubscribeIdeSelection?.();
+					unsubscribeIdeState?.();
 					for (const callback of disposeCallbacks) callback();
 					disposeCallbacks.clear();
 					// Drop refs so the process-global postmortem list doesn't retain
@@ -4074,6 +4077,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					unsubscribeMcpNotifications = undefined;
 					unregisterMcpPostmortem = undefined;
 					unsubscribeIdeSelection = undefined;
+					unsubscribeIdeState = undefined;
 				}
 			};
 		}
@@ -4338,6 +4342,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// listener so that one stays the first subscriber draining the
 			// startup notification buffer).
 			unsubscribeIdeSelection = subscribeIdeSelection(mcpManager);
+			unsubscribeIdeState = subscribeIdeState(mcpManager);
 			// postmortem.register returns a cancel function; capture it so explicit
 			// session.dispose can remove this from the global list (see finally above).
 			unregisterMcpPostmortem = postmortem.register("mcp-notification-listener-cleanup", () =>
