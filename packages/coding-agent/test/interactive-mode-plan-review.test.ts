@@ -28,7 +28,7 @@ import {
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking";
 import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
-import { setKeybindings } from "@oh-my-pi/pi-tui";
+import { setKeybindings, TERMINAL } from "@oh-my-pi/pi-tui";
 import { formatNumber, TempDir } from "@oh-my-pi/pi-utils";
 
 /**
@@ -554,6 +554,32 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(mode.planReviewActive).toBe(false);
 		for (let i = 0; i < 10; i++) await Promise.resolve();
 		expect(sent).toEqual(["needs-input", "idle"]);
+	});
+
+	it("sends a waiting-for-input terminal notification when the plan review opens", async () => {
+		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		try {
+			const choice = mode.showPlanReview("# Plan\n\nReady.", "Plan mode - next step", ["Approve"]);
+			expect(spy).toHaveBeenCalledTimes(1);
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ body: "Plan ready for review", type: "ask" }));
+			mode.showPinnedError("Codex rate limit reached");
+			await expect(choice).resolves.toBeUndefined();
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("does not notify when ask.notify is off", async () => {
+		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		mode.session.settings.override("ask.notify", "off");
+		try {
+			const choice = mode.showPlanReview("# Plan\n\nReady.", "Plan mode - next step", ["Approve"]);
+			expect(spy).not.toHaveBeenCalled();
+			mode.showPinnedError("Codex rate limit reached");
+			await expect(choice).resolves.toBeUndefined();
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it("copies the overlay's current edited plan markdown from the real plan review overlay", async () => {

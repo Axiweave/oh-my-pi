@@ -3742,6 +3742,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		// The plan review is modal like a dialog: the IDE shows it as waiting for
 		// input. The silent abort that precedes it settles the turn as `idle`
 		// (aborted); `EventController` defers to `planReviewActive` for that.
+		// The propose path aborts the turn silently before this overlay, so
+		// `sendCompletionNotification` never fires; the review is a needs-input
+		// prompt like `ask`, so reuse its notification and setting.
+		if (this.session.settings.get("ask.notify") !== "off") {
+			TERMINAL.sendNotification({
+				title: this.sessionManager.getSessionName() || "Oh My Pi",
+				body: "Plan ready for review",
+				type: "ask",
+				urgency: "normal",
+				actions: "focus",
+			});
+		}
 		publishIdeSessionState(this.mcpManager, "needs-input");
 		return promise;
 	}
