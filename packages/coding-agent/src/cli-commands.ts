@@ -62,6 +62,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.commitHelp,
 	},
 	{
+		name: "commands",
+		load: () => import("./commands/commands").then(m => m.default),
+		help: commandHelp.commandsHelp,
+	},
+	{
 		name: "completions",
 		load: () => import("./commands/completions").then(m => m.default),
 		help: commandHelp.completionsHelp,

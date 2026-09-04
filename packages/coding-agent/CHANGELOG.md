@@ -7,6 +7,7 @@
 - The working row now shows the elapsed time of the current turn on its right edge (`42s`, `5m3s`, `1h1m30s`); toggle with `tui.workingTimer`, delay with `tui.workingTimerMinSeconds`, hidden when the `pi` status brand already shows a turn timer.
 - OMP now sends a `session_state_changed` notification (`idle`, `working`, `needs-input`, `done`, `failed`) to the connected IDE MCP server, so editors such as claude-code-ide.el can show whether a session waits for input or finished a turn. Only the main session reports: viewing a subagent, returning from it, or closing a dialog while idle no longer overwrites a finished turn with `idle`.
 - OMP now accepts `ESC _ pi:prompt;<command> ESC \` input packets to replace or insert the active composer's leading slash command.
+- New `omp commands [--cwd DIR] [--json] [--config FILE]` lists discovered slash commands (`skill:<name>`, prompt templates, file commands) with the effective config applied (`disabledProviders`, `enabledProviders`, `skills.*`, `disabledExtensions`), so editors can complete `/` commands without scanning skill directories themselves.
 
 ### Changed
 
