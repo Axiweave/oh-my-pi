@@ -16,6 +16,8 @@ import type { MCPServerConfig } from "./types";
 export interface LoadMCPConfigsOptions {
 	/** Whether to load project-level config (default: true) */
 	enableProjectConfig?: boolean;
+	/** Limit discovery to these capability providers. */
+	providers?: string[];
 	/** Whether to filter out Exa MCP servers (default: true) */
 	filterExa?: boolean;
 	/** Whether to filter out browser MCP servers when builtin browser tool is enabled (default: false) */
@@ -130,6 +132,7 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 
 	const result = await loadCapability<MCPServer>(mcpCapability.id, {
 		cwd,
+		providers: options?.providers,
 		extensionRoots: options?.extensionRoots,
 		filter: includeServer,
 		suppress: suppressServer,

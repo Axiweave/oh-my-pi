@@ -52,9 +52,10 @@ It is not a changelog. Each entry describes a current decision that upstream reb
 
 - **Decision:** Read IDE MCP notifications for selections and open files.
 - **Decision:** Add the full file path to model reminders and show IDE state in the status footer.
-- **Why:** The model needs editor context even when the user does not paste the selected text.
-- **Key paths:** `packages/coding-agent/src/mcp/ide-selection.ts`, `packages/coding-agent/src/session/ide-selection-reminder.ts`, and `packages/coding-agent/src/modes/components/status-line/segments.ts`.
-- **Checks:** `packages/coding-agent/test/mcp/ide-selection.test.ts`, `packages/coding-agent/test/ide-selection-reminder.test.ts`, and `packages/coding-agent/test/ide-selection-segment.test.ts`.
+- **Decision:** Rediscover and reconnect the IDE MCP endpoint after the editor restarts.
+- **Why:** The model needs current editor context even when the editor or its endpoint restarts.
+- **Key paths:** `packages/coding-agent/src/discovery/ide.ts`, `packages/coding-agent/src/mcp/config.ts`, `packages/coding-agent/src/mcp/manager.ts`, `packages/coding-agent/src/mcp/ide-selection.ts`, `packages/coding-agent/src/session/ide-selection-reminder.ts`, and `packages/coding-agent/src/modes/components/status-line/segments.ts`.
+- **Checks:** `packages/coding-agent/test/discovery/ide.test.ts`, `packages/coding-agent/test/mcp-manager-ide-reconnect.test.ts`, `packages/coding-agent/test/mcp/ide-selection.test.ts`, `packages/coding-agent/test/ide-selection-reminder.test.ts`, and `packages/coding-agent/test/ide-selection-segment.test.ts`.
 
 ### Pinned composer
 

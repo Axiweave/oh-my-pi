@@ -70,6 +70,17 @@ describe("MCP scope filtering precedes connection-equivalence deduplication", ()
 		expect(result.sources.usercontext?.level).toBe("user");
 	});
 
+	test("limits MCP config loading to the requested providers", async () => {
+		const ideDir = path.join(tempHome, ".omp", "ide");
+		await fs.mkdir(ideDir, { recursive: true });
+		await fs.writeFile(
+			path.join(ideDir, "emacs.json"),
+			JSON.stringify({ transport: "sse", url: "http://127.0.0.1:1001/mcp" }),
+		);
+
+		const result = await loadAllMCPConfigs(projectDir, { providers: ["ide"], filterExa: false });
+		expect(Object.keys(result.configs)).toEqual(["ide"]);
+	});
 	test("collapses the equivalent alias to the higher-priority project name when enabled", async () => {
 		const result = await loadAllMCPConfigs(projectDir, { enableProjectConfig: true, filterExa: false });
 		expect(Object.keys(result.configs)).toEqual(["projcontext"]);

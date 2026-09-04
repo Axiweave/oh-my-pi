@@ -104,6 +104,7 @@ function createMcpStartupFailure(serverName: string, error: string, source?: Sou
  */
 const RECONNECT_BURST_WINDOW_MS = 30_000;
 const RECONNECT_BURST_LIMIT = 5;
+const IDE_RECONNECT_POLL_MS = 7_000;
 
 /**
  * Bounded buffer for notifications received before any listener attaches.
@@ -232,6 +233,8 @@ export class MCPManager {
 	#subscribedResources = new Map<string, Set<string>>();
 	#pendingResourceRefresh = new Map<string, { connection: MCPServerConnection; promise: Promise<void> }>();
 	#pendingReconnections = new Map<string, Promise<MCPServerConnection | null>>();
+	#ideReconnectTimers = new Map<string, NodeJS.Timeout>();
+	#ideReconnectEligible = new Set<string>();
 	/** Preserved configs for reconnection after connection loss. */
 	#serverConfigs = new Map<string, MCPServerConfig>();
 	/**
@@ -580,6 +583,7 @@ export class MCPManager {
 					this.#pendingConnections.delete(name);
 					this.#connections.set(name, connection);
 					this.#serverConfigs.set(name, config);
+					if (sources[name]?.provider === "ide") this.#ideReconnectEligible.add(name);
 
 					// Wire auth refresh for HTTP-like transports so 401s trigger token refresh.
 					// Gate on a resolvable managed credential, not on the auth block:
@@ -987,6 +991,8 @@ export class MCPManager {
 	 * Disconnect from a specific server.
 	 */
 	async disconnectServer(name: string): Promise<void> {
+		this.#clearIdeReconnectPoll(name);
+		this.#ideReconnectEligible.delete(name);
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
 		this.#pendingReconnections.delete(name);
@@ -1020,6 +1026,9 @@ export class MCPManager {
 	 * Disconnect from all servers.
 	 */
 	async disconnectAll(): Promise<void> {
+		for (const timer of this.#ideReconnectTimers.values()) clearTimeout(timer);
+		this.#ideReconnectTimers.clear();
+		this.#ideReconnectEligible.clear();
 		// Invalidate any in-flight reconnection attempts that outlive this call.
 		// They captured the old epoch; after increment they'll detect staleness.
 		this.#epoch++;
@@ -1037,6 +1046,66 @@ export class MCPManager {
 		this.#reconnectHistory.clear();
 	}
 
+	#clearIdeReconnectPoll(name: string): void {
+		const timer = this.#ideReconnectTimers.get(name);
+		clearTimeout(timer);
+		this.#ideReconnectTimers.delete(name);
+	}
+
+	#scheduleIdeReconnectPoll(name: string): void {
+		this.#clearIdeReconnectPoll(name);
+		const expectedConfig = this.#serverConfigs.get(name);
+		if (!expectedConfig) return;
+		const expectedEpoch = this.#epoch;
+		const timer = setTimeout(async () => {
+			if (this.#ideReconnectTimers.get(name) !== timer) return;
+			if (this.getConnectionStatus(name) !== "disconnected") {
+				this.#clearIdeReconnectPoll(name);
+				return;
+			}
+
+			let fresh: { config: MCPServerConfig; source: SourceMeta } | null = null;
+			try {
+				fresh = await this.#loadFreshIdeServer(name);
+			} catch (error) {
+				logger.debug("IDE MCP rediscovery failed", { path: `mcp:${name}`, error });
+			}
+			if (
+				this.#ideReconnectTimers.get(name) !== timer ||
+				this.#epoch !== expectedEpoch ||
+				this.#serverConfigs.get(name) !== expectedConfig ||
+				this.getConnectionStatus(name) !== "disconnected"
+			) {
+				return;
+			}
+
+			this.#ideReconnectTimers.delete(name);
+			if (!fresh) {
+				this.#scheduleIdeReconnectPoll(name);
+				return;
+			}
+			this.#serverConfigs.set(name, fresh.config);
+			this.#sources.set(name, fresh.source);
+			this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
+			const connection = await this.reconnectServer(name);
+			if (
+				!connection &&
+				this.#serverConfigs.has(name) &&
+				this.#sources.get(name)?.provider === "ide" &&
+				this.getConnectionStatus(name) === "disconnected"
+			) {
+				this.#scheduleIdeReconnectPoll(name);
+			}
+		}, IDE_RECONNECT_POLL_MS);
+		this.#ideReconnectTimers.set(name, timer);
+		timer.unref();
+	}
+
+	#scheduleEligibleIdeReconnectPoll(name: string, source: SourceMeta | undefined): void {
+		if (source?.provider === "ide" && this.#ideReconnectEligible.has(name)) {
+			this.#scheduleIdeReconnectPoll(name);
+		}
+	}
 	/**
 	 * Reconnect to a server after a connection failure.
 	 *
@@ -1054,6 +1123,7 @@ export class MCPManager {
 		name: string,
 		options?: { manual?: boolean; authChallenge?: MCPAuthChallenge },
 	): Promise<MCPServerConnection | null> {
+		const source = this.#sources.get(name) ?? this.#connections.get(name)?._source;
 		if (options?.manual) {
 			this.#reconnectHistory.delete(name);
 		}
@@ -1061,7 +1131,10 @@ export class MCPManager {
 		const pending = this.#pendingReconnections.get(name);
 		if (pending) return pending;
 
+		this.#clearIdeReconnectPoll(name);
+
 		if (this.#tripReconnectBreaker(name)) {
+			this.#scheduleEligibleIdeReconnectPoll(name, source);
 			return null;
 		}
 
@@ -1117,26 +1190,41 @@ export class MCPManager {
 		return false;
 	}
 
+	async #loadFreshIdeServer(name: string): Promise<{ config: MCPServerConfig; source: SourceMeta } | null> {
+		const { configs, sources } = await loadAllMCPConfigs(this.cwd, { providers: ["ide"] });
+		const config = configs[name];
+		const source = sources[name];
+		return config && source ? { config, source } : null;
+	}
+
 	async #doReconnect(name: string, authChallenge?: MCPAuthChallenge): Promise<MCPServerConnection | null> {
 		const oldConnection = this.#connections.get(name);
 		let config = oldConnection?.config ?? this.#serverConfigs.get(name);
-		const source = this.#sources.get(name) ?? oldConnection?._source;
+		let source = this.#sources.get(name) ?? oldConnection?._source;
 		if (!config) return null;
+		const reconnectEpoch = this.#epoch;
 
 		if (authChallenge) {
 			if (!this.#authHandler) {
 				logger.error("MCP auth challenge cannot be handled; no auth handler is configured", {
 					path: `mcp:${name}`,
 				});
+				this.#scheduleEligibleIdeReconnectPoll(name, source);
 				return null;
 			}
 			try {
 				const refreshedConfig = await this.#authHandler(name, authChallenge);
-				if (!refreshedConfig) return null;
+				if (this.#epoch !== reconnectEpoch || this.#serverConfigs.get(name) !== config) return null;
+				if (!refreshedConfig) {
+					this.#scheduleEligibleIdeReconnectPoll(name, source);
+					return null;
+				}
 				config = refreshedConfig;
 				this.#serverConfigs.set(name, config);
 			} catch (error) {
+				if (this.#epoch !== reconnectEpoch || this.#serverConfigs.get(name) !== config) return null;
 				logger.error("MCP auth challenge handling failed", { path: `mcp:${name}`, error });
+				this.#scheduleEligibleIdeReconnectPoll(name, source);
 				return null;
 			}
 		}
@@ -1148,7 +1236,6 @@ export class MCPManager {
 		// Fire-and-forget: don't await the close — HttpTransport.close() sends a
 		// DELETE with config.timeout (30s default), and blocking here delays the
 		// reconnect loop by that amount on every server restart.
-		const reconnectEpoch = this.#epoch;
 		if (oldConnection) {
 			void this.#discardConnection(name, oldConnection).catch(() => {});
 		}
@@ -1167,8 +1254,21 @@ export class MCPManager {
 				return null;
 			}
 			try {
+				if (source?.provider === "ide") {
+					const previousConfig = config;
+					const fresh = await this.#loadFreshIdeServer(name);
+					if (this.#epoch !== reconnectEpoch || this.#serverConfigs.get(name) !== previousConfig) {
+						return null;
+					}
+					if (!fresh) throw new Error("IDE MCP endpoint unavailable");
+					config = fresh.config;
+					source = fresh.source;
+					this.#serverConfigs.set(name, config);
+					this.#sources.set(name, source);
+				}
 				const connection = await this.#connectAndWireServer(name, config, source, reconnectEpoch);
 				logger.debug("MCP reconnected", { path: `mcp:${name}`, tools: connection.tools?.length ?? 0 });
+				this.#clearIdeReconnectPoll(name);
 				this.#emitConnectionStatus({ type: "connected", serverName: name });
 				return connection;
 			} catch (error) {
@@ -1192,6 +1292,7 @@ export class MCPManager {
 				} else {
 					logger.error("MCP reconnect failed after retries", { path: `mcp:${name}`, error: msg });
 					this.#emitConnectionStatus({ type: "failed", serverName: name, error: msg });
+					this.#scheduleEligibleIdeReconnectPoll(name, source);
 					// Don't remove stale tools — keep them in the registry so they
 					// remain selected. Calls will fail with MCP errors, which
 					// triggers the tool-level reconnect, or the user can run
@@ -1231,6 +1332,7 @@ export class MCPManager {
 		}
 
 		this.#connections.set(name, connection);
+		if (source?.provider === "ide") this.#ideReconnectEligible.add(name);
 
 		// Wire auth refresh for HTTP-like transports, and reconnect for any transport.
 		// Same gate as connectServers: any resolvable managed credential.

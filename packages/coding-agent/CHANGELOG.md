@@ -12,6 +12,10 @@
 - Ctrl-R history now starts with prompts from the active working directory. Press Tab to switch between current-folder and all-projects results without changing the query.
 - Prompt history now omits transient lifecycle commands and non-interactive `/mcp add` arguments that can contain credentials.
 
+### Fixed
+
+- OMP now rediscovers the IDE endpoint and reconnects automatically when an editor restarts.
+
 ## [18.1.8] - 2026-09-03
 
 ### Fixed

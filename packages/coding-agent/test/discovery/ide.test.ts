@@ -74,6 +74,65 @@ describe("IDE MCP server discovery", () => {
 		]);
 	});
 
+	test("reloads an updated IDE lockfile at the same path", async () => {
+		const lockfilePath = path.join(home, ".omp", "ide", "emacs.json");
+		await writeFile(
+			lockfilePath,
+			JSON.stringify({ ideName: "Emacs", transport: "sse", url: "http://127.0.0.1:1001/mcp" }),
+		);
+
+		const first = await loadCapability<MCPServer>(mcpCapability.id, { cwd: project, providers: ["ide"] });
+		expect(first.items[0]?.url).toBe("http://127.0.0.1:1001/mcp");
+
+		await writeFile(
+			lockfilePath,
+			JSON.stringify({ ideName: "Emacs", transport: "sse", url: "http://127.0.0.1:1002/mcp" }),
+		);
+
+		const second = await loadCapability<MCPServer>(mcpCapability.id, { cwd: project, providers: ["ide"] });
+		expect(second.items[0]?.url).toBe("http://127.0.0.1:1002/mcp");
+	});
+
+	test("prefers a live IDE owner over dead and PID-less owners", async () => {
+		vi.spyOn(process, "kill").mockImplementation(pid => {
+			if (pid === 101) {
+				const error = new Error("No such process") as NodeJS.ErrnoException;
+				error.code = "ESRCH";
+				throw error;
+			}
+			return true;
+		});
+		await writeFile(
+			path.join(home, ".omp", "ide", "a-dead.json"),
+			JSON.stringify({ pid: 101, transport: "sse", url: "http://127.0.0.1:1001/mcp" }),
+		);
+		await writeFile(
+			path.join(home, ".omp", "ide", "b-pidless.json"),
+			JSON.stringify({ transport: "sse", url: "http://127.0.0.1:1002/mcp" }),
+		);
+		await writeFile(
+			path.join(home, ".omp", "ide", "c-live.json"),
+			JSON.stringify({ pid: 303, transport: "sse", url: "http://127.0.0.1:1003/mcp" }),
+		);
+
+		const result = await loadCapability<MCPServer>(mcpCapability.id, { cwd: project, providers: ["ide"] });
+		expect(result.items[0]?.url).toBe("http://127.0.0.1:1003/mcp");
+	});
+
+	test("keeps PID-less IDE servers eligible behind unsupported live servers", async () => {
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		await writeFile(
+			path.join(home, ".omp", "ide", "a-websocket.json"),
+			JSON.stringify({ pid: 101, transport: "ws", url: "ws://127.0.0.1:1001" }),
+		);
+		await writeFile(
+			path.join(home, ".omp", "ide", "b-sse.json"),
+			JSON.stringify({ transport: "sse", url: "http://127.0.0.1:1002/mcp" }),
+		);
+
+		const result = await loadCapability<MCPServer>(mcpCapability.id, { cwd: project, providers: ["ide"] });
+		expect(result.items[0]?.url).toBe("http://127.0.0.1:1002/mcp");
+	});
 	test("skips ws-only lockfiles and emits no server", async () => {
 		await writeFile(
 			path.join(home, ".omp", "ide", "emacs.lock"),
