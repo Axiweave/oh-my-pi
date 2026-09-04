@@ -7,6 +7,7 @@ import {
 	buildMcpArgumentCompletions,
 	buildModelProfileArgumentCompletions,
 	buildModelProfileInlineHint,
+	buildModelSelectorCompletions,
 	buildStaticInlineHint,
 	buildSubcommandInlineHint,
 } from "./builtin-completions";
@@ -85,6 +86,9 @@ function materializeTuiBuiltinSlashCommand(
 		materialized.getInlineHint = buildModelProfileInlineHint();
 	} else if (cmd.name === "move") {
 		materialized.getArgumentCompletions = buildDirectoryArgumentCompletions();
+		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
+	} else if (cmd.name === "switch" && runtime) {
+		materialized.getArgumentCompletions = buildModelSelectorCompletions(runtime);
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
 	} else if (cmd.inlineHint) {
 		materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);

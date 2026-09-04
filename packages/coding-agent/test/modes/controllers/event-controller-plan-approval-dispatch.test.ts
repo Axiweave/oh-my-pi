@@ -4,6 +4,7 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-coding-agent/tools/resolve";
+import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 
 beforeAll(() => {
 	initTheme();
@@ -65,19 +66,15 @@ describe("EventController plan-approval dispatch", () => {
 		const executionTurn = Promise.withResolvers<void>();
 		const handlePlanApproval = vi.fn(() => executionTurn.promise);
 
-		const ctx = {
-			isInitialized: true,
+		const ctx = createInteractiveModeContext({
 			session: {
-				subscribe: (fn: (event: AgentSessionEvent) => void | Promise<void>) => {
+				subscribe: fn => {
 					listener = fn;
 					return () => {};
 				},
 			},
-			viewSession: { isStreaming: false },
-			pendingTools: new Map(),
-			ui: { requestRender: vi.fn() },
 			handlePlanApproval,
-		} as unknown as InteractiveModeContext;
+		});
 
 		const controller = new EventController(ctx);
 		controller.subscribeToAgent();
