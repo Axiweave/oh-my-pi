@@ -254,7 +254,7 @@ export class EventController {
 		this.#handlers = {
 			agent_start: e => this.#handleAgentStart(e),
 			agent_end: e => this.#handleAgentEnd(e),
-			turn_start: async () => {},
+			turn_start: async () => this.#publishIdeTurnStart(),
 			turn_end: async e => this.#handleTurnEnd(e),
 			message_start: e => this.#handleMessageStart(e),
 			message_update: e => this.#handleMessageUpdate(e),
@@ -1181,6 +1181,17 @@ export class EventController {
 	 * sure the live buffer's trailing partial gets flushed.
 	 */
 	#handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
+		// The user sees the final text now; `agent_end` waits on advisor
+		// catch-up (up to 30s), which is too late for the IDE glyph. A tool
+		// batch or a `pause_turn` stop continues the run, so those stay working.
+		if (
+			event.toolResults.length === 0 &&
+			!(event.message.role === "assistant" && event.message.stopDetails?.type === "pause_turn") &&
+			!this.#retryPending &&
+			this.ctx.viewSession === this.ctx.session
+		) {
+			publishIdeSessionState(this.ctx.mcpManager, ideTurnState([event.message]));
+		}
 		if (!settings.get("speech.enabled")) return;
 		if (settings.get("speech.mode") !== "yield") {
 			vocalizer.flush();
@@ -2474,6 +2485,12 @@ export class EventController {
 			type: "completion",
 			actions: "focus",
 		});
+	}
+
+	#publishIdeTurnStart(): void {
+		// A steering or follow-up message continues the run without a new
+		// `agent_start`; re-assert `working` after the early turn_end publish.
+		if (this.ctx.viewSession === this.ctx.session) publishIdeSessionState(this.ctx.mcpManager, "working");
 	}
 
 	#publishIdeTurnState(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {

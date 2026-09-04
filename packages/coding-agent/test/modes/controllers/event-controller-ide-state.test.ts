@@ -243,4 +243,51 @@ describe("EventController IDE session-state publishing", () => {
 
 		expect(fake.sent).toEqual(["done"]);
 	});
+
+	it("publishes the turn result at turn_end, before agent_end waits on advisor catch-up", async () => {
+		const fake = fakeIdeManager();
+		const controller = new EventController(makeTurnEndContext(fake.manager));
+		const message = makeAssistantMessage("stop");
+
+		await controller.handleEvent({ type: "agent_start" } as Extract<AgentSessionEvent, { type: "agent_start" }>);
+		await controller.handleEvent({ type: "turn_end", message, toolResults: [] } as Extract<
+			AgentSessionEvent,
+			{ type: "turn_end" }
+		>);
+		await flushMicrotasks();
+		expect(fake.sent).toEqual(["working", "done"]);
+
+		// agent_end repeats the same state; the publisher dedupes it.
+		await controller.handleEvent(makeAgentEndEvent([message]));
+		await flushMicrotasks();
+		expect(fake.sent).toEqual(["working", "done"]);
+	});
+
+	it("keeps working through a tool batch or pause_turn, and re-asserts it on a follow-up turn", async () => {
+		const fake = fakeIdeManager();
+		const controller = new EventController(makeTurnEndContext(fake.manager));
+		const paused = { ...makeAssistantMessage("stop"), stopDetails: { type: "pause_turn" } } as AssistantMessage;
+
+		await controller.handleEvent({ type: "agent_start" } as Extract<AgentSessionEvent, { type: "agent_start" }>);
+		await controller.handleEvent({
+			type: "turn_end",
+			message: makeAssistantMessage("stop"),
+			toolResults: [{ role: "toolResult" }],
+		} as unknown as Extract<AgentSessionEvent, { type: "turn_end" }>);
+		await controller.handleEvent({ type: "turn_end", message: paused, toolResults: [] } as Extract<
+			AgentSessionEvent,
+			{ type: "turn_end" }
+		>);
+		await flushMicrotasks();
+		expect(fake.sent).toEqual(["working"]);
+
+		await controller.handleEvent({
+			type: "turn_end",
+			message: makeAssistantMessage("stop"),
+			toolResults: [],
+		} as Extract<AgentSessionEvent, { type: "turn_end" }>);
+		await controller.handleEvent({ type: "turn_start" } as Extract<AgentSessionEvent, { type: "turn_start" }>);
+		await flushMicrotasks();
+		expect(fake.sent).toEqual(["working", "done", "working"]);
+	});
 });
