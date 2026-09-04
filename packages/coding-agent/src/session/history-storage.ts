@@ -220,11 +220,7 @@ ON CONFLICT(prompt, cwd) DO UPDATE SET
 			for (const row of rows) {
 				this.#upsertRowStmt.run(row.prompt, row.cwd ?? null, row.sessionId ?? null);
 				if (row.cwd) {
-					this.#upsertLocationStmt.run(
-						row.prompt,
-						normalizePathForComparison(row.cwd),
-						row.sessionId ?? null,
-					);
+					this.#upsertLocationStmt.run(row.prompt, normalizePathForComparison(row.cwd), row.sessionId ?? null);
 				}
 			}
 		})(rows);
@@ -483,9 +479,7 @@ ON CONFLICT(prompt, cwd) DO UPDATE SET
 		let stmt = statements.get(tokenCount);
 		if (stmt) return stmt;
 		const promptColumn = scoped ? "h.prompt" : "prompt";
-		const whereClause = Array(tokenCount)
-			.fill(`${promptColumn} LIKE ? ESCAPE '\\' COLLATE NOCASE`)
-			.join(" AND ");
+		const whereClause = Array(tokenCount).fill(`${promptColumn} LIKE ? ESCAPE '\\' COLLATE NOCASE`).join(" AND ");
 		stmt = scoped
 			? this.#db.prepare(`
 SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id
