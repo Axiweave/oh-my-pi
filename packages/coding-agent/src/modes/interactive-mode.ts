@@ -87,6 +87,7 @@ import type { Goal, GoalModeState } from "../goals/state";
 import { copyLocalArtifacts, resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
+import { ideTurnState, publishIdeSessionState } from "../mcp/ide-state";
 import {
 	formatMCPConnectionStatusMessage,
 	isMcpConnectionStatusEvent,
@@ -3738,14 +3739,28 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		this.ui.setFocus(overlay);
 		this.ui.requestRender();
+		// The plan review is modal like a dialog: the IDE shows it as waiting for
+		// input. The silent abort that precedes it settles the turn as `idle`
+		// (aborted); `EventController` defers to `planReviewActive` for that.
+		publishIdeSessionState(this.mcpManager, "needs-input");
 		return promise;
+	}
+
+	/** Non-nil while the plan review overlay is on screen; the IDE reads `needs-input`. */
+	get planReviewActive(): boolean {
+		return this.#planReviewOverlayHandle !== undefined;
 	}
 
 	#hidePlanReview(): void {
 		this.#planReviewCancel = undefined;
-		this.#planReviewOverlayHandle?.hide();
+		if (!this.#planReviewOverlayHandle) return;
+		this.#planReviewOverlayHandle.hide();
 		this.#planReviewOverlayHandle = undefined;
 		this.#planReviewOverlay = undefined;
+		publishIdeSessionState(
+			this.mcpManager,
+			this.session.isStreaming ? "working" : ideTurnState(this.session.messages),
+		);
 	}
 
 	#dismissPlanReview(): void {

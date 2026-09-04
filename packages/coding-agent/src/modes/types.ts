@@ -524,6 +524,8 @@ export interface InteractiveModeContext {
 	pauseLoop(): void;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
 	openPlanReview(): Promise<void>;
+	/** True while the plan review overlay is open; IDE turn-state publishes yield to `needs-input`. */
+	readonly planReviewActive: boolean;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

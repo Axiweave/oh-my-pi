@@ -536,6 +536,26 @@ describe("InteractiveMode plan review rendering", () => {
 		await expect(choice).resolves.toBeUndefined();
 	});
 
+	it("reports needs-input to the IDE while the plan review is open and the resting state once it closes", async () => {
+		const sent: unknown[] = [];
+		mode.mcpManager = {
+			getConnection: (name: string) =>
+				name === "ide"
+					? { transport: { notify: async (_m: string, p: Record<string, unknown>) => void sent.push(p.state) } }
+					: undefined,
+		} as never;
+		const choice = mode.showPlanReview("# Plan\n\nReady.", "Plan mode - next step", ["Approve"]);
+		expect(mode.planReviewActive).toBe(true);
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+		expect(sent).toEqual(["needs-input"]);
+
+		mode.showPinnedError("Codex rate limit reached");
+		await expect(choice).resolves.toBeUndefined();
+		expect(mode.planReviewActive).toBe(false);
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+		expect(sent).toEqual(["needs-input", "idle"]);
+	});
+
 	it("copies the overlay's current edited plan markdown from the real plan review overlay", async () => {
 		let capturedOverlay: PlanReviewOverlay | undefined;
 		const overlayHandle = { hide: vi.fn() };

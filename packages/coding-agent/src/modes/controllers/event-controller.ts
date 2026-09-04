@@ -1188,7 +1188,8 @@ export class EventController {
 			event.toolResults.length === 0 &&
 			!(event.message.role === "assistant" && event.message.stopDetails?.type === "pause_turn") &&
 			!this.#retryPending &&
-			this.ctx.viewSession === this.ctx.session
+			this.ctx.viewSession === this.ctx.session &&
+			!this.ctx.planReviewActive
 		) {
 			publishIdeSessionState(this.ctx.mcpManager, ideTurnState([event.message]));
 		}
@@ -2498,6 +2499,9 @@ export class EventController {
 		// (a queued job will wake the session) or a pending retry keeps the turn alive.
 		if (event.isTerminal === false || this.#retryPending) return;
 		if (this.ctx.viewSession !== this.ctx.session) return;
+		// The plan-approval silent abort ends the turn under the review overlay;
+		// `needs-input` already went out and must not be downgraded to `idle`.
+		if (this.ctx.planReviewActive) return;
 		publishIdeSessionState(this.ctx.mcpManager, ideTurnState(event.messages));
 	}
 }
