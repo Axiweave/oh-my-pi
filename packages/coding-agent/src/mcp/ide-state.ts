@@ -4,6 +4,16 @@ import type { MCPManager } from "./manager";
 /** Session lifecycle state shown by IDE integrations such as claude-code-ide.el. */
 export type IdeSessionState = "idle" | "working" | "needs-input" | "done" | "failed";
 
+/**
+ * Resting state of a session from its transcript: how its last assistant
+ * message stopped. `idle` when nothing has run yet or the user aborted.
+ */
+export function ideTurnState(messages: readonly { role: string; stopReason?: string }[]): IdeSessionState {
+	const last = messages.findLast(message => message.role === "assistant");
+	if (!last) return "idle";
+	return last.stopReason === "error" ? "failed" : last.stopReason === "aborted" ? "idle" : "done";
+}
+
 interface IdeStateEntry {
 	/** Newest state the session asked to publish. */
 	state: IdeSessionState;

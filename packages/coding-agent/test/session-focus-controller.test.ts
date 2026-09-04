@@ -63,11 +63,14 @@ interface SessionStub {
 	setStreaming: (streaming: boolean) => void;
 }
 
-function makeSessionStub(opts: { isStreaming?: boolean } = {}): SessionStub {
+function makeSessionStub(
+	opts: { isStreaming?: boolean; messages?: { role: string; stopReason?: string }[] } = {},
+): SessionStub {
 	let listener: ((event: AgentSessionEvent) => Promise<void> | void) | undefined;
 	let unsubscribeCalls = 0;
 	const stub = {
 		isStreaming: opts.isStreaming ?? false,
+		messages: opts.messages ?? [],
 		subscribe(fn: (event: AgentSessionEvent) => Promise<void> | void) {
 			listener = fn;
 			return () => {
@@ -107,8 +110,13 @@ interface Harness {
 	fake: FakeIdeManager;
 }
 
-function makeHarness(options: { renderInitialMessages?: () => void | Promise<void> } = {}): Harness {
-	const main = makeSessionStub();
+function makeHarness(
+	options: {
+		renderInitialMessages?: () => void | Promise<void>;
+		mainMessages?: { role: string; stopReason?: string }[];
+	} = {},
+): Harness {
+	const main = makeSessionStub({ messages: options.mainMessages });
 	const handledEvents: unknown[] = [];
 	const setSessionCalls: Array<[AgentSession, string | undefined]> = [];
 	const reloadTodoSessions: AgentSession[] = [];
@@ -323,7 +331,7 @@ describe("SessionFocusController", () => {
 		]);
 	});
 
-	it("focusing a non-streaming session reports idle to the IDE", async () => {
+	it("focusing a subagent reports nothing to the IDE", async () => {
 		const h = makeHarness();
 		const worker = makeSessionStub({ isStreaming: false });
 		registerSub(h.registry, "Worker", worker.session, MAIN_AGENT_ID);
@@ -331,6 +339,18 @@ describe("SessionFocusController", () => {
 		await h.controller.focusAgent("Worker");
 		await flushAsync();
 
-		expect(h.fake.sent).toEqual(["idle"]);
+		expect(h.fake.sent).toEqual([]);
+	});
+
+	it("returning to the main session re-announces how its last turn ended", async () => {
+		const h = makeHarness({ mainMessages: [{ role: "assistant", stopReason: "stop" }] });
+		const worker = makeSessionStub({ isStreaming: false });
+		registerSub(h.registry, "Worker", worker.session, MAIN_AGENT_ID);
+
+		await h.controller.focusAgent("Worker");
+		await h.controller.unfocus();
+		await flushAsync();
+
+		expect(h.fake.sent).toEqual(["done"]);
 	});
 });

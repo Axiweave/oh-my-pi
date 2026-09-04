@@ -13,7 +13,7 @@ import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID, type RegistryEvent } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import { setTerminalTitleState } from "../../utils/title-generator";
-import { publishIdeSessionState } from "../../mcp/ide-state";
+import { ideTurnState, publishIdeSessionState } from "../../mcp/ide-state";
 import type { InteractiveModeContext } from "../types";
 
 export class SessionFocusController {
@@ -139,9 +139,12 @@ export class SessionFocusController {
 		// target would otherwise inherit the previous session's stuck spinner, so
 		// reset it to idle (agent_end teardown already ran via clearTransientSessionUi).
 		if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
-		else {
-			setTerminalTitleState("idle");
-			publishIdeSessionState(this.ctx.mcpManager, "idle");
+		else setTerminalTitleState("idle");
+		// Returning to the main session re-announces how its last turn ended: the
+		// controller was unsubscribed while another agent was focused, so the
+		// `agent_end` that settled it (if any) never reached the IDE.
+		if (target === this.ctx.session && !target.isStreaming) {
+			publishIdeSessionState(this.ctx.mcpManager, ideTurnState(target.messages));
 		}
 		if (generation !== this.#attachGeneration) return false;
 		this.ctx.updateEditorBorderColor();

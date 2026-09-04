@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { publishIdeSessionState, subscribeIdeState } from "@oh-my-pi/pi-coding-agent/mcp/ide-state";
+import { ideTurnState, publishIdeSessionState, subscribeIdeState } from "@oh-my-pi/pi-coding-agent/mcp/ide-state";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { McpConnectionStatusEvent } from "@oh-my-pi/pi-coding-agent/mcp/startup-events";
 
@@ -60,6 +60,17 @@ afterEach(() => {
 	else process.env.ZMX_SESSION = originalZmxSession;
 	if (originalBufferName === undefined) delete process.env.EMACS_BUFFER_NAME;
 	else process.env.EMACS_BUFFER_NAME = originalBufferName;
+});
+
+describe("ideTurnState", () => {
+	it("maps the last assistant stop reason, idle when nothing ran", () => {
+		expect(ideTurnState([])).toBe("idle");
+		expect(ideTurnState([{ role: "user" }])).toBe("idle");
+		expect(ideTurnState([{ role: "assistant", stopReason: "stop" }, { role: "user" }])).toBe("done");
+		expect(ideTurnState([{ role: "assistant", stopReason: "toolUse" }])).toBe("done");
+		expect(ideTurnState([{ role: "assistant", stopReason: "error" }])).toBe("failed");
+		expect(ideTurnState([{ role: "assistant", stopReason: "aborted" }])).toBe("idle");
+	});
 });
 
 describe("publishIdeSessionState / subscribeIdeState", () => {

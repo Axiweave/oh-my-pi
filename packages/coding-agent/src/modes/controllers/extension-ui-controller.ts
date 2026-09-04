@@ -32,7 +32,7 @@ import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, them
 import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
-import { publishIdeSessionState } from "../../mcp/ide-state";
+import { ideTurnState, publishIdeSessionState } from "../../mcp/ide-state";
 
 const MAX_WIDGET_LINES = 10;
 const ASK_OTHER_OPTION = "Other (type your own)";
@@ -1293,7 +1293,11 @@ export class ExtensionUiController {
 	#publishDialogState(): void {
 		publishIdeSessionState(
 			this.ctx.mcpManager,
-			this.#dialogActive ? "needs-input" : this.ctx.session.isStreaming ? "working" : "idle",
+			this.#dialogActive
+				? "needs-input"
+				: this.ctx.session.isStreaming
+					? "working"
+					: ideTurnState(this.ctx.session.messages),
 		);
 	}
 }

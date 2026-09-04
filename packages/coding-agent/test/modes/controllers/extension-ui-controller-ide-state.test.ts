@@ -128,11 +128,14 @@ type SelectorController = {
 };
 
 /** `createControllerContext()` plus the IDE-state wiring every test in this file needs. */
-function makeHarness(isStreaming: boolean): { ctx: TestContext; fake: FakeIdeManager; controller: SelectorController } {
+function makeHarness(
+	isStreaming: boolean,
+	messages: { role: string; stopReason?: string }[] = [],
+): { ctx: TestContext; fake: FakeIdeManager; controller: SelectorController } {
 	const { ctx } = createControllerContext();
 	const fake = fakeIdeManager();
 	ctx.mcpManager = fake.manager;
-	ctx.session = { isStreaming } as unknown as AgentSession;
+	ctx.session = { isStreaming, messages } as unknown as AgentSession;
 	const controller = new ExtensionUiController(ctx) as unknown as SelectorController;
 	return { ctx, fake, controller };
 }
@@ -173,7 +176,7 @@ describe("ExtensionUiController IDE session-state publishing", () => {
 		expect(fake.sent).toEqual(["needs-input", "working"]);
 	});
 
-	it("settling outside a turn returns to idle", async () => {
+	it("settling outside a turn returns to idle when nothing has run", async () => {
 		const { fake, controller } = makeHarness(false);
 
 		const abortA = new AbortController();
@@ -185,6 +188,18 @@ describe("ExtensionUiController IDE session-state publishing", () => {
 		await promiseA;
 		await flushMicrotasks();
 		expect(fake.sent).toEqual(["needs-input", "idle"]);
+	});
+
+	it("settling outside a turn restores how the last turn ended", async () => {
+		const { fake, controller } = makeHarness(false, [{ role: "assistant", stopReason: "stop" }]);
+
+		const abortA = new AbortController();
+		const promiseA = controller.showHookSelector("A", ["a1"], { signal: abortA.signal });
+		await flushMicrotasks();
+		abortA.abort();
+		await promiseA;
+		await flushMicrotasks();
+		expect(fake.sent).toEqual(["needs-input", "done"]);
 	});
 
 	it("a dialog aborted before its turn never reports", async () => {

@@ -116,7 +116,7 @@ function makeAgentEndEvent(messages: AssistantMessage[]): Extract<AgentSessionEv
 /** Full context needed to drive `#handleAgentEnd` -> `#finishAgentEnd` end to end. */
 function makeTurnEndContext(
 	mcpManager: MCPManager | undefined,
-	options: { lastAssistantMessage?: AssistantMessage } = {},
+	options: { lastAssistantMessage?: AssistantMessage; focusedSubagent?: boolean } = {},
 ): InteractiveModeContext {
 	const session = {
 		isStreaming: false,
@@ -125,6 +125,7 @@ function makeTurnEndContext(
 		getLastAssistantMessage: () => options.lastAssistantMessage,
 		getContextUsage: () => undefined,
 	};
+	const viewSession = options.focusedSubagent ? { ...session, isStreaming: true } : session;
 	return {
 		isInitialized: true,
 		loadingAnimation: undefined,
@@ -147,7 +148,7 @@ function makeTurnEndContext(
 		ensureLoadingAnimation: () => {},
 		showError: () => {},
 		session,
-		viewSession: session,
+		viewSession,
 		mcpManager,
 	} as unknown as InteractiveModeContext;
 }
@@ -161,6 +162,17 @@ describe("EventController IDE session-state publishing", () => {
 		await flushMicrotasks();
 
 		expect(fake.sent).toEqual(["working"]);
+	});
+
+	it("publishes nothing while a subagent is focused", async () => {
+		const fake = fakeIdeManager();
+		const controller = new EventController(makeTurnEndContext(fake.manager, { focusedSubagent: true }));
+
+		await controller.handleEvent({ type: "agent_start" } as Extract<AgentSessionEvent, { type: "agent_start" }>);
+		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("stop")]));
+		await flushMicrotasks();
+
+		expect(fake.sent).toEqual([]);
 	});
 
 	it("publishes done, failed, or idle for a terminal agent_end depending on stop reason", async () => {
