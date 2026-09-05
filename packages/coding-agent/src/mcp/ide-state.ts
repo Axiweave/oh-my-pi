@@ -7,11 +7,19 @@ export type IdeSessionState = "idle" | "working" | "needs-input" | "done" | "fai
 /**
  * Resting state of a session from its transcript: how its last assistant
  * message stopped. `idle` when nothing has run yet or the user aborted.
+ * `awaitingReply` turns a clean stop into `needs-input`: the guided-goal
+ * interview asks its questions as plain assistant text, so the transcript
+ * alone cannot tell a question from a finished answer.
  */
-export function ideTurnState(messages: readonly { role: string; stopReason?: string }[]): IdeSessionState {
+export function ideTurnState(
+	messages: readonly { role: string; stopReason?: string }[],
+	awaitingReply = false,
+): IdeSessionState {
 	const last = messages.findLast(message => message.role === "assistant");
 	if (!last) return "idle";
-	return last.stopReason === "error" ? "failed" : last.stopReason === "aborted" ? "idle" : "done";
+	if (last.stopReason === "error") return "failed";
+	if (last.stopReason === "aborted") return "idle";
+	return awaitingReply ? "needs-input" : "done";
 }
 
 interface IdeStateEntry {

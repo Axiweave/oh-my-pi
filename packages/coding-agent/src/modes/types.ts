@@ -526,6 +526,8 @@ export interface InteractiveModeContext {
 	openPlanReview(): Promise<void>;
 	/** True while the plan review overlay is open; IDE turn-state publishes yield to `needs-input`. */
 	readonly planReviewActive: boolean;
+	/** True from `/guided-goal` until `goal create`; a clean stop is a question, so the IDE reads `needs-input`. */
+	readonly goalInterviewActive: boolean;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

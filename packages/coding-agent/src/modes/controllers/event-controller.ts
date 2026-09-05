@@ -1191,7 +1191,7 @@ export class EventController {
 			this.ctx.viewSession === this.ctx.session &&
 			!this.ctx.planReviewActive
 		) {
-			publishIdeSessionState(this.ctx.mcpManager, ideTurnState([event.message]));
+			publishIdeSessionState(this.ctx.mcpManager, ideTurnState([event.message], this.ctx.goalInterviewActive));
 		}
 		if (!settings.get("speech.enabled")) return;
 		if (settings.get("speech.mode") !== "yield") {
@@ -2502,6 +2502,6 @@ export class EventController {
 		// The plan-approval silent abort ends the turn under the review overlay;
 		// `needs-input` already went out and must not be downgraded to `idle`.
 		if (this.ctx.planReviewActive) return;
-		publishIdeSessionState(this.ctx.mcpManager, ideTurnState(event.messages));
+		publishIdeSessionState(this.ctx.mcpManager, ideTurnState(event.messages, this.ctx.goalInterviewActive));
 	}
 }

@@ -1297,7 +1297,7 @@ export class ExtensionUiController {
 				? "needs-input"
 				: this.ctx.session.isStreaming
 					? "working"
-					: ideTurnState(this.ctx.session.messages),
+					: ideTurnState(this.ctx.session.messages, this.ctx.goalInterviewActive),
 		);
 	}
 }

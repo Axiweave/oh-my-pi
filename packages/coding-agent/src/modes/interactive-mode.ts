@@ -608,6 +608,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModeEnabled = false;
 	planModePaused = false;
 	goalModeEnabled = false;
+	/** ponytail: cleared only by a goal transition; an abandoned interview keeps reporting needs-input until then. */
+	goalInterviewActive = false;
 	goalModePaused = false;
 	vibeModeEnabled = false;
 	planModePlanFilePath: string | undefined = undefined;
@@ -3001,6 +3003,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 			this.goalModeEnabled = event.state?.enabled === true;
 			this.goalModePaused = event.state?.enabled !== true && event.state?.goal?.status === "paused";
+			this.goalInterviewActive = false;
 			if (!event.state?.enabled) {
 				this.#cancelGoalContinuation();
 			}
@@ -3590,6 +3593,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.session.setActiveToolsByName(goalTools);
 		this.session.setGoalModeState(state);
 		this.goalModeEnabled = true;
+		this.goalInterviewActive = false;
 		this.#resetGoalContinuationSuppression();
 		this.#updateGoalModeStatus();
 		if (this.session.isStreaming) {
@@ -3771,7 +3775,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#planReviewOverlay = undefined;
 		publishIdeSessionState(
 			this.mcpManager,
-			this.session.isStreaming ? "working" : ideTurnState(this.session.messages),
+			this.session.isStreaming ? "working" : ideTurnState(this.session.messages, this.goalInterviewActive),
 		);
 	}
 
@@ -4468,6 +4472,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!enabledTools.includes("goal")) {
 				await this.session.setActiveToolsByName([...enabledTools, "goal"]);
 			}
+			this.goalInterviewActive = true;
 
 			// The interview is a normal conversation: the kickoff rides in as a
 			// hidden developer message, the agent asks its questions as regular

@@ -70,6 +70,8 @@ describe("ideTurnState", () => {
 		expect(ideTurnState([{ role: "assistant", stopReason: "toolUse" }])).toBe("done");
 		expect(ideTurnState([{ role: "assistant", stopReason: "error" }])).toBe("failed");
 		expect(ideTurnState([{ role: "assistant", stopReason: "aborted" }])).toBe("idle");
+		expect(ideTurnState([{ role: "assistant", stopReason: "stop" }], true)).toBe("needs-input");
+		expect(ideTurnState([{ role: "assistant", stopReason: "aborted" }], true)).toBe("idle");
 	});
 });
 

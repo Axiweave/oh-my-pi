@@ -144,7 +144,7 @@ export class SessionFocusController {
 		// controller was unsubscribed while another agent was focused, so the
 		// `agent_end` that settled it (if any) never reached the IDE.
 		if (target === this.ctx.session && !target.isStreaming) {
-			publishIdeSessionState(this.ctx.mcpManager, ideTurnState(target.messages));
+			publishIdeSessionState(this.ctx.mcpManager, ideTurnState(target.messages, this.ctx.goalInterviewActive));
 		}
 		if (generation !== this.#attachGeneration) return false;
 		this.ctx.updateEditorBorderColor();
