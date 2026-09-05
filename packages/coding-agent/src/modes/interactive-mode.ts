@@ -3157,6 +3157,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#updateGoalModeStatus();
 		}
 
+		// A guided-goal interview that never reached `goal create` leaves this
+		// set; a session switch always ends that interview's relevance to the
+		// newly attached session, whether or not a goal was ever enabled here.
+		this.goalInterviewActive = false;
+
 		if (this.session.getImplReviewState()) {
 			// In-memory backstop only. Never apply `restoreTools` here: this runs
 			// after switchSession already loaded the target session's tools, and a
