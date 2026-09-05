@@ -641,6 +641,12 @@ export class SelectorController {
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.ui.resetDisplay();
 				break;
+			case "display.collapseCommandCards":
+				// Rebuild swaps command rows between the one-line card and the expanded
+				// body; full reset retires rows already committed to native scrollback.
+				this.ctx.rebuildChatFromMessages();
+				this.ctx.ui.resetDisplay();
+				break;
 			case "display.showTokenUsage":
 				// Rebuild reruns usage-row detection under the new setting; resetDisplay
 				// retires rows already committed to native scrollback.

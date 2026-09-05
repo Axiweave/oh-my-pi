@@ -66,11 +66,13 @@ It is not a changelog. Each entry describes a current decision that upstream reb
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts` and `packages/coding-agent/test/startup-composer.test.ts`.
 
-### Collapsed prompt-template cards
+### Collapsed command cards
 
-- **Decision:** Collapse expanded prompt-template submissions into one-line transcript cards.
+- **Decision:** Collapse expanded prompt-template and file slash-command submissions into one-line `/name` transcript cards; ctrl+o shows the body.
+- **Decision:** Gate both card kinds at render time with `display.collapseCommandCards` (default on).
 - **Why:** The transcript should show the submitted command without repeating expanded template text.
-- **Key paths:** `packages/coding-agent/src/config/prompt-templates.ts`, `packages/coding-agent/src/modes/components/user-message.ts`, and `packages/coding-agent/src/session/agent-session.ts`.
+- **Key paths:** `packages/coding-agent/src/config/prompt-templates.ts`, `packages/coding-agent/src/extensibility/slash-commands.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/modes/components/user-message.ts`, `packages/coding-agent/src/modes/components/chat-transcript-builder.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
+- **Check:** `packages/coding-agent/test/agent-session-command-card.test.ts`.
 
 ### Emacs-hosted resize behavior
 

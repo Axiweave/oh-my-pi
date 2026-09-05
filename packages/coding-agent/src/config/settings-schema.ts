@@ -1379,6 +1379,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.collapseCommandCards": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Collapse Command Cards",
+			description:
+				"Collapse a submitted prompt template or file slash command to a one-line /name card in the transcript (ctrl+o shows the expanded body); disable to show the expanded text inline",
+		},
+	},
+
 	showHardwareCursor: {
 		type: "boolean",
 		default: true, // will be computed based on platform if undefined

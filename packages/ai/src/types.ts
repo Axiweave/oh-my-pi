@@ -901,7 +901,7 @@ export interface UserMessage {
 	content: string | (TextContent | ImageContent)[];
 	/** True if the message was injected by the system (e.g., auto-continue). */
 	synthetic?: boolean;
-	/** Name of the file-based prompt template (`/.omp/prompts/<name>.md`) this message was expanded from. TUIs collapse it to a one-line card. */
+	/** Name of the file-based prompt template (`.omp/prompts/<name>.md`) or file slash command (`.omp/commands/<name>.md`) this message was expanded from. TUIs collapse it to a one-line card. */
 	promptTemplate?: string;
 	/** True when injected mid-turn as a steer; consumed by the agent's pre-LLM transform to wrap it for emphasis. Never rendered. */
 	steering?: boolean;

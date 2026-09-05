@@ -293,7 +293,10 @@ export class UiHelpers {
 					const cached = options?.reuseSettledComponent
 						? this.ctx.transcriptMessageComponents.get(message)
 						: undefined;
-					const templateName = message.role === "user" ? message.promptTemplate : undefined;
+					const templateName =
+						message.role === "user" && settings.get("display.collapseCommandCards")
+							? message.promptTemplate
+							: undefined;
 					const imageLinks =
 						options?.imageLinks ??
 						imageLinksForMessage(

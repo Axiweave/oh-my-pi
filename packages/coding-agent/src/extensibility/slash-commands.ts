@@ -113,25 +113,31 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
 }
 
 /**
+ * Match `/name [args]` against a file-based command name.
+ * Returns the command, or undefined when the text is not a command invocation.
+ */
+export function resolveSlashCommand(text: string, fileCommands: FileSlashCommand[]): FileSlashCommand | undefined {
+	if (!text.startsWith("/")) return undefined;
+
+	const spaceIndex = text.indexOf(" ");
+	const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+	return fileCommands.find(cmd => cmd.name === commandName);
+}
+
+/**
  * Expand a slash command if it matches a file-based command.
  * Returns the expanded content or the original text if not a slash command.
  */
 export function expandSlashCommand(text: string, fileCommands: FileSlashCommand[]): string {
-	if (!text.startsWith("/")) return text;
+	const fileCommand = resolveSlashCommand(text, fileCommands);
+	if (!fileCommand) return text;
 
 	const spaceIndex = text.indexOf(" ");
-	const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 	const argsString = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
-
-	const fileCommand = fileCommands.find(cmd => cmd.name === commandName);
-	if (fileCommand) {
-		const args = parseCommandArgs(argsString);
-		const argsText = args.join(" ");
-		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(fileCommand.content);
-		const substituted = substituteArgs(fileCommand.content, args);
-		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
-		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
-	}
-
-	return text;
+	const args = parseCommandArgs(argsString);
+	const argsText = args.join(" ");
+	const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(fileCommand.content);
+	const substituted = substituteArgs(fileCommand.content, args);
+	const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+	return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
 }

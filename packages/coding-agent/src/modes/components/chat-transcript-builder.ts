@@ -309,7 +309,10 @@ export class ChatTranscriptBuilder {
 					// Rendering their full body on cold open blocked the TUI (issue #6308);
 					// collapse them behind a compact summary that builds Markdown only on
 					// ctrl+o expand. Real user prompts stay fully rendered.
-					const templateName = message.role === "user" ? message.promptTemplate : undefined;
+					const templateName =
+						message.role === "user" && settings.get("display.collapseCommandCards")
+							? message.promptTemplate
+							: undefined;
 					if (isSynthetic || templateName) {
 						const collapsed = new CollapsedSyntheticMessageComponent(
 							textContent,

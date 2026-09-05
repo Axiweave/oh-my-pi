@@ -149,7 +149,7 @@ import { createExtensionModelQuery } from "../extensibility/extensions/model-api
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
-import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
+import { expandSlashCommand, type FileSlashCommand, resolveSlashCommand } from "../extensibility/slash-commands";
 import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
 import { GoalRuntime } from "../goals/runtime";
 import type { GoalModeState } from "../goals/state";
@@ -6230,6 +6230,7 @@ export class AgentSession {
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
 		const typedText = text;
+		let matchedSlashCommand: FileSlashCommand | undefined;
 
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
@@ -6250,6 +6251,7 @@ export class AgentSession {
 			// Try file-based slash commands (markdown files from commands/ directories)
 			// Only if text still starts with "/" (wasn't transformed by custom command)
 			if (text.startsWith("/")) {
+				matchedSlashCommand = resolveSlashCommand(text, this.#slashCommands);
 				text = expandSlashCommand(text, this.#slashCommands);
 			}
 		}
@@ -6259,6 +6261,9 @@ export class AgentSession {
 		const templates = expandPromptTemplates ? [...this.#promptTemplates] : [];
 		const matchedPromptTemplate = resolvePromptTemplate(text, templates);
 		const expandedText = matchedPromptTemplate ? expandPromptTemplate(text, templates) : text;
+		// Name on the collapsed transcript card. A prompt template wins over a slash
+		// command: it is the later expansion when a command body itself is `/template`.
+		const commandCardName = matchedPromptTemplate?.name ?? matchedSlashCommand?.name;
 
 		// Magic keywords ("ultrathink", "orchestrate"): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
@@ -6289,7 +6294,14 @@ export class AgentSession {
 			for (const notice of keywordNotices) {
 				await this.#queueCustomMessage(notice, streamingBehavior);
 			}
-			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, submittedAt);
+			await this.#queueUserMessage(
+				expandedText,
+				options?.images,
+				streamingBehavior,
+				submittedAt,
+				undefined,
+				commandCardName,
+			);
 			return true;
 		}
 
@@ -6335,10 +6347,14 @@ export class AgentSession {
 			for (const notice of keywordNotices) {
 				await this.#queueCustomMessage(notice, streamingBehavior);
 			}
-			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, submittedAt, {
-				images: normalizedImages,
-				descriptionNotice: imageDescriptionNotice,
-			});
+			await this.#queueUserMessage(
+				expandedText,
+				options?.images,
+				streamingBehavior,
+				submittedAt,
+				{ images: normalizedImages, descriptionNotice: imageDescriptionNotice },
+				commandCardName,
+			);
 			return true;
 		}
 
@@ -6364,7 +6380,7 @@ export class AgentSession {
 					content: userContent,
 					attribution: promptAttribution,
 					timestamp: submittedAt,
-					...(matchedPromptTemplate ? { promptTemplate: matchedPromptTemplate.name } : {}),
+					...(commandCardName ? { promptTemplate: commandCardName } : {}),
 				};
 
 		const preludeMessages: AgentMessage[] = [];
@@ -6996,6 +7012,7 @@ export class AgentSession {
 		mode: "steer" | "followUp" | "aside",
 		timestamp?: number,
 		preprocessed?: { images: ImageContent[] | undefined; descriptionNotice: CustomMessage | undefined },
+		promptTemplate?: string,
 	): Promise<void> {
 		// Captured before any await below so the aside branch can detect a
 		// newSession()/switchSession() that completed while normalization/vision
@@ -7030,7 +7047,13 @@ export class AgentSession {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return;
 			const records: AgentMessage[] = [];
 			if (imageDescriptionNotice) records.push(imageDescriptionNotice);
-			records.push({ role: "user", content, attribution: "user", timestamp: timestamp ?? Date.now() });
+			records.push({
+				role: "user",
+				content,
+				attribution: "user",
+				timestamp: timestamp ?? Date.now(),
+				...(promptTemplate ? { promptTemplate } : {}),
+			});
 			this.#irc.queueAside(records);
 			// The awaits above (image normalization / vision description) can span the run's
 			// settle, so the run may already be idle by the time the record lands in the aside
@@ -7048,6 +7071,7 @@ export class AgentSession {
 				content,
 				attribution: "user",
 				timestamp: timestamp ?? Date.now(),
+				...(promptTemplate ? { promptTemplate } : {}),
 			});
 		} else {
 			for (const notice of videoAttachmentNotices) this.agent.steer(notice);
@@ -7058,6 +7082,7 @@ export class AgentSession {
 				steering: true,
 				attribution: "user",
 				timestamp: timestamp ?? Date.now(),
+				...(promptTemplate ? { promptTemplate } : {}),
 			});
 		}
 		this.#scheduleIdleQueueDrain();
