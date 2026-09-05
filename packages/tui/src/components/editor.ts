@@ -2063,6 +2063,11 @@ export class Editor implements Component, Focusable {
 		this.#setTextInternal(text);
 	}
 
+	/**
+	 * Replace or insert the draft's leading slash command. The body cursor keeps
+	 * its position, except in an empty draft: there it lands after the inserted
+	 * command and its trailing space, ready for arguments.
+	 */
 	setLeadingSlashCommand(command: string): void {
 		this.#exitHistoryForEditing();
 		const line = this.#state.lines[0] ?? "";
@@ -2072,12 +2077,13 @@ export class Editor implements Component, Focusable {
 		const replacement = `/${command}${start === null || oldEnd === line.length ? " " : ""}`;
 		const nextLine = line.slice(0, start ?? 0) + replacement + line.slice(oldEnd);
 		if (nextLine === line) return;
+		const emptyDraft = line === "" && this.#state.lines.length === 1;
 
 		this.#resetKillSequence();
 		this.#recordUndoState();
 		this.#state.lines[0] = nextLine;
 		if (this.#state.cursorLine === 0) {
-			if (start === null && this.#state.cursorCol > 0) {
+			if (start === null && (this.#state.cursorCol > 0 || emptyDraft)) {
 				this.#setCursorCol(this.#state.cursorCol + replacement.length);
 			} else if (start !== null && this.#state.cursorCol >= start) {
 				this.#setCursorCol(

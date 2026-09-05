@@ -145,6 +145,15 @@ describe("Composer prepaint", () => {
 			stdin.process("\x1b_pi:prompt;zero\x1b\\");
 			expect(composer.editor.getExpandedText()).toBe("/zero body");
 			expect(composer.editor.getCursor()).toEqual({ line: 0, col: 0 });
+
+			// An empty draft has no body cursor to keep: the caret parks after the
+			// inserted command and its space, so arguments can be typed straight away.
+			composer.editor.setText("");
+			stdin.process("\x1b_pi:prompt;skill:a\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/skill:a ");
+			expect(composer.editor.getCursor()).toEqual({ line: 0, col: 9 });
+			terminal.sendInput("arg");
+			expect(composer.editor.getExpandedText()).toBe("/skill:a arg");
 		} finally {
 			stdin.destroy();
 			composer.stop();
