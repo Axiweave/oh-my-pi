@@ -305,7 +305,11 @@ export class UiHelpers {
 						);
 					let userComponent: UserMessageComponent | CollapsedSyntheticMessageComponent;
 					if (templateName && !isSynthetic) {
-						userComponent = new CollapsedSyntheticMessageComponent(textContent, imageLinks, `/${templateName}`);
+						userComponent = new CollapsedSyntheticMessageComponent(
+							textContent,
+							imageLinks,
+							(message.role === "user" && message.promptTemplateInput) || `/${templateName}`,
+						);
 						userComponent.setExpanded(this.ctx.toolOutputExpanded);
 					} else if (cached instanceof UserMessageComponent) {
 						userComponent = cached;

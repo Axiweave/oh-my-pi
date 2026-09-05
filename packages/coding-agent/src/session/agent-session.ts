@@ -6264,6 +6264,9 @@ export class AgentSession {
 		// Name on the collapsed transcript card. A prompt template wins over a slash
 		// command: it is the later expansion when a command body itself is `/template`.
 		const commandCardName = matchedPromptTemplate?.name ?? matchedSlashCommand?.name;
+		// Raw typed line (with arguments) shown on the card so `/name abc` doesn't
+		// lose `abc` behind the collapsed one-line summary.
+		const commandCardInput = commandCardName ? typedText : undefined;
 
 		// Magic keywords ("ultrathink", "orchestrate"): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
@@ -6301,6 +6304,7 @@ export class AgentSession {
 				submittedAt,
 				undefined,
 				commandCardName,
+				commandCardInput,
 			);
 			return true;
 		}
@@ -6354,6 +6358,7 @@ export class AgentSession {
 				submittedAt,
 				{ images: normalizedImages, descriptionNotice: imageDescriptionNotice },
 				commandCardName,
+				commandCardInput,
 			);
 			return true;
 		}
@@ -6380,7 +6385,7 @@ export class AgentSession {
 					content: userContent,
 					attribution: promptAttribution,
 					timestamp: submittedAt,
-					...(commandCardName ? { promptTemplate: commandCardName } : {}),
+					...(commandCardName ? { promptTemplate: commandCardName, promptTemplateInput: commandCardInput } : {}),
 				};
 
 		const preludeMessages: AgentMessage[] = [];
@@ -7013,6 +7018,7 @@ export class AgentSession {
 		timestamp?: number,
 		preprocessed?: { images: ImageContent[] | undefined; descriptionNotice: CustomMessage | undefined },
 		promptTemplate?: string,
+		promptTemplateInput?: string,
 	): Promise<void> {
 		// Captured before any await below so the aside branch can detect a
 		// newSession()/switchSession() that completed while normalization/vision
@@ -7052,7 +7058,7 @@ export class AgentSession {
 				content,
 				attribution: "user",
 				timestamp: timestamp ?? Date.now(),
-				...(promptTemplate ? { promptTemplate } : {}),
+				...(promptTemplate ? { promptTemplate, promptTemplateInput } : {}),
 			});
 			this.#irc.queueAside(records);
 			// The awaits above (image normalization / vision description) can span the run's
@@ -7071,7 +7077,7 @@ export class AgentSession {
 				content,
 				attribution: "user",
 				timestamp: timestamp ?? Date.now(),
-				...(promptTemplate ? { promptTemplate } : {}),
+				...(promptTemplate ? { promptTemplate, promptTemplateInput } : {}),
 			});
 		} else {
 			for (const notice of videoAttachmentNotices) this.agent.steer(notice);
@@ -7082,7 +7088,7 @@ export class AgentSession {
 				steering: true,
 				attribution: "user",
 				timestamp: timestamp ?? Date.now(),
-				...(promptTemplate ? { promptTemplate } : {}),
+				...(promptTemplate ? { promptTemplate, promptTemplateInput } : {}),
 			});
 		}
 		this.#scheduleIdleQueueDrain();

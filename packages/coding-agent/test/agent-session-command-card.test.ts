@@ -11,7 +11,11 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
-function lastUserMessage(session: AgentSession): { text: string; promptTemplate: string | undefined } {
+function lastUserMessage(session: AgentSession): {
+	text: string;
+	promptTemplate: string | undefined;
+	promptTemplateInput: string | undefined;
+} {
 	const message = session.state.messages.findLast(m => m.role === "user");
 	if (!message || message.role !== "user") throw new Error("Expected a user message");
 	const text =
@@ -21,7 +25,7 @@ function lastUserMessage(session: AgentSession): { text: string; promptTemplate:
 					.filter(part => part.type === "text")
 					.map(part => part.text)
 					.join("");
-	return { text, promptTemplate: message.promptTemplate };
+	return { text, promptTemplate: message.promptTemplate, promptTemplateInput: message.promptTemplateInput };
 }
 
 describe("AgentSession command cards", () => {
@@ -78,15 +82,27 @@ describe("AgentSession command cards", () => {
 		try {
 			await session.prompt("/greet world");
 			await session.waitForIdle();
-			expect(lastUserMessage(session)).toEqual({ text: "Say hello to world", promptTemplate: "greet" });
+			expect(lastUserMessage(session)).toEqual({
+				text: "Say hello to world",
+				promptTemplate: "greet",
+				promptTemplateInput: "/greet world",
+			});
 
 			await session.prompt("/plan release");
 			await session.waitForIdle();
-			expect(lastUserMessage(session)).toEqual({ text: "Plan for release", promptTemplate: "plan" });
+			expect(lastUserMessage(session)).toEqual({
+				text: "Plan for release",
+				promptTemplate: "plan",
+				promptTemplateInput: "/plan release",
+			});
 
 			await session.prompt("hello there");
 			await session.waitForIdle();
-			expect(lastUserMessage(session)).toEqual({ text: "hello there", promptTemplate: undefined });
+			expect(lastUserMessage(session)).toEqual({
+				text: "hello there",
+				promptTemplate: undefined,
+				promptTemplateInput: undefined,
+			});
 		} finally {
 			await session.dispose();
 			authStorage.close();

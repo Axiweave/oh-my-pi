@@ -903,6 +903,8 @@ export interface UserMessage {
 	synthetic?: boolean;
 	/** Name of the file-based prompt template (`.omp/prompts/<name>.md`) or file slash command (`.omp/commands/<name>.md`) this message was expanded from. TUIs collapse it to a one-line card. */
 	promptTemplate?: string;
+	/** Raw `/name args…` text as typed, when `promptTemplate` is set. TUIs show this on the collapsed card so typed arguments stay visible. */
+	promptTemplateInput?: string;
 	/** True when injected mid-turn as a steer; consumed by the agent's pre-LLM transform to wrap it for emphasis. Never rendered. */
 	steering?: boolean;
 	/** Timestamp of a client-side history rewrite represented by this message. */

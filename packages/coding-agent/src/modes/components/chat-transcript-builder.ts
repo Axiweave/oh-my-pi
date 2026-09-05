@@ -317,7 +317,9 @@ export class ChatTranscriptBuilder {
 						const collapsed = new CollapsedSyntheticMessageComponent(
 							textContent,
 							undefined,
-							templateName ? `/${templateName}` : undefined,
+							templateName
+								? (message.role === "user" && message.promptTemplateInput) || `/${templateName}`
+								: undefined,
 						);
 						this.#trackExpandable(collapsed);
 						this.container.addChild(collapsed);

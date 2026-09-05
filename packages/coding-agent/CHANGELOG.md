@@ -19,6 +19,7 @@
 ### Fixed
 
 - OMP now rediscovers the IDE endpoint and reconnects automatically when an editor restarts.
+- Collapsed command cards now show the full typed line (`/name arg1 arg2`) instead of dropping arguments behind just the command name.
 
 ## [18.1.10] - 2026-09-04
 
