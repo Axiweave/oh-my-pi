@@ -1604,6 +1604,7 @@ export async function runRootCommand(
 			spellingAutocomplete: settingsInstance.get("spelling.autocomplete"),
 			spellingAutocorrect: settingsInstance.get("spelling.autocorrect"),
 			pinBottom: settingsInstance.get("tui.pinComposerBottom"),
+			streamingScrollback: settingsInstance.get("display.streamingScrollback"),
 			theme: {
 				symbolPreset: settingsInstance.get("symbolPreset"),
 				colorBlindMode: settingsInstance.get("colorBlindMode"),

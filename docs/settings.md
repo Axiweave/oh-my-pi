@@ -691,8 +691,15 @@ tui:
 | `images.blockImages`        | boolean | `false`          | Never send images to providers.                                           |
 | `tui.hyperlinks`            | enum    | `auto`           | `off`, `auto`, `always`.                                                  |
 | `tui.resizeScrollback`      | enum    | `rebuild`        | How a settled width resize refreshes transcript rows kept in terminal scrollback: `append` replays the transcript at the new width below retained history, `rebuild` erases pane scrollback then replays one current-width copy, `preserve` repaints only the viewport. |
+| `display.streamingScrollback` | boolean | `false` | Keep the full assistant reply scrollable during streaming, with Markdown formatting. |
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`. Include `status` in either segment list to render extension statuses registered through `ctx.ui.setStatus()`, ordered by key and joined inline. Set `statusLine.showHookStatus: false` to suppress the same statuses in the footer.
+
+Enable **Streaming Scrollback** in `/settings` under Appearance → Display, or set `display.streamingScrollback: true` in `config.yml`.
+The default keeps the current tail-only streaming view.
+The enabled mode includes unfinished paragraphs and open code fences.
+Markdown edits and width changes can clear and redraw history, including when `tui.resizeScrollback` is `append` or `preserve`.
+Smooth-streaming timing, tool preview limits, thinking visibility, and the terminal's own scrollback limit still apply.
 
 ### Interaction
 

@@ -132,6 +132,8 @@ export interface HistoryBatch {
 	 * one synchronous terminal write.
 	 */
 	readonly kind?: "append" | "replay";
+	/** Clear native history before writing this complete replay. Ignored for append batches. */
+	readonly clearScrollback?: boolean;
 }
 
 /** One history append or complete replay plus the mutable viewport for a terminal frame. */
@@ -1653,10 +1655,14 @@ export class TUI extends Container {
 		provider.beginHistoryFlush();
 		while (true) {
 			let plan: TerminalFramePlan;
+			let repeat: boolean;
 			do {
 				this.#imageBudget.beginPass();
 				plan = provider.renderFrame({ columns: width, rows: height });
-			} while (this.#imageBudget.endPass());
+				const imagePass = this.#imageBudget.endPass();
+				const replacement = this.#prepareHistoryReplacement(plan.history);
+				repeat = imagePass || replacement;
+			} while (repeat);
 			if (plan.history === undefined) return;
 			let viewport = Array.from(plan.viewport);
 			if (viewport.length > height) viewport = viewport.slice(0, height);
@@ -1839,6 +1845,19 @@ export class TUI extends Container {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
 		}
+	}
+
+	#prepareHistoryReplacement(history: HistoryBatch | undefined): boolean {
+		if (
+			history?.kind !== "replay" ||
+			history.clearScrollback !== true ||
+			history.id <= this.#acceptedHistoryBatchId ||
+			this.#clearScrollbackOnNextRender
+		) {
+			return false;
+		}
+		this.#prepareForcedRender(true);
+		return true;
 	}
 
 	#runScheduledRender = (): void => {
@@ -2319,10 +2338,14 @@ export class TUI extends Container {
 		if (!provider || width <= 0 || height <= 0) return;
 		this.#debugNextWindowTop = 0;
 		let plan: TerminalFramePlan;
+		let repeat: boolean;
 		do {
 			this.#imageBudget.beginPass();
 			plan = provider.renderFrame({ columns: width, rows: height, historyRows: this.#providerViewportTop });
-		} while (this.#imageBudget.endPass());
+			const imagePass = this.#imageBudget.endPass();
+			const replacement = this.#prepareHistoryReplacement(plan.history);
+			repeat = imagePass || replacement;
+		} while (repeat);
 		let viewport = Array.from(plan.viewport);
 		if (viewport.length > height) {
 			const message = `Frame provider returned ${viewport.length} rows for a ${height}-row viewport`;
@@ -2437,7 +2460,7 @@ export class TUI extends Container {
 
 		let historyRows = history?.rows ?? [];
 		let replayViewportRows = 0;
-		if (history?.kind === "replay") {
+		if (history?.kind === "replay" && history.clearScrollback !== true) {
 			// Providers may omit unused leading rows from a short viewport. Make
 			// that logical space explicit before the bottom-first replay split.
 			while (viewport.length < height) viewport.unshift("");

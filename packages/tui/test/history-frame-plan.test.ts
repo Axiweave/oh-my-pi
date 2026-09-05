@@ -190,6 +190,63 @@ class TmuxPreservedClearTerminal extends VirtualTerminal {
 }
 
 describe("terminal frame plans", () => {
+	it("replaces history atomically without moving a Markdown separator or accepting a stale clear", () => {
+		const terminal = new CountingTerminal(20, 3);
+		const provider = new Provider({
+			history: { id: 1, rows: ["old history"] },
+			viewport: ["old live", "editor"],
+		});
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		terminal.writes.length = 0;
+		provider.plan = {
+			history: { id: 2, rows: ["corrected history"], kind: "replay", clearScrollback: true },
+			viewport: ["", "live", "editor"],
+		};
+		tui.requestRender(true);
+		expect(terminal.writes).toHaveLength(1);
+		expect(plainBuffer(terminal)).toEqual(["corrected history", "", "live", "editor"]);
+
+		provider.plan = {
+			history: { id: 3, rows: ["next history"] },
+			viewport: ["", "new live", "editor"],
+		};
+		tui.requestRender(true);
+		expect(plainBuffer(terminal)).toEqual(["corrected history", "next history", "", "new live", "editor"]);
+		provider.plan = {
+			history: { id: 2, rows: ["stale"], kind: "replay", clearScrollback: true },
+			viewport: ["", "new live", "editor"],
+		};
+		terminal.writes.length = 0;
+		tui.requestRender(true);
+		expect(terminal.writes.join("")).not.toContain("\x1b[3J");
+		expect(plainBuffer(terminal)).toEqual(["corrected history", "next history", "", "new live", "editor"]);
+		tui.stop();
+	});
+
+	it("clears tmux-preserved history even when the replacement prefix is empty", () => {
+		const terminal = new TmuxPreservedClearTerminal(20, 3);
+		const provider = new Provider({
+			history: { id: 1, rows: ["old history"] },
+			viewport: ["old live", "editor"],
+		});
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		provider.plan = {
+			history: { id: 2, rows: ["corrected"], kind: "replay", clearScrollback: true },
+			viewport: ["", "live", "editor"],
+		};
+		tui.requestRender(true);
+		expect(plainBuffer(terminal)).toEqual(["corrected", "", "live", "editor"]);
+		provider.plan = {
+			history: { id: 3, rows: [], kind: "replay", clearScrollback: true },
+			viewport: ["", "new live", "editor"],
+		};
+		tui.requestRender(true);
+		expect(plainBuffer(terminal)).toEqual(["", "new live", "editor"]);
+		tui.stop();
+	});
+
 	it("appends finalized history once and leaves the requested mutable viewport intact", () => {
 		const terminal = new VirtualTerminal(20, 3);
 		const provider = new Provider({

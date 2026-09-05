@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getDefault } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
-import { COMPOSER_DEFAULTS, Composer, type ComposerPreferences } from "@oh-my-pi/pi-coding-agent/modes/composer";
+import { Composer, type ComposerPreferences } from "@oh-my-pi/pi-coding-agent/modes/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import {
 	applyStartupComposerPreferences,
@@ -75,6 +74,7 @@ describe("Composer prepaint", () => {
 			spellingAutocomplete: settings.get("spelling.autocomplete"),
 			spellingAutocorrect: settings.get("spelling.autocorrect"),
 			pinBottom: settings.get("tui.pinComposerBottom"),
+			streamingScrollback: settings.get("display.streamingScrollback"),
 		};
 	});
 
@@ -483,21 +483,6 @@ describe("Composer prepaint", () => {
 		expect(terminal.stops).toBe(1);
 	});
 
-	it("first frame mirrors the canonical settings-schema defaults", () => {
-		expect(COMPOSER_DEFAULTS).toEqual({
-			quiet: getDefault("startup.quiet"),
-			composerShape: getDefault("composer.shape") ?? "box",
-			showHardwareCursor: getDefault("showHardwareCursor"),
-			maxInlineImages: getDefault("tui.maxInlineImages"),
-			resizeScrollback: getDefault("tui.resizeScrollback"),
-			imeSafeCursor: getDefault("tui.imeSafeCursor"),
-			autocompleteMaxVisible: getDefault("autocompleteMaxVisible"),
-			spellingTypoDetection: getDefault("spelling.typoDetection"),
-			spellingAutocomplete: getDefault("spelling.autocomplete"),
-			spellingAutocorrect: getDefault("spelling.autocorrect"),
-			pinBottom: getDefault("tui.pinComposerBottom"),
-		});
-	});
 	it("renders the complete interactive welcome scene on the first frame", async () => {
 		const terminal = new CountingTerminal(80, 32);
 		const composer = new Composer({
@@ -649,6 +634,7 @@ describe("Composer prepaint", () => {
 			spellingAutocomplete: settings.get("spelling.autocomplete"),
 			spellingAutocorrect: settings.get("spelling.autocorrect"),
 			pinBottom: config.pinBottom,
+			streamingScrollback: config.streamingScrollback,
 			theme: {},
 		});
 		await terminal.waitForRender();

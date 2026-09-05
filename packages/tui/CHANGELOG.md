@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `HistoryBatch.clearScrollback` for atomic replacement replays, including empty replacements, with stale-identifier protection.
 - Added `AutocompleteProvider.getRecognizedCommandRanges` and `Editor.getRecognizedCommandRanges` so hosts can color-highlight a fully recognized leading slash command and inline `/skill:name` tokens as they're typed.
 - Added `Editor.setLeadingSlashCommand` so hosts can replace or insert a draft's leading slash command without moving its body cursor. An empty draft has no body cursor to keep, so the caret lands after the inserted command and its trailing space.
 - Added `Editor.insertLeadingKeyword` so hosts can place a standalone word at the start of a draft, after a leading slash command when one is present, without moving the body cursor.

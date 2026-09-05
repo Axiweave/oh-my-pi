@@ -1324,6 +1324,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.streamingScrollback": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Streaming Scrollback",
+			description: "Keep the full assistant reply scrollable during streaming. Markdown changes can redraw history.",
+		},
+	},
+
 	"display.hideToolActivity": {
 		type: "boolean",
 		default: false,

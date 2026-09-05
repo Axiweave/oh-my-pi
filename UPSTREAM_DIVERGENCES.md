@@ -66,6 +66,14 @@ It is not a changelog. Each entry describes a current decision that upstream reb
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts` and `packages/coding-agent/test/startup-composer.test.ts`.
 
+### Full assistant text during streaming
+
+- **Decision:** Keep `display.streamingScrollback` as an opt-in setting, defaulting to `false`.
+- **Decision:** Render the full mutable Markdown transcript through atomic history replacements when earlier rows change.
+- **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
+- **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/tui/src/tui.ts`.
+- **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts` and `packages/tui/test/history-frame-plan.test.ts`.
+
 ### Collapsed command cards
 
 - **Decision:** Collapse expanded prompt-template and file slash-command submissions into one-line `/name` transcript cards; ctrl+o shows the body.

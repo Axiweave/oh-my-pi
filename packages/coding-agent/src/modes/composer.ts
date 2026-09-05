@@ -2,6 +2,7 @@ import {
 	type Component,
 	Container,
 	type EditorTopBorder,
+	type HistoryBatch,
 	isInsideTerminalMultiplexer,
 	ProcessTerminal,
 	type ResizeScrollbackMode,
@@ -17,7 +18,7 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { CustomEditor } from "./components/custom-editor";
-import { type AnimationFrame, TranscriptContainer } from "./components/transcript-container";
+import { type AnimationFrame, isRowPrefix, TranscriptContainer } from "./components/transcript-container";
 import { type LspServerInfo, type RecentSession, WelcomeComponent } from "./components/welcome";
 import { getEditorTheme, initThemeSync, theme } from "./theme/theme";
 
@@ -39,6 +40,7 @@ export interface ComposerPreferences {
 	// viewport bottom so collapsing tool output cannot pull the prompt up; the
 	// transcript above absorbs the slack.
 	readonly pinBottom: boolean;
+	readonly streamingScrollback: boolean;
 }
 
 /** Settings-schema-compatible defaults used when constructing a dependency-free composer. */
@@ -54,6 +56,7 @@ export const COMPOSER_DEFAULTS: ComposerPreferences = {
 	spellingAutocomplete: true,
 	spellingAutocorrect: false,
 	pinBottom: true,
+	streamingScrollback: false,
 };
 
 /** Welcome data that can be supplied initially or patched as startup resolves it. */
@@ -183,6 +186,9 @@ export class Composer implements TerminalFrameProvider {
 					  };
 		  }
 		| undefined;
+	#streamingHistory: { rows: readonly string[]; width: number } | undefined;
+	#streamingOffer: { id: number; rows: readonly string[]; width: number } | undefined;
+	#streamingReplayRequested = false;
 	#historyReplayRequested = false;
 	#headerReplayPending = false;
 	#historyFlush = false;
@@ -303,6 +309,19 @@ export class Composer implements TerminalFrameProvider {
 		const transcript = roots[transcriptIndex] as TranscriptContainer;
 		const preRoots = this.#renderRoots(roots.slice(0, transcriptIndex), width);
 		const after = this.#renderRoots(roots.slice(transcriptIndex + 1), width);
+		if (this.#preferences.streamingScrollback) {
+			const history = this.#streamingOffer
+				? this.#offeredHistory
+				: this.#offerHistory(transcript, width, rows, preRoots.length + after.length);
+			return this.#renderStreamingFrame(
+				width,
+				rows,
+				transcript,
+				[...this.#header.render(width), ...preRoots],
+				after,
+				history,
+			);
+		}
 		// Offer history under capacity pressure only: blocks stay live (and keep
 		// reflowing to the current width) while the screen has room. A batch
 		// leaves the mutable viewport in the same frame it is appended, so its
@@ -339,8 +358,49 @@ export class Composer implements TerminalFrameProvider {
 		};
 	}
 
+	#renderStreamingFrame(
+		width: number,
+		rows: number,
+		transcript: TranscriptContainer,
+		before: readonly string[],
+		after: readonly string[],
+		logicalHistory: HistoryBatch | undefined,
+	): TerminalFramePlan {
+		const document = [...before, ...transcript.render(width)];
+		const capacity = Math.max(0, rows - after.length);
+		const cut = Math.max(0, document.length - capacity);
+		const prefix = document.slice(0, cut);
+		const tail = document.slice(cut);
+		const padding = this.#preferences.pinBottom ? Math.max(0, capacity - tail.length) : 0;
+		const viewport = [...tail, ...new Array<string>(padding).fill(""), ...after].slice(-rows);
+		const accepted = this.#streamingHistory;
+		// ponytail: full-history row comparison in opt-in mode; cache unchanged transcript prefixes if profiling shows a bottleneck.
+		const replacement =
+			accepted === undefined ||
+			this.#streamingReplayRequested ||
+			accepted.width !== width ||
+			!isRowPrefix(accepted.rows, prefix);
+		if (!replacement && accepted.rows.length === prefix.length && !logicalHistory && !this.#streamingOffer) {
+			return { viewport };
+		}
+		const id = this.#streamingOffer?.id ?? logicalHistory?.id ?? this.#nextHistoryId++;
+		this.#streamingOffer = { id, rows: prefix, width };
+		return {
+			history: replacement
+				? { id, rows: prefix, kind: "replay", clearScrollback: true }
+				: { id, rows: prefix.slice(accepted.rows.length), kind: "append" },
+			viewport,
+		};
+	}
+
 	/** Acknowledges one accepted header, replay, or transcript batch. */
 	acknowledgeHistory(id: number): void {
+		const streaming = this.#streamingOffer;
+		if (streaming?.id === id) {
+			this.#streamingHistory = { rows: streaming.rows, width: streaming.width };
+			this.#streamingOffer = undefined;
+			this.#streamingReplayRequested = false;
+		}
 		const offered = this.#offeredHistory;
 		if (offered === undefined || offered.id !== id) return;
 		if (offered.source === "header") {
@@ -357,6 +417,7 @@ export class Composer implements TerminalFrameProvider {
 		}
 		this.#offeredHistory = undefined;
 		if (this.#historyReplayRequested) this.#startHistoryReplay();
+		if (this.#preferences.streamingScrollback) this.ui.requestRender();
 	}
 
 	/** Render the semantic transcript tail while the terminal borrows its resize buffer. */
@@ -364,6 +425,23 @@ export class Composer implements TerminalFrameProvider {
 		if (!this.#started || this.#stopped) return [];
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
+		if (this.#preferences.streamingScrollback && this.#runtimeMounted) {
+			const roots = [...this.#runtimeChildren, this.#statusHost];
+			const transcriptIndex = roots.findIndex(root => root instanceof TranscriptContainer);
+			if (transcriptIndex >= 0) {
+				const transcript = roots[transcriptIndex] as TranscriptContainer;
+				const document = [
+					...this.#header.render(width),
+					...this.#renderRoots(roots.slice(0, transcriptIndex), width),
+					...transcript.render(width),
+				];
+				const after = this.#renderRoots(roots.slice(transcriptIndex + 1), width);
+				const capacity = Math.max(0, rows - after.length);
+				const tail = document.slice(Math.max(0, document.length - capacity));
+				const padding = this.#preferences.pinBottom ? Math.max(0, capacity - tail.length) : 0;
+				return [...tail, ...new Array<string>(padding).fill(""), ...after].slice(-rows);
+			}
+		}
 		const tail = this.#runtimeMounted
 			? this.#renderResizeTail(width, rows)
 			: this.#renderRoots([this.#bootstrapInputGap, this.editor, this.#statusHost], width);
@@ -390,6 +468,7 @@ export class Composer implements TerminalFrameProvider {
 
 	/** Replays committed presentation without changing logical retirement state. */
 	beginHistoryReplay(): void {
+		this.#streamingReplayRequested = true;
 		if (this.#offeredHistory !== undefined) {
 			this.#historyReplayRequested = true;
 			return;
@@ -410,6 +489,9 @@ export class Composer implements TerminalFrameProvider {
 
 	/** Re-offer the complete finalized prefix after a display reset or resize replay. */
 	resetHistory(): void {
+		this.#streamingHistory = undefined;
+		this.#streamingOffer = undefined;
+		this.#streamingReplayRequested = false;
 		this.#offeredHistory = undefined;
 		this.#headerRetired = false;
 		this.#retiredHeaderRows = undefined;
@@ -476,7 +558,12 @@ export class Composer implements TerminalFrameProvider {
 			const renderedHeader = this.#header.render(width);
 			if (renderedHeader.length > 0) {
 				const liveRows = transcript.liveRowCount(width);
-				if (!this.#historyFlush && renderedHeader.length + chromeRows + liveRows <= rows) return undefined;
+				if (
+					!this.#historyFlush &&
+					!this.#preferences.streamingScrollback &&
+					renderedHeader.length + chromeRows + liveRows <= rows
+				)
+					return undefined;
 				this.#offeredHistory = {
 					id: this.#nextHistoryId++,
 					rows: [...renderedHeader, ""],
@@ -492,9 +579,10 @@ export class Composer implements TerminalFrameProvider {
 			this.#headerRetired = true;
 			this.#retiredHeaderRows = [];
 		}
-		const batch = this.#historyFlush
-			? transcript.peekFlushBatch(width)
-			: transcript.peekFinalizedBatch(width, Math.max(0, rows - chromeRows));
+		const batch =
+			this.#historyFlush || this.#preferences.streamingScrollback
+				? transcript.peekFlushBatch(width)
+				: transcript.peekFinalizedBatch(width, Math.max(0, rows - chromeRows));
 		if (batch === undefined) return undefined;
 		this.#offeredHistory = {
 			id: this.#nextHistoryId++,
@@ -607,6 +695,9 @@ export class Composer implements TerminalFrameProvider {
 	setPreferences(update: Partial<ComposerPreferences>): void {
 		if (this.#stopped) return;
 		const wasQuiet = this.#preferences.quiet;
+		const streamingChanged =
+			update.streamingScrollback !== undefined &&
+			update.streamingScrollback !== this.#preferences.streamingScrollback;
 		this.#preferences = { ...this.#preferences, ...update };
 		this.editor.setTheme(getEditorTheme());
 		try {
@@ -635,6 +726,12 @@ export class Composer implements TerminalFrameProvider {
 			if (wasQuiet && this.#started) this.playWelcomeIntro();
 		}
 		if (wasQuiet !== this.#preferences.quiet) this.#rebuildHeader();
+		if (streamingChanged) {
+			this.#streamingHistory = undefined;
+			this.#streamingOffer = undefined;
+			this.#streamingReplayRequested = false;
+			if (this.#runtimeChildren.some(child => child instanceof TranscriptContainer)) this.ui.resetDisplay();
+		}
 		this.ui.requestRender();
 	}
 
@@ -711,6 +808,14 @@ export class Composer implements TerminalFrameProvider {
 	/** Mount or replace session-aware root children while preserving the header and status hosts. */
 	setRuntimeChildren(children: readonly Component[]): void {
 		if (this.#stopped) return;
+		if (
+			this.#runtimeChildren.find(child => child instanceof TranscriptContainer) !==
+			children.find(child => child instanceof TranscriptContainer)
+		) {
+			this.#streamingHistory = undefined;
+			this.#streamingOffer = undefined;
+			this.#streamingReplayRequested = true;
+		}
 		this.ui.removeChild(this.#statusHost);
 		if (this.#runtimeMounted) {
 			for (const child of this.#runtimeChildren) this.ui.removeChild(child);

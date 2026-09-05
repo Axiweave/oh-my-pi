@@ -904,6 +904,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			spellingAutocomplete: settings.get("spelling.autocomplete"),
 			spellingAutocorrect: settings.get("spelling.autocorrect"),
 			pinBottom: settings.get("tui.pinComposerBottom"),
+			streamingScrollback: settings.get("display.streamingScrollback"),
 		};
 		const wasStarted = composer?.started ?? false;
 		this.composer =

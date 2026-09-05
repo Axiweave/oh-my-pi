@@ -668,6 +668,9 @@ export class SelectorController {
 			case "tui.pinComposerBottom":
 				this.ctx.composer.setPreferences({ pinBottom: value as boolean });
 				break;
+			case "display.streamingScrollback":
+				this.ctx.composer.setPreferences({ streamingScrollback: value as boolean });
+				break;
 			case "tui.hyperlinks":
 				applyHyperlinkSetting();
 				this.ctx.statusLine.invalidate();
