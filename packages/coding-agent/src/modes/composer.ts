@@ -219,10 +219,13 @@ export class Composer implements TerminalFrameProvider {
 		);
 		this.ui.setFrameProvider(this);
 		this.ui.addInputListener(data => {
-			if (!data.startsWith("\x1b_pi:prompt;")) return;
-			const match = /^\x1b_pi:prompt;([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
+			if (!data.startsWith("\x1b_pi:")) return;
+			// `pi:prompt;<name>` replaces the leading slash command; `pi:keyword;<word>`
+			// puts a standalone word (ultrathink, orchestrate, workflowz, …) at the message start.
+			const match = /^\x1b_pi:(prompt|keyword);([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
 			if (match && this.ui.getFocused() === this.editor) {
-				this.editor.setLeadingSlashCommand(match[1] ?? "");
+				if (match[1] === "prompt") this.editor.setLeadingSlashCommand(match[2] ?? "");
+				else this.editor.insertLeadingKeyword(match[2] ?? "");
 				this.ui.requestRender();
 			}
 			return { consume: true };

@@ -2091,6 +2091,36 @@ export class Editor implements Component, Focusable {
 		this.onAutocompleteUpdate?.();
 		this.onChange?.(this.getText());
 	}
+
+	/**
+	 * Insert `word` as a standalone token at the start of the message, after a
+	 * leading slash command when one is present. A word already present as a
+	 * standalone token is left alone. The body cursor keeps its position.
+	 */
+	insertLeadingKeyword(word: string): void {
+		if (new RegExp(`(?:^|\\s)${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`, "u").test(this.getText()))
+			return;
+		this.#exitHistoryForEditing();
+		const line = this.#state.lines[0] ?? "";
+		const start = findLeadingSlashCommandStart(line);
+		const tokenEnd = start === null ? -1 : line.slice(start).search(/\s/u);
+		const at = start === null ? 0 : tokenEnd === -1 ? line.length : start + tokenEnd;
+		const before = line.slice(0, at);
+		const after = line.slice(at);
+		const lead = at > 0 && !/\s$/u.test(before) ? " " : "";
+		const trail = /^\s/u.test(after) ? "" : " ";
+		const insert = `${lead}${word}${trail}`;
+
+		this.#resetKillSequence();
+		this.#recordUndoState();
+		this.#state.lines[0] = before + insert + after;
+		if (this.#state.cursorLine === 0 && this.#state.cursorCol >= at) {
+			this.#setCursorCol(this.#state.cursorCol + insert.length);
+		}
+		this.#cancelAutocomplete();
+		this.onAutocompleteUpdate?.();
+		this.onChange?.(this.getText());
+	}
 	submit(): void {
 		if (this.disableSubmit) return;
 		this.#submitValue();

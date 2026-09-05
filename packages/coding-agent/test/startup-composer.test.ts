@@ -151,6 +151,41 @@ describe("Composer prepaint", () => {
 		}
 	});
 
+	it("puts keyword control packets at the message start without moving the body cursor", () => {
+		const terminal = new CountingTerminal();
+		const composer = new Composer({ preferences: config, terminal });
+		const stdin = new StdinBuffer();
+		stdin.on("data", data => terminal.sendInput(data));
+		composer.start();
+
+		try {
+			stdin.process("\x1b_pi:keyword;ultrathink\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("ultrathink ");
+			terminal.sendInput("go");
+			expect(composer.editor.getExpandedText()).toBe("ultrathink go");
+
+			composer.editor.setText("fix the bug");
+			stdin.process("\x1b_pi:keyword;orchestrate\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("orchestrate fix the bug");
+			terminal.sendInput("X");
+			expect(composer.editor.getExpandedText()).toBe("orchestrate fix the bugX");
+
+			stdin.process("\x1b_pi:keyword;orchestrate\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("orchestrate fix the bugX");
+
+			composer.editor.setText("/plan body");
+			stdin.process("\x1b_pi:keyword;workflowz\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/plan workflowz body");
+
+			const draft = composer.editor.getExpandedText();
+			stdin.process("\x1b_pi:keyword;bad word\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe(draft);
+		} finally {
+			stdin.destroy();
+			composer.stop();
+		}
+	});
+
 	it("adopts the live draft with final theme, keybindings, and submit behavior", async () => {
 		const terminal = new CountingTerminal();
 		const composer = new Composer({ preferences: config, terminal });
