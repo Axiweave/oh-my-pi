@@ -15,6 +15,13 @@ It is not a changelog. Each entry describes a current decision that upstream reb
 
 ## Divergences
 
+### Local source installation
+
+- **Decision:** Use this fork's checkout and `bun run setup` for installation, repair, and updates.
+- **Why:** Upstream packages and installers replace the fork and omit its changes.
+- **Key paths:** `README.md`, `AGENTS.md`, `packages/coding-agent/README.md`, `scripts/setup.ts`, and `scripts/link-omp.sh`.
+- **Checks:** Follow the command-target and runtime checks in `README.md` under Install.
+
 ### Project-local prompt history
 
 - **Decision:** Start Ctrl-R history in the active working directory and let Tab switch to all projects without changing the query.

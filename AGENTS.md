@@ -23,6 +23,13 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Catalog import convention**: code in this repo imports catalog _values_ (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort _types_ its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
+## Fork Setup
+
+Use this checkout of `Axiweave/oh-my-pi` for installation, repair, and updates.
+Before these tasks, **MUST read and follow [README.md — Install](README.md#install)**, including the command-target checks.
+**NEVER replace this fork with an upstream package, release binary, installer, or self-update.**
+Remote names do not prove fork identity. In the maintainer checkout, `origin` is upstream and `fork` is Axiweave.
+
 ## Upstream Divergences
 
 Before an upstream merge, conflict resolution, or fork-only behavior change, **MUST read `UPSTREAM_DIVERGENCES.md`**.

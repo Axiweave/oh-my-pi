@@ -1,5 +1,6 @@
 > [!IMPORTANT]
-> This fork intentionally differs from upstream. Read [UPSTREAM_DIVERGENCES.md](UPSTREAM_DIVERGENCES.md) before rebasing or changing fork-only behavior.
+> This is the [Axiweave/oh-my-pi](https://github.com/Axiweave/oh-my-pi) fork. Use the [local source setup](#install) below, not upstream installers.
+> Read [UPSTREAM_DIVERGENCES.md](UPSTREAM_DIVERGENCES.md) before an upstream merge or a fork-only behavior change.
 
 <p align="center">
   <img src="https://github.com/can1357/oh-my-pi/blob/main/assets/hero.png?raw=true" alt="omp">
@@ -37,64 +38,46 @@ The most capable agent surface that ships. Continuously tuned by real-world use 
 
 ## Install
 
-**macOS · Linux**
+This fork uses a local source build. Published `@oh-my-pi/pi-coding-agent` packages and the installers at `omp.sh` install upstream, not this fork.
+Upstream Homebrew, Nix, and mise instructions also install upstream. Do not use them to install, repair, or update this fork.
 
-```sh
-curl -fsSL https://omp.sh/install | sh
-```
+Prerequisites: Git, Bun (use the version in root `package.json`), rustup, and the native compiler tools for your platform.
+The native build uses the Rust toolchain in `rust-toolchain.toml`. On macOS, install the Xcode Command Line Tools.
 
-> **Alpine / musl:** the prebuilt musl binary links `libstdc++`/`libgcc` dynamically, which stock Alpine does not ship. Install them first: `apk add libstdc++ libgcc`.
+1. If you do not have a checkout, clone this fork:
 
-**Homebrew**
+   ```sh
+   git clone https://github.com/Axiweave/oh-my-pi.git
+   cd oh-my-pi
+   ```
 
-```sh
-brew install can1357/tap/omp
-```
+   If you already have a checkout, use its root directory instead. Keep local changes.
 
-**Bun (recommended)**
+2. Build and link the local source:
 
-```sh
-bun install -g @oh-my-pi/pi-coding-agent
-```
+   ```sh
+   bun run setup
+   ```
 
-**Nix**
+   This installs workspace dependencies, builds the native addon, and links `omp` to this checkout's source launcher.
+   It replaces the `omp` entry in Bun's global bin directory. Keep that directory on `PATH`.
 
-```sh
-# Run without installing
-nix run github:can1357/oh-my-pi
+3. Verify the command target and runtime:
 
-# Or install into the active profile
-nix profile install github:can1357/oh-my-pi
-```
+   ```sh
+   command -v omp
+   realpath "$(command -v omp)"
+   omp --version
+   omp --smoke-test
+   ```
 
-Flake consumers can use `packages.<system>.omp`, `overlays.default`, `nixosModules.default`, or `homeManagerModules.default`. A Home Manager configuration can install OMP and own its settings declaratively:
+   The resolved path must be this checkout's `packages/coding-agent/scripts/omp`.
+   A matching version alone does not prove that the command uses this fork.
+   If another installation takes precedence, correct `PATH` and repeat these checks.
 
-```nix
-{
-  inputs.omp.url = "github:can1357/oh-my-pi";
-
-  # In your Home Manager module:
-  imports = [ inputs.omp.homeManagerModules.default ];
-  programs.omp = {
-    enable = true;
-    settings.startup.quiet = true;
-  };
-}
-```
-
-**Windows (PowerShell)**
-
-```powershell
-irm https://omp.sh/install.ps1 | iex
-```
-
-**Pinned versions (mise)**
-
-```sh
-mise use -g github:can1357/oh-my-pi
-```
-
-macOS · Linux · Windows · bun ≥ 1.3.14
+For updates, use this fork's source and repeat `bun run setup`. Do not use an upstream package upgrade or self-updater.
+In the maintainer checkout, `fork` points to Axiweave and `origin` points to upstream. Check remote URLs before an update.
+Follow [AGENTS.md](AGENTS.md#upstream-divergences) for upstream merges.
 
 ### Shell completions
 
