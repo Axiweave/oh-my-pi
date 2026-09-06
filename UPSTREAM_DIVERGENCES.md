@@ -1,15 +1,15 @@
 # Upstream Divergences
 
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
-It is not a changelog. Each entry describes a current decision that upstream rebases must preserve or retire explicitly.
+It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.1.11` on 2026-09-05.
+**Reviewed against:** `v18.1.12` on 2026-09-06.
 
 ## Maintenance
 
-1. Read every entry before an upstream rebase or conflict resolution.
+1. Read every entry before an upstream merge or conflict resolution.
 2. Preserve each decision unless the user explicitly retires it.
-3. After a rebase, verify each entry against upstream and update the reviewed release.
+3. After a merge, verify each entry against upstream and update the reviewed release.
 4. Add or update an entry in the same commit as each fork-only feature or decision.
 5. Remove an entry when upstream adopts the behavior or this fork drops it.
 

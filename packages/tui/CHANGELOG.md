@@ -9,6 +9,13 @@
 - Added `Editor.setLeadingSlashCommand` so hosts can replace or insert a draft's leading slash command without moving its body cursor. An empty draft has no body cursor to keep, so the caret lands after the inserted command and its trailing space.
 - Added `Editor.insertLeadingKeyword` so hosts can place a standalone word at the start of a draft, after a leading slash command when one is present, without moving the body cursor.
 
+## [18.1.12] - 2026-09-06
+
+### Fixed
+
+- Avoid inserting a trailing space when auto-completing directory paths with `@`, and keep autocomplete open when accepting a directory with Tab or Enter.
+- Horizontal wheel reports (the sideways drift of a two-finger trackpad scroll) no longer decode as a vertical wheel direction, so fullscreen selectors such as `/copy` and the rewind picker stop jumping up and back down at the end of a scroll gesture.
+
 ## [18.1.9] - 2026-09-04
 
 ### Added

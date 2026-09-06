@@ -4,6 +4,7 @@ import {
 	type AutocompleteProvider,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
+	isDirectoryCompletionValue,
 	midPromptSkillTokenMatches,
 	SKILL_NAMESPACE,
 } from "../autocomplete";
@@ -1475,7 +1476,8 @@ export class Editor implements Component, Focusable {
 						return;
 					}
 					if (selected && this.#autocompleteProvider) {
-						const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
+						const shouldChainAutocomplete =
+							this.#isSlashCommandNameAutocompleteSelection() || isDirectoryCompletionValue(selected.value);
 						const result = this.#autocompleteProvider.applyCompletion(
 							this.#state.lines,
 							this.#state.cursorLine,
@@ -1497,8 +1499,8 @@ export class Editor implements Component, Focusable {
 
 						result.onApplied?.();
 
-						if (shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) {
-							void this.#tryTriggerAutocomplete();
+						if (shouldChainAutocomplete) {
+							queueMicrotask(() => void this.#tryTriggerAutocomplete());
 						}
 					}
 					return;
@@ -1551,6 +1553,7 @@ export class Editor implements Component, Focusable {
 					} else {
 						if (selected && this.#autocompleteProvider) {
 							const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
+							const shouldChainDirectoryCompletion = isDirectoryCompletionValue(selected.value);
 							const result = this.#autocompleteProvider.applyCompletion(
 								this.#state.lines,
 								this.#state.cursorLine,
@@ -1571,7 +1574,9 @@ export class Editor implements Component, Focusable {
 							}
 
 							result.onApplied?.();
-							if (shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) {
+							if (shouldChainDirectoryCompletion) {
+								queueMicrotask(() => void this.#tryTriggerAutocomplete());
+							} else if (shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) {
 								void this.#tryTriggerAutocomplete();
 							}
 						}
