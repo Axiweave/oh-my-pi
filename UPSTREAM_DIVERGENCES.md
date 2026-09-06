@@ -89,6 +89,14 @@ It is not a changelog. Each entry describes a current decision that upstream reb
 - **Key paths:** `packages/tui/src/terminal-capabilities.ts` and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/tui/test/process-terminal-render.test.ts` and `packages/tui/test/resize-multiplexer-anchor.test.ts`.
 
+### Opt-in terminal directory reporting
+
+- **Decision:** Keep `terminal.reportCwd` disabled by default. Only the active interactive TUI sends OSC 7 directory reports.
+- **Decision:** Report startup, successful main-process directory changes, and live enable transitions. Use tmux passthrough when needed.
+- **Why:** Ghostel must follow OMP directory changes without changing the parent shell's directory or adding bytes to non-interactive output.
+- **Key paths:** `packages/utils/src/dirs.ts`, `packages/coding-agent/src/utils/terminal-directory.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
+- **Checks:** `packages/utils/test/dirs.test.ts`, `packages/coding-agent/test/terminal-directory.test.ts`, and source CLI checks in Ghostel with direct and tmux output.
+
 ### Constant write preview height
 
 - **Decision:** Keep the streaming write-tool preview at a constant height.

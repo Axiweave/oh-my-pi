@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `onProjectDirChanged()` to observe successful project directory changes, including inaccessible-directory recovery.
+
 ## [18.1.11] - 2026-09-05
 
 ### Fixed

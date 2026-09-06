@@ -6,6 +6,7 @@ import {
 	__resetProjectDirCacheForTests,
 	directoryIsMissing,
 	getProjectDir,
+	onProjectDirChanged,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils/dirs";
 
@@ -23,11 +24,15 @@ describe("project directory state", () => {
 			throw new Error("cwd unavailable");
 		});
 		process.env.PWD = os.tmpdir();
+		const reported: string[] = [];
+		const unsubscribe = onProjectDirChanged(dir => reported.push(dir));
 		try {
 			getProjectDir();
 			cwd.mockRestore();
 			expect(fs.realpathSync(process.cwd())).toBe(fs.realpathSync(getProjectDir()));
+			expect(reported).toEqual([getProjectDir()]);
 		} finally {
+			unsubscribe();
 			cwd.mockRestore();
 			if (originalPwd === undefined) delete process.env.PWD;
 			else process.env.PWD = originalPwd;
@@ -53,5 +58,30 @@ describe("project directory state", () => {
 		expect(() => setProjectDir("/blocked/project")).toThrow("operation not permitted");
 		expect(getProjectDir()).toBe(originalProjectDir);
 		chdir.mockRestore();
+	});
+
+	it("isolates listener errors after the directory changes", () => {
+		const destination = fs.mkdtempSync(path.join(os.tmpdir(), "omp-dir-listener-"));
+		const reported: string[] = [];
+		const unsubscribeThrowing = onProjectDirChanged(() => {
+			throw new Error("listener failed");
+		});
+		const unsubscribe = onProjectDirChanged(dir => {
+			expect(getProjectDir()).toBe(dir);
+			reported.push(dir);
+		});
+		try {
+			setProjectDir(destination);
+			expect(fs.realpathSync(getProjectDir())).toBe(fs.realpathSync(destination));
+			expect(reported).toEqual([getProjectDir()]);
+			unsubscribe();
+			setProjectDir(originalProjectDir);
+			expect(reported).toHaveLength(1);
+		} finally {
+			unsubscribeThrowing();
+			unsubscribe();
+			setProjectDir(originalProjectDir);
+			fs.rmSync(destination, { recursive: true, force: true });
+		}
 	});
 });

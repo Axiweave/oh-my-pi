@@ -180,6 +180,15 @@ export function relativePathWithinRoot(root: string, candidate: string): string 
 }
 
 let projectDir: string | undefined;
+const projectDirListeners = new Set<(cwd: string) => void>();
+
+/** Observe successful project directory changes and return a disposer. */
+export function onProjectDirChanged(listener: (cwd: string) => void): () => void {
+	projectDirListeners.add(listener);
+	return () => {
+		projectDirListeners.delete(listener);
+	};
+}
 
 /** Get the project directory. */
 export function getProjectDir(): string {
@@ -191,8 +200,7 @@ export function getProjectDir(): string {
 			for (const candidate of candidates) {
 				if (!candidate || !path.isAbsolute(candidate)) continue;
 				try {
-					process.chdir(candidate);
-					projectDir = standardizeMacOSPath(candidate);
+					setProjectDir(candidate);
 					break;
 				} catch {}
 			}
@@ -209,6 +217,13 @@ export function setProjectDir(dir: string): void {
 	const resolved = standardizeMacOSPath(path.resolve(dir));
 	process.chdir(resolved);
 	projectDir = resolved;
+	for (const listener of projectDirListeners) {
+		try {
+			listener(resolved);
+		} catch {
+			// Notifications are side channels. They must not break directory changes.
+		}
+	}
 }
 
 /** Reset the cached project directory (test seam). */

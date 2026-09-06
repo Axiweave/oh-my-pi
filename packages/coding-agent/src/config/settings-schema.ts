@@ -1215,6 +1215,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"terminal.reportCwd": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Report Working Directory (OSC 7)",
+			description: "Report the active working directory to terminal hosts such as Ghostel. Disabled by default.",
+		},
+	},
+
 	"tui.textSizing": {
 		type: "boolean",
 		default: false,

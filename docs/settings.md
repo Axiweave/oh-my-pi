@@ -696,6 +696,7 @@ tui:
 | `statusLine.transparent`    | boolean | `false`          | Use the terminal background for the status line.                          |
 | `statusLine.showHookStatus` | boolean | `true`           | Show hook status messages.                                                |
 | `terminal.showImages`       | boolean | `true`           | Render images inline (when the terminal supports it).                     |
+| `terminal.reportCwd`        | boolean | `false`          | Report the active directory to terminal hosts with OSC 7.                 |
 | `images.autoResize`         | boolean | `true`           | Resize large images for model compatibility.                              |
 | `images.blockImages`        | boolean | `false`          | Never send images to providers.                                           |
 | `tui.hyperlinks`            | enum    | `auto`           | `off`, `auto`, `always`.                                                  |
@@ -703,6 +704,13 @@ tui:
 | `display.streamingScrollback` | boolean | `false` | Keep the full assistant reply scrollable during streaming, with Markdown formatting. |
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`. Include `status` in either segment list to render extension statuses registered through `ctx.ui.setStatus()`, ordered by key and joined inline. Set `statusLine.showHookStatus: false` to suppress the same statuses in the footer.
+
+Set `terminal.reportCwd: true` to let Ghostel and other OSC 7 hosts follow OMP directory changes.
+The interactive TUI reports at startup, after successful directory changes, and when you enable the setting.
+This includes `/wt`, `/move`, persistent `!cd`, and cross-project `/resume`.
+Reports do not change the parent shell's directory.
+Print, RPC, ACP, SDK, worker, headless, and non-TTY output do not emit these reports.
+Under tmux, OMP uses the existing passthrough envelope. The tmux server must permit passthrough.
 
 Enable **Streaming Scrollback** in `/settings` under Appearance → Display, or set `display.streamingScrollback: true` in `config.yml`.
 The default keeps the current tail-only streaming view.

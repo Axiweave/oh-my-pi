@@ -157,6 +157,7 @@ import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { resumeCommand } from "../utils/resume-command";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
+import { startTerminalDirectoryReporting } from "../utils/terminal-directory";
 import { messageHasDisplayableThinking } from "../utils/thinking-display";
 import {
 	disposeTerminalTitleState,
@@ -1310,6 +1311,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			});
 			this.#ownsStartedUi = true;
 		}
+		this.#eventBusUnsubscribers.push(startTerminalDirectoryReporting(this.settings, this.ui.terminal));
 		pushTerminalTitle();
 		setTerminalTitleStateEnabled(this.settings.get("tui.titleState"));
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
