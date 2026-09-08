@@ -119,6 +119,9 @@ export function subscribeIdeState(manager: MCPManager): () => void {
 	const entry = entryFor(manager);
 	entry.subscribers += 1;
 	if (entry.subscribers === 1) {
+		// The entry outlives an unsubscribe, so a move while nobody listened
+		// left `directory` stale. Reseed before the first flush.
+		entry.directory = getProjectDir();
 		entry.unsubscribe = manager.addConnectionStatusListener(event => {
 			if (event.type !== "connected" || event.serverName !== "ide") return;
 			entry.delivered = undefined;

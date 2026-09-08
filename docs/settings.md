@@ -716,6 +716,7 @@ Set `terminal.reportCwd: true` to let Ghostel and other OSC 7 hosts follow OMP d
 The interactive TUI reports at startup, after successful directory changes, and when you enable the setting.
 This includes `/wt`, `/move`, persistent `!cd`, and cross-project `/resume`.
 Reports do not change the parent shell's directory.
+Under Ghostel, a report also runs `ghostel-directory-change-hook`, which lets claude-code-ide.el relabel the session in its sidebar.
 Print, RPC, ACP, SDK, worker, headless, and non-TTY output do not emit these reports.
 Under tmux, OMP uses the existing passthrough envelope. The tmux server must permit passthrough.
 

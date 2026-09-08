@@ -131,9 +131,18 @@ describe("publishIdeSessionState / subscribeIdeState", () => {
 		expect(directories.at(-1)).not.toBe(directories.at(-2));
 
 		unsubscribe();
-		setProjectDir(originalDirectory);
+		setProjectDir(root);
 		await flushMicrotasks();
 		expect(sent).toEqual(["idle", "done", "done"]);
+
+		// The entry outlives the unsubscribe: a later subscriber announces where
+		// the session is now, not where it was when the last listener detached.
+		const resubscribe = subscribeIdeState(manager);
+		await flushMicrotasks();
+		expect(sent).toEqual(["idle", "done", "done", "done"]);
+		expect(directories.at(-1)).toBe(getProjectDir());
+
+		resubscribe();
 		fs.rmSync(root, { recursive: true, force: true });
 	});
 
