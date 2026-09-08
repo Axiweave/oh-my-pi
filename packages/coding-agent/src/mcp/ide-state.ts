@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { getProjectDir, logger, onProjectDirChanged } from "@oh-my-pi/pi-utils";
 import type { MCPManager } from "./manager";
 
 /** Session lifecycle state shown by IDE integrations such as claude-code-ide.el. */
@@ -29,14 +29,22 @@ export function ideTurnState(
 interface IdeStateEntry {
 	/** Newest state the session asked to publish. */
 	state: IdeSessionState;
-	/** State the IDE acknowledged (2xx); `undefined` forces a resend on the next flush. */
-	delivered: IdeSessionState | undefined;
+	/** Working directory published with the state; follows `/wt`, `/move`, `!cd`, and cross-project `/resume`. */
+	directory: string;
+	/** Payload the IDE acknowledged (2xx); `undefined` forces a resend on the next flush. */
+	delivered: string | undefined;
 	/** At most one notify in flight per manager, so the wire sees states in order. */
 	inflight: Promise<void> | undefined;
 	/** Bumped on every `ide` (re)connect; a send acked by an older connection never counts as delivered. */
 	generation: number;
 	subscribers: number;
 	unsubscribe: (() => void) | undefined;
+	unsubscribeDirectory: (() => void) | undefined;
+}
+
+/** Delivery identity of a notification: a directory change resends even when the state is unchanged. */
+function payloadKey(entry: IdeStateEntry): string {
+	return `${entry.state}\u0000${entry.directory}`;
 }
 
 const entries = new WeakMap<MCPManager, IdeStateEntry>();
@@ -46,11 +54,13 @@ function entryFor(manager: MCPManager): IdeStateEntry {
 	if (!entry) {
 		entry = {
 			state: "idle",
+			directory: getProjectDir(),
 			delivered: undefined,
 			inflight: undefined,
 			generation: 0,
 			subscribers: 0,
 			unsubscribe: undefined,
+			unsubscribeDirectory: undefined,
 		};
 		entries.set(manager, entry);
 	}
@@ -58,7 +68,8 @@ function entryFor(manager: MCPManager): IdeStateEntry {
 }
 
 function flush(manager: MCPManager, entry: IdeStateEntry): void {
-	if (entry.inflight || entry.delivered === entry.state) return;
+	const key = payloadKey(entry);
+	if (entry.inflight || entry.delivered === key) return;
 	const connection = manager.getConnection("ide");
 	if (!connection) return;
 	const state = entry.state;
@@ -66,6 +77,7 @@ function flush(manager: MCPManager, entry: IdeStateEntry): void {
 	entry.inflight = connection.transport
 		.notify("session_state_changed", {
 			state,
+			directory: entry.directory,
 			zmxSession: process.env.ZMX_SESSION,
 			bufferName: process.env.EMACS_BUFFER_NAME,
 		})
@@ -73,7 +85,7 @@ function flush(manager: MCPManager, entry: IdeStateEntry): void {
 			() => {
 				// An ack from a connection that was replaced meanwhile says nothing
 				// about the replacement, so it must not mark the state delivered.
-				if (entry.generation === generation) entry.delivered = state;
+				if (entry.generation === generation) entry.delivered = key;
 			},
 			(error: unknown) => {
 				// Leave `delivered` untouched: the next publish (even of this same
@@ -84,7 +96,7 @@ function flush(manager: MCPManager, entry: IdeStateEntry): void {
 		)
 		.finally(() => {
 			entry.inflight = undefined;
-			if (entry.state !== state || entry.generation !== generation) flush(manager, entry);
+			if (payloadKey(entry) !== key || entry.generation !== generation) flush(manager, entry);
 		});
 }
 
@@ -97,7 +109,10 @@ export function publishIdeSessionState(manager: MCPManager | undefined, state: I
 }
 
 /**
- * Re-announce MANAGER's latest state whenever its `ide` server (re)connects.
+ * Re-announce MANAGER's latest state whenever its `ide` server (re)connects,
+ * and publish the working directory whenever the session moves (`/wt`,
+ * `/move`, persistent `!cd`, cross-project `/resume`) so the editor can
+ * relabel the session without restarting it.
  * Reference-counted: sessions sharing one manager install one listener.
  */
 export function subscribeIdeState(manager: MCPManager): () => void {
@@ -110,6 +125,10 @@ export function subscribeIdeState(manager: MCPManager): () => void {
 			entry.generation += 1;
 			flush(manager, entry);
 		});
+		entry.unsubscribeDirectory = onProjectDirChanged(cwd => {
+			entry.directory = cwd;
+			flush(manager, entry);
+		});
 		flush(manager, entry);
 	}
 	let active = true;
@@ -120,6 +139,8 @@ export function subscribeIdeState(manager: MCPManager): () => void {
 		if (entry.subscribers === 0) {
 			entry.unsubscribe?.();
 			entry.unsubscribe = undefined;
+			entry.unsubscribeDirectory?.();
+			entry.unsubscribeDirectory = undefined;
 		}
 	};
 }

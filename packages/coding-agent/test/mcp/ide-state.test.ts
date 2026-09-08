@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { ideTurnState, publishIdeSessionState, subscribeIdeState } from "@oh-my-pi/pi-coding-agent/mcp/ide-state";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { McpConnectionStatusEvent } from "@oh-my-pi/pi-coding-agent/mcp/startup-events";
+import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 
 /** Shared fake `ide` MCP connection: `sent` collects `params.state` in call order. */
 function fakeIdeManager({
@@ -54,12 +58,14 @@ async function flushMicrotasks(): Promise<void> {
 
 const originalZmxSession = process.env.ZMX_SESSION;
 const originalBufferName = process.env.EMACS_BUFFER_NAME;
+const originalDirectory = getProjectDir();
 
 afterEach(() => {
 	if (originalZmxSession === undefined) delete process.env.ZMX_SESSION;
 	else process.env.ZMX_SESSION = originalZmxSession;
 	if (originalBufferName === undefined) delete process.env.EMACS_BUFFER_NAME;
 	else process.env.EMACS_BUFFER_NAME = originalBufferName;
+	setProjectDir(originalDirectory);
 });
 
 describe("ideTurnState", () => {
@@ -93,9 +99,42 @@ describe("publishIdeSessionState / subscribeIdeState", () => {
 		expect(calls).toEqual([
 			{
 				method: "session_state_changed",
-				params: { state: "needs-input", zmxSession: "cci-omp-proj-x", bufferName: "*omp[proj]*" },
+				params: {
+					state: "needs-input",
+					directory: getProjectDir(),
+					zmxSession: "cci-omp-proj-x",
+					bufferName: "*omp[proj]*",
+				},
 			},
 		]);
+	});
+
+	it("republishes the unchanged state when the session moves to another directory", async () => {
+		const directories: unknown[] = [];
+		const { manager, sent } = fakeIdeManager({
+			notify: async (_method, params) => {
+				directories.push(params.directory);
+			},
+		});
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-ide-state-"));
+		const worktree = path.join(root, "wt");
+		fs.mkdirSync(worktree);
+
+		const unsubscribe = subscribeIdeState(manager);
+		publishIdeSessionState(manager, "done");
+		await flushMicrotasks();
+
+		setProjectDir(worktree);
+		await flushMicrotasks();
+		expect(sent).toEqual(["idle", "done", "done"]);
+		expect(directories.at(-1)).toBe(getProjectDir());
+		expect(directories.at(-1)).not.toBe(directories.at(-2));
+
+		unsubscribe();
+		setProjectDir(originalDirectory);
+		await flushMicrotasks();
+		expect(sent).toEqual(["idle", "done", "done"]);
+		fs.rmSync(root, { recursive: true, force: true });
 	});
 
 	it("delivers the newest state in order while an earlier send is in flight", async () => {
