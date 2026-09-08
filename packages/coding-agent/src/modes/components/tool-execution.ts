@@ -70,7 +70,7 @@ function imageBlocksFromDetails(details: unknown): ToolImageBlock[] {
 
 /** A block carrying both payload and type — the only shape the image renderer can display. */
 function hasImageData(block: ToolImageBlock): block is { data: string; mimeType: string } {
-	return typeof block.data === "string" && typeof block.mimeType === "string";
+	return Boolean(block.data) && Boolean(block.mimeType);
 }
 
 function displaceableToolName(
