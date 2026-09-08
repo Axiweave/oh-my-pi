@@ -9,7 +9,7 @@ import type { SecretObfuscator } from "../secrets/obfuscator";
 import {
 	formatExecutionSourcePreview,
 	formatSessionHistoryMarkdown,
-	PRIMARY_CONTEXT_CUSTOM_TYPES,
+	isPrimaryContextCustomType,
 } from "../session/session-history-format";
 import { ADVISOR_RENDER_OPTIONS, renderAdvisorDeltaChunks } from "./delta-split";
 import { fingerprintMessage } from "./message-fingerprint";
@@ -664,7 +664,7 @@ export class AdvisorRuntime {
 		for (const message of delta) {
 			if (
 				message.role === "custom" &&
-				PRIMARY_CONTEXT_CUSTOM_TYPES.has(message.customType) &&
+				isPrimaryContextCustomType(message.customType) &&
 				typeof message.content === "string"
 			) {
 				addRegexValues(message.content);
@@ -688,7 +688,7 @@ export class AdvisorRuntime {
 	 */
 	#obfuscatePrimaryContextMessages(obfuscator: SecretObfuscator, delta: AgentMessage[]): AgentMessage[] {
 		return delta.map(message =>
-			message.role === "custom" && PRIMARY_CONTEXT_CUSTOM_TYPES.has(message.customType)
+			message.role === "custom" && isPrimaryContextCustomType(message.customType)
 				? obfuscateAdvisorMessage(obfuscator, message, this.#advisorRegexSecretValues)
 				: message,
 		);
@@ -756,7 +756,7 @@ export class AdvisorRuntime {
 	 */
 	#dedupContextMessageReadOnly(msg: AgentMessage): AgentMessage {
 		if (msg.role !== "custom") return msg;
-		if (!PRIMARY_CONTEXT_CUSTOM_TYPES.has(msg.customType)) return msg;
+		if (!isPrimaryContextCustomType(msg.customType)) return msg;
 		if (typeof msg.content !== "string") return msg;
 		if (this.#seenContext.get(msg.customType) === msg.content) {
 			return { ...msg, content: "(unchanged — still in effect)" };
@@ -866,7 +866,7 @@ export class AdvisorRuntime {
 	#dedupContextMessage(msg: AgentMessage): AgentMessage {
 		if (msg.role !== "custom") return msg;
 		// Narrowed to CustomMessage: customType and content are properly typed.
-		if (!PRIMARY_CONTEXT_CUSTOM_TYPES.has(msg.customType)) return msg;
+		if (!isPrimaryContextCustomType(msg.customType)) return msg;
 		if (typeof msg.content !== "string") return msg;
 		if (this.#seenContext.get(msg.customType) === msg.content) {
 			return { ...msg, content: "(unchanged — still in effect)" };

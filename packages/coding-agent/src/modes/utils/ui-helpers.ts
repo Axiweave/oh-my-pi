@@ -5,7 +5,8 @@ import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
-import { settings } from "../../config/settings";
+import { isSettingsInitialized, settings } from "../../config/settings";
+import { getDefault } from "../../config/settings-schema";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { createBackgroundTanDispatchBlock } from "../../modes/components/background-tan-message";
@@ -293,10 +294,11 @@ export class UiHelpers {
 					const cached = options?.reuseSettledComponent
 						? this.ctx.transcriptMessageComponents.get(message)
 						: undefined;
+					const collapseCommandCards = isSettingsInitialized()
+						? settings.get("display.collapseCommandCards")
+						: getDefault("display.collapseCommandCards");
 					const templateName =
-						message.role === "user" && settings.get("display.collapseCommandCards")
-							? message.promptTemplate
-							: undefined;
+						message.role === "user" && collapseCommandCards ? message.promptTemplate : undefined;
 					const imageLinks =
 						options?.imageLinks ??
 						imageLinksForMessage(
@@ -1128,6 +1130,15 @@ export class UiHelpers {
 		);
 	}
 
+	/**
+	 * Park the loop when drain dispatch consumes the armed body locally (void
+	 * custom command) instead of starting a turn. The drain otherwise discards
+	 * prompt()'s result, and the next idle tick would resubmit a local action.
+	 */
+	#parkLoopOnLocalConsume(text: string, forwarded: boolean): void {
+		if (!forwarded && this.ctx.loopPrompt === text) this.ctx.pauseLoop();
+	}
+
 	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
 		if (
 			await invokeSkillCommandFromText(this.ctx, message.text, message.mode, {
@@ -1139,7 +1150,8 @@ export class UiHelpers {
 			return;
 		}
 		if (this.ctx.isKnownSlashCommand(message.text)) {
-			await this.ctx.session.prompt(message.text);
+			const forwarded = await this.ctx.session.prompt(message.text);
+			this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return;
 		}
 		await this.ctx.withLocalSubmission(
@@ -1209,7 +1221,8 @@ export class UiHelpers {
 			}
 			if (firstPromptIndex === -1) {
 				for (const message of queuedMessages) {
-					await this.ctx.session.prompt(message.text);
+					const forwarded = await this.ctx.session.prompt(message.text);
+					this.#parkLoopOnLocalConsume(message.text, forwarded);
 				}
 				return;
 			}

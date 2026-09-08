@@ -38,7 +38,7 @@ export interface HistoryFormatOptions {
 	 * wrapped in a `<primary-context>` tag so a reviewer reads it as the primary's
 	 * instructions, not its own. The advisor sets this: a truncated rule (plan
 	 * mode's "NEVER create files … except the plan file") makes it raise false
-	 * blockers. See {@link PRIMARY_CONTEXT_CUSTOM_TYPES}. Other custom messages
+	 * blockers. See {@link isPrimaryContextCustomType}. Other custom messages
 	 * still collapse to a one-liner.
 	 */
 	expandPrimaryContext?: boolean;
@@ -387,11 +387,24 @@ function executionLine(
  * reviewer — and its constraints don't drive the file-write misreads this
  * targets.
  */
-export const PRIMARY_CONTEXT_CUSTOM_TYPES: ReadonlySet<string> = new Set([
-	CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
-	"plan-mode-context",
-	"plan-mode-reference",
-]);
+let primaryContextCustomTypes: ReadonlySet<string> | undefined;
+
+/**
+ * Whether CUSTOMTYPE is one of those hidden messages.
+ *
+ * The set is built on first call, not at module evaluation: `./messages` and
+ * this module sit in an import cycle through `config/settings`, so reading
+ * `CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE` while this module's body runs throws
+ * whenever `./messages` is the module that entered the cycle first.
+ */
+export function isPrimaryContextCustomType(customType: string): boolean {
+	primaryContextCustomTypes ??= new Set([
+		CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
+		"plan-mode-context",
+		"plan-mode-reference",
+	]);
+	return primaryContextCustomTypes.has(customType);
+}
 
 /** Hidden non-primary custom messages whose content is needed to understand visible transcript entries. */
 const CONTEXTUAL_NON_PRIMARY_HIDDEN_CUSTOM_TYPES: Record<string, true> = {
@@ -577,12 +590,12 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 				const custom = msg as CustomMessage | HookMessage;
 				if (
 					custom.display === false &&
-					!PRIMARY_CONTEXT_CUSTOM_TYPES.has(custom.customType) &&
+					!isPrimaryContextCustomType(custom.customType) &&
 					CONTEXTUAL_NON_PRIMARY_HIDDEN_CUSTOM_TYPES[custom.customType] !== true
 				) {
 					break;
 				}
-				if (opts?.expandPrimaryContext && PRIMARY_CONTEXT_CUSTOM_TYPES.has(custom.customType)) {
+				if (opts?.expandPrimaryContext && isPrimaryContextCustomType(custom.customType)) {
 					const text = contentToText(custom.content).trim();
 					if (text) {
 						lines.push(

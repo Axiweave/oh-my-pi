@@ -16,7 +16,8 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
-import { settings } from "../../config/settings";
+import { isSettingsInitialized, settings } from "../../config/settings";
+import { getDefault } from "../../config/settings-schema";
 import type { MessageRenderer } from "../../extensibility/extensions/types";
 import { LAUNCH_COMPLETION_MESSAGE_TYPE } from "../../session/launch-completion";
 import {
@@ -309,10 +310,11 @@ export class ChatTranscriptBuilder {
 					// Rendering their full body on cold open blocked the TUI (issue #6308);
 					// collapse them behind a compact summary that builds Markdown only on
 					// ctrl+o expand. Real user prompts stay fully rendered.
+					const collapseCommandCards = isSettingsInitialized()
+						? settings.get("display.collapseCommandCards")
+						: getDefault("display.collapseCommandCards");
 					const templateName =
-						message.role === "user" && settings.get("display.collapseCommandCards")
-							? message.promptTemplate
-							: undefined;
+						message.role === "user" && collapseCommandCards ? message.promptTemplate : undefined;
 					if (isSynthetic || templateName) {
 						const collapsed = new CollapsedSyntheticMessageComponent(
 							textContent,

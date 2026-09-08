@@ -43,17 +43,39 @@ Subagents must skip builds, formatters, linters, and tests during concurrent edi
 ## 4. Verify
 
 1. Read the current runtime and toolchain requirements from `package.json` and `rust-toolchain.toml`.
-2. Check executable resolution before the build.
-3. If another Rust installation hides rustup, prepend rustup's bin directory to `PATH` for these commands only.
-4. Follow the source setup procedure in `README.md`, including `bun run setup`.
-5. Run `bun check` with the same toolchain environment.
-6. Run the relevant upstream regression tests and the checks named by every divergence entry.
-7. Use the existing test runner or separate processes for suites that need isolation.
-8. Verify the installed launcher target, release version, and `omp --smoke-test` as specified in `README.md`.
+2. Check executable resolution before the build. Compare `bun --version` against `packageManager`.
+3. If the host Bun is older, install the required version to a temporary prefix and use it for every check.
+   Never upgrade the user's toolchain.
+
+   ```bash
+   curl -fsSL https://bun.sh/install | BUN_INSTALL=/tmp/bun<ver> bash -s "bun-v<ver>"
+   ```
+
+4. If another Rust installation hides rustup, prepend rustup's bin directory to `PATH` for these commands only.
+5. Follow the source setup procedure in `README.md`, including `bun run setup`.
+6. Run `bun check` with the same toolchain environment. Read its own exit status, never a filtered pipeline's.
+7. Trust upstream tests. Run the checks named by every divergence entry, plus every test that covers a file
+   this merge changed in a fork-owned path.
+8. Use the existing test runner or separate processes for suites that need isolation.
+9. Verify the installed launcher target, release version, and `omp --smoke-test` as specified in `README.md`.
 
 The test runner's command `cwd` is repository-relative. Use `.` for root-level test paths, not an absolute directory.
 Diagnose failed checks before repeating them. Do not replace this fork with upstream binaries or suppress failures.
+The runner stops at the first failed chunk, so one red chunk hides the rest. Replay the remaining chunks from its
+`--dry-run` plan when a blocked check is not fork-owned.
 If a required check remains blocked, leave the merge uncommitted and report the exact blocker.
+
+### Separating a regression from ambient state
+
+1. A red test proves nothing by itself. Measure the same test at the pre-merge commit before you call it a regression.
+2. Add a baseline worktree when a verdict needs one: `git worktree add /tmp/omp-premerge <pre-merge-commit>`,
+   then `bun install` and copy the built native addon into it.
+3. These failures are host state on this workstation, not fork defects:
+   - `pi-vcs` jj fixtures need a `jj` CLI matching the vendored `jj-lib`.
+   - `packages/natives` macOS spelling hangs when the host `NSSpellChecker` service never answers.
+   - `test/skills.test.ts` counts the user's real `~/.omp/plugins` skills.
+   - `test/welcome-history-resize.test.ts` fails on `main` already.
+4. Remove the baseline worktree and any temporary Bun prefix when the merge is done.
 
 ## 5. Complete
 

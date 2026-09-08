@@ -10,12 +10,16 @@ export type IdeSessionState = "idle" | "working" | "needs-input" | "done" | "fai
  * `awaitingReply` turns a clean stop into `needs-input`: the guided-goal
  * interview asks its questions as plain assistant text, so the transcript
  * alone cannot tell a question from a finished answer.
+ *
+ * A missing transcript reads as `idle` like an empty one. Dialog boundaries
+ * publish from inside a settle handler, so a session view without messages
+ * must not throw there and abort the dismissal.
  */
 export function ideTurnState(
-	messages: readonly { role: string; stopReason?: string }[],
+	messages: readonly { role: string; stopReason?: string }[] | undefined,
 	awaitingReply = false,
 ): IdeSessionState {
-	const last = messages.findLast(message => message.role === "assistant");
+	const last = messages?.findLast(message => message.role === "assistant");
 	if (!last) return "idle";
 	if (last.stopReason === "error") return "failed";
 	if (last.stopReason === "aborted") return "idle";

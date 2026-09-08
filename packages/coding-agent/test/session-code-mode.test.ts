@@ -17,6 +17,7 @@ import { createAgentSession } from "../src/sdk";
 import { AgentSession } from "../src/session/agent-session";
 import type { ToolNamespacesInfo } from "../src/session/code-mode";
 import { buildToolNamespacesInfo, resolveCodeMode } from "../src/session/code-mode";
+import { CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE } from "../src/session/messages";
 import { SessionManager } from "../src/session/session-manager";
 import { generateCodeModeDeclarations } from "../src/tools/eval-format/code-mode-declarations";
 
@@ -543,9 +544,9 @@ describe("Code Mode session reconciliation", () => {
 			session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel" });
 			await session.sendPlanModeContext();
 			const planMessage = session.state.messages.find(
-				message => (message as { customType?: string }).customType === "plan-mode-context",
+				message => "customType" in message && message.customType === CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE,
 			);
-			return String((planMessage as { content?: string })?.content);
+			return String(planMessage && "content" in planMessage ? planMessage.content : undefined);
 		}
 
 		// The contract is invariance: demoting `task` off the direct surface is a

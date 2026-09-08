@@ -674,6 +674,7 @@ export class ExtensionUiController {
 			const finishPrompt = (value: string | undefined): void => {
 				const resolvePrompt = promptResolve;
 				promptResolve = undefined;
+				promptEditor?.dispose();
 				promptEditor = undefined;
 				restoreAskDialog();
 				resolvePrompt?.(value);
@@ -721,6 +722,7 @@ export class ExtensionUiController {
 			return () => {
 				closed = true;
 				askDialog?.dispose();
+				promptEditor?.dispose();
 				promptResolve?.(undefined);
 				promptResolve = undefined;
 				promptEditor = undefined;
@@ -1036,6 +1038,7 @@ export class ExtensionUiController {
 	 * Hide the hook editor.
 	 */
 	hideHookEditor(): void {
+		this.ctx.hookEditor?.dispose();
 		this.ctx.editorContainer.clear();
 		this.ctx.editorContainer.addChild(this.ctx.editor);
 		this.ctx.hookEditor = undefined;
@@ -1291,13 +1294,17 @@ export class ExtensionUiController {
 
 	/** `needs-input` while a modal dialog is presented; otherwise back to the turn state. */
 	#publishDialogState(): void {
+		if (this.#dialogActive) {
+			publishIdeSessionState(this.ctx.mcpManager, "needs-input");
+			return;
+		}
+		// Dialog callers reach this from inside settle(), and an extension-only
+		// context carries no session view. Read it as optional so a dismissal
+		// never throws here; a context without a transcript is idle anyway.
+		const session: InteractiveModeContext["session"] | undefined = this.ctx.session;
 		publishIdeSessionState(
 			this.ctx.mcpManager,
-			this.#dialogActive
-				? "needs-input"
-				: this.ctx.session.isStreaming
-					? "working"
-					: ideTurnState(this.ctx.session.messages, this.ctx.goalInterviewActive),
+			session?.isStreaming ? "working" : ideTurnState(session?.messages, this.ctx.goalInterviewActive),
 		);
 	}
 }
