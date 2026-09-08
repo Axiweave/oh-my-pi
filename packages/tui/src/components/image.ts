@@ -83,7 +83,7 @@ export class ImageBudget {
 	#cap: number;
 	#requestRender: () => void;
 	#nextId = nextImageIdSeed();
-	#keyToId = new Map<string, number>();
+	#keyToId = new Map<string, { id: number; tag: string | undefined }>();
 	#idToKey = new Map<number, string>();
 	/** Display-order image ids observed during the in-flight pass. */
 	#passIds: number[] = [];
@@ -159,17 +159,25 @@ export class ImageBudget {
 	}
 
 	/**
-	 * Stable graphics id for a logical image. A non-empty `key` maps to the same
-	 * id across re-creations (so repaints replace the placement); a missing key
-	 * gets a fresh id every call.
+	 * Stable graphics id for a logical image. `key` names the placement site: a
+	 * non-empty key maps to the same id across re-creations, so a repaint
+	 * replaces the placement instead of stacking a duplicate. `contentTag`
+	 * names the bytes currently at that site — when a key's recorded tag
+	 * changes, the old id is superseded (purged from the terminal, dropped
+	 * from every ledger) and a fresh id takes its place, so the new bytes get
+	 * transmitted instead of the terminal re-drawing the stale image. A
+	 * missing key gets a fresh id every call.
 	 */
-	acquireId(key?: string): number {
+	acquireId(key?: string, contentTag?: string): number {
 		if (key) {
 			const existing = this.#keyToId.get(key);
-			if (existing !== undefined) return existing;
+			if (existing !== undefined) {
+				if (existing.tag === contentTag) return existing.id;
+				this.#supersedeId(existing.id);
+			}
 			const id = this.#nextId;
 			this.#nextId = (this.#nextId + 1) & 0xffffff || 1;
-			this.#keyToId.set(key, id);
+			this.#keyToId.set(key, { id, tag: contentTag });
 			this.#idToKey.set(id, key);
 			return id;
 		}
@@ -447,7 +455,22 @@ export class ImageBudget {
 		const key = this.#idToKey.get(id);
 		if (key === undefined) return;
 		this.#idToKey.delete(id);
-		if (this.#keyToId.get(key) === id) this.#keyToId.delete(key);
+		if (this.#keyToId.get(key)?.id === id) this.#keyToId.delete(key);
+	}
+
+	/**
+	 * Retire a key's old id ahead of minting its replacement: the bytes under
+	 * `id` are stale, so treat it exactly like a demotion — cancel or purge the
+	 * transmit, drop placement/suppression state — but leave the key mapping
+	 * alone since the caller immediately re-points it at the fresh id.
+	 */
+	#supersedeId(id: number): void {
+		if (!this.#pendingTransmits.delete(id)) this.#purgeIds.push(id);
+		this.#transmitted.delete(id);
+		this.#deletePlacementState(id);
+		this.#suppressedIds.delete(id);
+		this.#passSuppression.delete(id);
+		this.#idToKey.delete(id);
 	}
 
 	#reconcile(total: number): boolean {

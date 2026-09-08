@@ -9,6 +9,10 @@
 - Added `Editor.setLeadingSlashCommand` so hosts can replace or insert a draft's leading slash command without moving its body cursor. An empty draft has no body cursor to keep, so the caret lands after the inserted command and its trailing space.
 - Added `Editor.insertLeadingKeyword` so hosts can place a standalone word at the start of a draft, after a leading slash command when one is present, without moving the body cursor.
 
+### Fixed
+
+- `ImageBudget.acquireId` now takes an optional content tag beside the placement key. A key whose bytes changed supersedes its old graphics id (purging the stale data from the terminal store) instead of keeping an id that `shouldTransmit` had already marked sent, which made the terminal re-draw the previous image.
+
 ## [18.1.12] - 2026-09-06
 
 ### Fixed

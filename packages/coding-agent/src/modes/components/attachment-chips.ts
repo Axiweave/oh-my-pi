@@ -14,7 +14,7 @@ import {
 import { fileHyperlink } from "../../tui/hyperlink";
 import { convertImageToPng } from "../../utils/image-loading";
 import { attachmentSgr } from "../composer-attachments";
-import { cachedImageDimensions, setCachedImageDimensions } from "../image-references";
+import { cachedImageDimensions, imageContentTag, setCachedImageDimensions } from "../image-references";
 import { theme } from "../theme/theme";
 import type { ComposerChipDescriptor, CustomEditor, TextAttachment } from "./custom-editor";
 
@@ -75,7 +75,7 @@ export class AttachmentChipsBand implements Component {
 		if (chip.kind !== "paste") {
 			const dims = this.#imageDims(chip.image);
 			bottomCaption = dims ? `${dims.width}x${dims.height}` : "";
-			interior = this.#imageInterior(chip.image, dims, chip.kind);
+			interior = this.#imageInterior(chip.n, chip.image, dims, chip.kind);
 		} else {
 			bottomCaption = chip.text.lineCount > 1 ? `+${chip.text.lineCount} lines` : `${chip.text.charCount} chars`;
 			interior = this.#textInterior(chip.text);
@@ -119,6 +119,7 @@ export class AttachmentChipsBand implements Component {
 	 *  budget-suppressed image) falls back to a centered icon — direct placements, SIXEL, and
 	 *  iTerm2 output cursor-addressed sequences that cannot be composed into a border row. */
 	#imageInterior(
+		n: number,
 		image: ImageContent,
 		dims: { width: number; height: number } | null,
 		kind: "image" | "video",
@@ -127,9 +128,9 @@ export class AttachmentChipsBand implements Component {
 			const display = this.#kittyDisplayImage(image);
 			if (display) {
 				const budget = this.budget;
-				const imageId = budget.acquireId(
-					`chip:${display.mimeType}:${display.data.length}:${display.data.slice(0, 32)}`,
-				);
+				// Site key `chip:${n}` is stable across paints; the content tag rides along so a
+				// re-pasted attachment at the same slot supersedes the id instead of reusing stale bytes.
+				const imageId = budget.acquireId(`chip:${n}`, imageContentTag(display));
 				// observe() keeps chip thumbnails inside the shared live-graphics budget so a
 				// paste-heavy session cannot pile up placements the way unbudgeted images would.
 				if (!budget.observe(imageId)) {

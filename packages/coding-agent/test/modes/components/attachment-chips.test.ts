@@ -7,6 +7,12 @@ import { ImageBudget } from "@oh-my-pi/pi-tui";
 import { setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
 import { getCellDimensions, ImageProtocol, setCellDimensions, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { withoutTerminalMultiplexer } from "../../helpers/terminal-multiplexer";
+
+// Kitty transmits are wrapped in `\x1bPtmux;…` passthrough inside a multiplexer, which shifts
+// both the payload offset and the measured row width. Neutralize the ambient session so the
+// assertions below hold for anyone running the suite from tmux/screen/Zellij.
+withoutTerminalMultiplexer();
 
 // 2x2 red PNG — real header so the band's dimension probe decodes 2x2.
 const TINY_PNG =
@@ -153,6 +159,54 @@ describe("AttachmentChipsBand — Kitty placeholder thumbnails", () => {
 			expect(transmits).toHaveLength(1);
 			const payload = transmits[0]!.slice(transmits[0]!.indexOf(";") + 1);
 			expect(payload.startsWith("iVBOR")).toBe(true);
+		} finally {
+			mutable.imageProtocol = originalProtocol;
+			setKittyGraphics({ unicodePlaceholders: false });
+			setCellDimensions(originalCellDims);
+		}
+	});
+	it("gives each chip slot its own graphics id when two images share a header and byte length", () => {
+		const mutable = TERMINAL as unknown as { imageProtocol: ImageProtocol | null };
+		const originalProtocol = TERMINAL.imageProtocol;
+		const originalCellDims = { ...getCellDimensions() };
+		mutable.imageProtocol = ImageProtocol.Kitty;
+		setKittyGraphics({ unicodePlaceholders: true });
+		setCellDimensions({ widthPx: 10, heightPx: 21 });
+		try {
+			// Regression: the chip graphics id was keyed on mime + base64 length + the first 32
+			// base64 chars, which for a PNG covers only the signature and the IHDR width/height.
+			// Two same-size pastes therefore shared one id, the second was never transmitted
+			// (shouldTransmit had already seen the id), and the terminal re-drew the first image.
+			const png = (crcByte: number): string => {
+				const header = Buffer.alloc(33);
+				header.write("\x89PNG\r\n\x1a\n", 0, "binary");
+				header.writeUInt32BE(13, 8);
+				header.write("IHDR", 12);
+				header.writeUInt32BE(560, 16);
+				header.writeUInt32BE(502, 20);
+				// Byte 30 lands in the IHDR CRC — past the 24 bytes the old key hashed.
+				header.writeUInt8(crcByte, 30);
+				return header.toString("base64");
+			};
+			const first = png(0x11);
+			const second = png(0x22);
+			expect(second.length).toBe(first.length);
+			expect(second.slice(0, 32)).toBe(first.slice(0, 32));
+
+			const editor = new CustomEditor(getEditorTheme());
+			const budget = new ImageBudget(8);
+			const band = new AttachmentChipsBand(editor, budget, () => {});
+			editor.pendingImages.push({ type: "image", data: first, mimeType: "image/png" });
+			editor.pendingImages.push({ type: "image", data: second, mimeType: "image/png" });
+			editor.insertAtom(chipLabel("image", 1), "[Image #1, 560x502]");
+			editor.insertAtom(chipLabel("image", 2), "[Image #2, 560x502]");
+			band.render(80);
+
+			// Both slots must ship their own bytes; one transmit means a slot is showing
+			// the other slot's image.
+			const payloads = budget.takeTransmits().map(t => t.slice(t.indexOf(";") + 1));
+			expect(payloads).toHaveLength(2);
+			expect(new Set(payloads).size).toBe(2);
 		} finally {
 			mutable.imageProtocol = originalProtocol;
 			setKittyGraphics({ unicodePlaceholders: false });

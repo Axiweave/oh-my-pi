@@ -19,6 +19,7 @@ import { resolveImageOptions } from "../../tools/render-utils";
 import { WidthAwareText } from "../../tui";
 import { convertImageToPng } from "../../utils/image-loading";
 import { canonicalizeMessage, formatThinkingForDisplay, hasDisplayableThinking } from "../../utils/thinking-display";
+import { imageContentTag } from "../image-references";
 import { resolveAssistantErrorPresentation } from "../utils/transcript-render-helpers";
 import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cache-invalidation-marker";
 import { formatErrorBlock } from "./error-block";
@@ -172,6 +173,10 @@ function lerpHex(from: string, to: string, t: number): string {
 	return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
 }
 
+// Stable per-instance counter so each assistant message's native images get a
+// graphics id that survives child re-creation (the image budget keys off it).
+let assistantMessageInstanceSeq = 0;
+
 /**
  * Renders an assistant message; streaming content remains mutable until the
  * provider finalizes it because later deltas can revise earlier Markdown.
@@ -183,6 +188,7 @@ function lerpHex(from: string, to: string, t: number): string {
  */
 export class AssistantMessageComponent extends Container {
 	readonly transcriptBlockMode = "appendOnly" as const;
+	readonly #instanceId = ++assistantMessageInstanceSeq;
 	#contentContainer: Container;
 	#markerSlot: Container;
 	#lastMessage?: AssistantMessage;
@@ -777,7 +783,9 @@ export class AssistantMessageComponent extends Container {
 			this.#toolImagesByCallId.delete(toolCallId);
 		} else {
 			this.#toolImagesByCallId.set(toolCallId, validImages);
-			this.#convertImagesForKitty(validImages.map((image, index) => ({ image, key: `${toolCallId}:${index}` })));
+			this.#convertImagesForKitty(
+				validImages.map((image, index) => ({ image, key: `${toolCallId}:${index}:${imageContentTag(image)}` })),
+			);
 		}
 		if (this.#lastMessage) {
 			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
@@ -833,7 +841,7 @@ export class AssistantMessageComponent extends Container {
 	#renderToolImages(): void {
 		if (!this.#showToolResultImages) return;
 		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
-			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
+			images.map((image, index) => ({ image, key: `${toolCallId}:${index}:${imageContentTag(image)}` })),
 		);
 		this.#renderImageEntries(entries, true);
 	}
@@ -1076,7 +1084,10 @@ export class AssistantMessageComponent extends Container {
 					this.#contentContainer.addChild(new Spacer(1));
 				}
 			} else if (content.type === "image" && content.data && content.mimeType) {
-				this.#renderImageEntries([{ image: content, key: `native:${i}` }], hasRenderedContent);
+				this.#renderImageEntries(
+					[{ image: content, key: `am${this.#instanceId}:native:${i}:${imageContentTag(content)}` }],
+					hasRenderedContent,
+				);
 				hasRenderedContent ||= this.#showImages;
 			}
 		}

@@ -34,6 +34,7 @@ import type { EditMode } from "../../utils/edit-mode";
 import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, WidthAwareText } from "../../tui";
 import { convertImageToPng } from "../../utils/image-loading";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
+import { imageContentTag } from "../image-references";
 import { renderDiff } from "./diff";
 import { type AnimationFrame, trimBlankEdges } from "./transcript-container";
 
@@ -65,6 +66,11 @@ function imageBlocksFromDetails(details: unknown): ToolImageBlock[] {
 			(image.data === undefined || typeof image.data === "string") &&
 			(image.mimeType === undefined || typeof image.mimeType === "string"),
 	);
+}
+
+/** A block carrying both payload and type — the only shape the image renderer can display. */
+function hasImageData(block: ToolImageBlock): block is { data: string; mimeType: string } {
+	return typeof block.data === "string" && typeof block.mimeType === "string";
 }
 
 function displaceableToolName(
@@ -1200,7 +1206,7 @@ export class ToolExecutionComponent extends Container {
 
 			for (let i = 0; i < imageBlocks.length; i++) {
 				const img = imageBlocks[i];
-				if (TERMINAL.imageProtocol && this.#showImages && img.data && img.mimeType) {
+				if (TERMINAL.imageProtocol && this.#showImages && hasImageData(img)) {
 					// Use converted PNG for Kitty protocol if available
 					const converted = this.#convertedImages.get(i);
 					const imageData = converted?.data ?? img.data;
@@ -1218,7 +1224,11 @@ export class ToolExecutionComponent extends Container {
 						imageData,
 						imageMimeType,
 						{ fallbackColor: (s: string) => theme.fg("toolOutput", s) },
-						{ ...resolveImageOptions(), budget: this.#ui.imageBudget, imageKey: `te${this.#instanceId}:${i}` },
+						{
+							...resolveImageOptions(),
+							budget: this.#ui.imageBudget,
+							imageKey: `te${this.#instanceId}:${i}:${imageContentTag(img)}`,
+						},
 					);
 					this.#imageComponents.push(imageComponent);
 					this.addChild(imageComponent);

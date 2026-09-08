@@ -22,6 +22,21 @@ export function setCachedImageDimensions(image: ImageContent, dims: { width: num
 	(image as ImageContentWithDims)[kImageDims] = dims;
 }
 
+/** Content identity that a terminal-graphics id is scoped by: two images with this same tag are
+ *  the same bytes and may share one id, even if they sit at different chip slots or message
+ *  positions. Hashing the whole base64 payload is memoized per image object so a per-frame
+ *  render never re-hashes it. */
+const imageTags = new WeakMap<object, string>();
+
+export function imageContentTag(image: { readonly data: string }): string {
+	let tag = imageTags.get(image);
+	if (tag === undefined) {
+		tag = Bun.hash(image.data).toString(36);
+		imageTags.set(image, tag);
+	}
+	return tag;
+}
+
 type ImageBlobWriter = (data: Buffer, options?: { extension?: string }) => Promise<BlobPutResult>;
 type ImageBlobWriterSync = (data: Buffer, options?: { extension?: string }) => BlobPutResult;
 

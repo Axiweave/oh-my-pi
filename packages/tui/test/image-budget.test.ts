@@ -561,6 +561,38 @@ describe("Image budget + Unicode placeholders", () => {
 		expect(lines[0]).toContain(encodeKittyVirtualPlacement({ imageId: id, placementId: id, columns: 4, rows: 4 }));
 		expect([...budget.takeTransmits()]).toEqual([]);
 	});
+
+	it("supersedes a key's id when its content tag changes so the new bytes transmit", () => {
+		const budget = new ImageBudget(3, () => {});
+		const stale = budget.acquireId("k", "tag-a");
+		// Drive the transmit ledger the way a rendered frame does: queue the data, then
+		// flush it, so `stale` is genuinely recorded as loaded in the terminal store.
+		budget.enqueueTransmit(stale, "\x1b_Ga=t;stale-bytes\x1b\\");
+		expect([...budget.takeTransmits()]).toHaveLength(1);
+		expect(budget.shouldTransmit(stale)).toBe(false);
+
+		// Regression: the id was keyed on the placement site alone, so a site whose bytes
+		// changed kept an id that shouldTransmit() had already marked sent — the terminal
+		// re-drew the previous image forever. A new tag must mint a new id, allow the
+		// transmit, and delete the flushed data from the terminal store.
+		const fresh = budget.acquireId("k", "tag-b");
+		expect(fresh).not.toBe(stale);
+		expect(budget.shouldTransmit(fresh)).toBe(true);
+		expect([...budget.takePurgeIds()]).toEqual([stale]);
+	});
+
+	it("cancels a superseded id's transmit instead of purging it when the bytes never flushed", () => {
+		const budget = new ImageBudget(3, () => {});
+		const stale = budget.acquireId("k", "tag-a");
+		budget.enqueueTransmit(stale, "\x1b_Ga=t;never-written\x1b\\");
+
+		// The data never reached the terminal, so there is nothing to delete there: the
+		// queued sequence is dropped and no purge escape is emitted for it.
+		const fresh = budget.acquireId("k", "tag-b");
+		expect(fresh).not.toBe(stale);
+		expect(budget.hasPendingTransmits()).toBe(false);
+		expect([...budget.takePurgeIds()]).toEqual([]);
+	});
 });
 
 describe("TUI inline-image budget", () => {

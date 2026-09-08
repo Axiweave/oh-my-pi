@@ -25,6 +25,7 @@ import type { TruncationMeta } from "../../tools/output-meta";
 import { resolveImageOptions } from "../../tools/render-utils";
 import { readTerminalRows, styleTerminalRow } from "../../tools/terminal-output";
 import { getSixelLineMask, isSixelPassthroughEnabled, sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
+import { imageContentTag } from "../image-references";
 import {
 	buildExecutionFrame,
 	buildStatusFooter,
@@ -333,7 +334,7 @@ export class BashExecutionComponent extends Container {
 						{
 							...resolveImageOptions(),
 							budget: this.#ui.imageBudget,
-							imageKey: `be${this.#instanceId}:${index}`,
+							imageKey: `be${this.#instanceId}:${index}:${imageContentTag(image)}`,
 						},
 					),
 				);
