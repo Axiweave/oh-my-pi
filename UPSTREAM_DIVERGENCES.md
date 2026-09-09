@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.1.14` on 2026-09-08.
+**Reviewed against:** `v18.1.16` on 2026-09-09.
 
 ## Maintenance
 
@@ -120,3 +120,11 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Why:** One action must switch the complete role-model set for a workflow.
 - **Key paths:** `packages/coding-agent/src/config/model-roles.ts`, `packages/coding-agent/src/config/settings.ts`, `packages/coding-agent/src/session/model-controls.ts`, and `packages/coding-agent/src/session/agent-session.ts`.
 - **Checks:** `packages/coding-agent/test/agent-session-model-profiles.test.ts`, `packages/coding-agent/test/cli-model-profile-flag.test.ts`, and `packages/coding-agent/test/slash-commands/model-profile.test.ts`.
+
+### Per-model compaction thresholds
+
+- **Decision:** Resolve compaction settings per active model through `compaction.modelOverrides` selector patterns. An exact `provider/id` key wins, else the first matching wildcard in declaration order.
+- **Decision:** A matching override replaces the whole threshold policy (`thresholdTokens`, `thresholdPercent`, `reserveTokens`); it never merges into the global group.
+- **Why:** One global threshold cannot fit models with very different context windows.
+- **Key paths:** `packages/coding-agent/src/session/compaction-methods.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
+- **Checks:** `packages/coding-agent/test/compaction-model-overrides.test.ts` and `packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts`.

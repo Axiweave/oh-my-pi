@@ -131,6 +131,7 @@ type PromptQueueState = {
 type PromptLifecycleError = Error & { readonly code: "ACP_SESSION_CLOSED" };
 
 type PromptTurnState = {
+	abortController: AbortController;
 	cancelRequested: boolean;
 	settled: boolean;
 	/**
@@ -856,6 +857,7 @@ export class AcpAgent implements Agent {
 			const converted = this.#convertPromptBlocks(params.prompt);
 			const pendingPrompt = Promise.withResolvers<PromptResponse>();
 			record.promptTurn = {
+				abortController: new AbortController(),
 				cancelRequested: false,
 				settled: false,
 				errorTextDelivery: undefined,
@@ -962,8 +964,9 @@ export class AcpAgent implements Agent {
 	}
 
 	async #runPromptOrCommand(record: ManagedSessionRecord, text: string, images: AgentImageContent[]): Promise<void> {
+		const promptTurn = record.promptTurn;
 		const skillResult = await this.#tryRunSkillCommand(record, text);
-		if (skillResult) {
+		if (skillResult || promptTurn?.cancelRequested) {
 			return;
 		}
 
@@ -972,6 +975,7 @@ export class AcpAgent implements Agent {
 			sessionManager: record.session.sessionManager,
 			settings: record.session.settings,
 			cwd: record.session.sessionManager.getCwd(),
+			signal: promptTurn?.abortController.signal,
 			output: output => this.#emitCommandOutput(record, output),
 			refreshCommands: () => this.#emitAvailableCommandsUpdate(record),
 			reloadPlugins: () => this.#reloadPluginState(record),
@@ -999,6 +1003,7 @@ export class AcpAgent implements Agent {
 				await this.#pushConfigOptionUpdate(record);
 			},
 		});
+		if (promptTurn?.cancelRequested) return;
 		if (builtinResult !== false) {
 			if ("prompt" in builtinResult) {
 				const residualBaseline = new Set(record.extensionUserMessageTasks);
@@ -1015,7 +1020,6 @@ export class AcpAgent implements Agent {
 				}
 				return;
 			}
-			const promptTurn = record.promptTurn;
 			this.#finishPrompt(record, {
 				stopReason: "end_turn",
 				usage: this.#buildTurnUsage(
@@ -1094,6 +1098,7 @@ export class AcpAgent implements Agent {
 			return promptTurn.cleanup;
 		}
 		promptTurn.cancelRequested = true;
+		promptTurn.abortController.abort();
 		promptTurn.unsubscribe?.();
 		const cleanup = this.#runCancelCleanup(record, promptTurn);
 		promptTurn.cleanup = cleanup;

@@ -23,6 +23,7 @@ import {
 	getAgentDir,
 	getLastChangelogVersionPath,
 	getProjectDir,
+	getProjectAgentDir,
 	isEnoent,
 	logger,
 	MAIN_CONFIG_FILENAMES,
@@ -1904,6 +1905,10 @@ export class Settings {
 	}
 
 	async #readProjectSettings(quarantineInvalid: boolean): Promise<ProjectSettingsReadResult> {
+		const projectConfigDir = getProjectAgentDir(this.#cwd);
+		const projectConfigPath = path.join(projectConfigDir, "config.yml");
+		invalidateCapabilityFsCache(projectConfigPath);
+		invalidateCapabilityFsCache(path.join(projectConfigDir, "settings.json"));
 		let shellPathSource: string | undefined;
 		let merged: RawSettings = {};
 		try {
@@ -1919,7 +1924,6 @@ export class Settings {
 			// Capability discovery is best-effort; the native project config below
 			// remains authoritative for its model-role layers and must not be hidden.
 		}
-		const projectConfigPath = path.join(this.#cwd, ".omp", "config.yml");
 		const nativeProject = quarantineInvalid
 			? await this.#loadYaml(projectConfigPath)
 			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
@@ -3007,7 +3011,7 @@ export class Settings {
 		)
 			return;
 
-		const projectConfigPath = path.join(this.#cwd, ".omp", "config.yml");
+		const projectConfigPath = path.join(getProjectAgentDir(this.#cwd), "config.yml");
 		const modifiedModelRoles = [...this.#modifiedProjectModelRoles];
 		this.#modifiedProjectModelRoles.clear();
 		const modifiedModelProfile = this.#modifiedProjectModelProfile;

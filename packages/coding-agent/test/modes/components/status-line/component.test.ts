@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { createGallerySegmentContext } from "../../../../src/cli/gallery-fixtures/segments";
 import { Settings, settings } from "../../../../src/config/settings";
@@ -9,6 +9,7 @@ import { renderSegment } from "../../../../src/modes/components/status-line/segm
 import { loadTheme } from "../../../../src/modes/theme/loader";
 import { getThemeByName, setThemeInstance, theme } from "../../../../src/modes/theme/theme";
 import type { AgentSession } from "../../../../src/session/agent-session";
+import { StatusLineTestComponents } from "../../../helpers/status-line";
 
 /** Minimal stand-in for MCPManager that captures the registered listener. */
 function fakeIdeManager(): { manager: MCPManager; fire: (server: string, method: string, params: unknown) => void } {
@@ -31,6 +32,7 @@ function fakeIdeManager(): { manager: MCPManager; fire: (server: string, method:
 // segment always fits, and let the width-sensitive behavior stay covered by the
 // truncation tests that target it directly.
 const WIDE_ENOUGH_FOR_COST_SEGMENT = 400;
+const statusLines = new StatusLineTestComponents();
 
 function makeSessionWithLastMessage(
 	lastMessage: unknown,
@@ -103,27 +105,35 @@ beforeAll(async () => {
 	setThemeInstance(loaded);
 });
 
+afterAll(() => {
+	statusLines.dispose();
+});
+
 describe("StatusLineComponent", () => {
 	it("fingerprints tool-call arguments containing bigint values", () => {
-		const statusLine = new StatusLineComponent(
-			makeSessionWithLastMessage({
-				role: "assistant",
-				timestamp: 1,
-				content: [
-					{
-						type: "toolCall",
-						name: "read",
-						arguments: { offset: 1n, nested: { limit: 2n } },
-					},
-				],
-			}) as unknown as AgentSession,
+		const statusLine = statusLines.track(
+			new StatusLineComponent(
+				makeSessionWithLastMessage({
+					role: "assistant",
+					timestamp: 1,
+					content: [
+						{
+							type: "toolCall",
+							name: "read",
+							arguments: { offset: 1n, nested: { limit: 2n } },
+						},
+					],
+				}) as unknown as AgentSession,
+			),
 		);
 
 		expect(statusLine.getCachedContextBreakdown()).toEqual({ usedTokens: 42, contextWindow: 128000 });
 	});
 
 	it("renders Prewalk annotation when prewalk is armed", () => {
-		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null, true) as unknown as AgentSession);
+		const statusLine = statusLines.track(
+			new StatusLineComponent(makeSessionWithLastMessage(null, true) as unknown as AgentSession),
+		);
 
 		// By default preset, 'mode' segment is included in left/right segments.
 		// Let's get the border and see if Prewalk is rendered.
@@ -225,12 +235,14 @@ describe("StatusLineComponent", () => {
 	});
 
 	it("renders startup placeholders without values from the prior session", () => {
-		const statusLine = new StatusLineComponent(
-			makeSessionWithLastMessage(null, false, {
-				cost: 2.67,
-				modelName: "Stale Model",
-				sessionName: "stale-session",
-			}) as unknown as AgentSession,
+		const statusLine = statusLines.track(
+			new StatusLineComponent(
+				makeSessionWithLastMessage(null, false, {
+					cost: 2.67,
+					modelName: "Stale Model",
+					sessionName: "stale-session",
+				}) as unknown as AgentSession,
+			),
 		);
 
 		const live = Bun.stripANSI(statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content);
@@ -273,12 +285,14 @@ describe("StatusLineComponent", () => {
 		expect(git.content).toContain(theme.getFgAnsi("statusLineGitDirty"));
 	});
 	it("renders primary and advisor costs separately with subscription indicator in Unicode preset", () => {
-		const statusLine = new StatusLineComponent(
-			makeSessionWithLastMessage(null, false, {
-				cost: 2.67,
-				advisorCost: 0.41,
-				usingSubscription: true,
-			}) as unknown as AgentSession,
+		const statusLine = statusLines.track(
+			new StatusLineComponent(
+				makeSessionWithLastMessage(null, false, {
+					cost: 2.67,
+					advisorCost: 0.41,
+					usingSubscription: true,
+				}) as unknown as AgentSession,
+			),
 		);
 
 		const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
@@ -286,13 +300,15 @@ describe("StatusLineComponent", () => {
 	});
 
 	it("renders advisor cost with subscription prefix when advisor is on subscription in Unicode preset", () => {
-		const statusLine = new StatusLineComponent(
-			makeSessionWithLastMessage(null, false, {
-				cost: 2.67,
-				advisorCost: 0.41,
-				usingSubscription: true,
-				advisorUsingSubscription: true,
-			}) as unknown as AgentSession,
+		const statusLine = statusLines.track(
+			new StatusLineComponent(
+				makeSessionWithLastMessage(null, false, {
+					cost: 2.67,
+					advisorCost: 0.41,
+					usingSubscription: true,
+					advisorUsingSubscription: true,
+				}) as unknown as AgentSession,
+			),
 		);
 
 		const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
@@ -305,13 +321,15 @@ describe("StatusLineComponent", () => {
 		const asciiTheme = await loadTheme("dark", { symbolPresetOverride: "ascii" });
 		setThemeInstance(asciiTheme);
 		try {
-			const statusLine = new StatusLineComponent(
-				makeSessionWithLastMessage(null, false, {
-					cost: 2.67,
-					advisorCost: 0.41,
-					usingSubscription: true,
-					advisorUsingSubscription: true,
-				}) as unknown as AgentSession,
+			const statusLine = statusLines.track(
+				new StatusLineComponent(
+					makeSessionWithLastMessage(null, false, {
+						cost: 2.67,
+						advisorCost: 0.41,
+						usingSubscription: true,
+						advisorUsingSubscription: true,
+					}) as unknown as AgentSession,
+				),
 			);
 			const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
 			expect(stripped).toContain("S2.67 + S0.41 (adv)");
@@ -321,11 +339,13 @@ describe("StatusLineComponent", () => {
 	});
 
 	it("omits advisor cost when the advisor has never been active", () => {
-		const statusLine = new StatusLineComponent(
-			makeSessionWithLastMessage(null, false, {
-				cost: 2.67,
-				usingSubscription: true,
-			}) as unknown as AgentSession,
+		const statusLine = statusLines.track(
+			new StatusLineComponent(
+				makeSessionWithLastMessage(null, false, {
+					cost: 2.67,
+					usingSubscription: true,
+				}) as unknown as AgentSession,
+			),
 		);
 
 		const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
@@ -339,13 +359,15 @@ describe("StatusLineComponent", () => {
 		const nerdTheme = await loadTheme("dark", { symbolPresetOverride: "nerd" });
 		setThemeInstance(nerdTheme);
 		try {
-			const statusLine = new StatusLineComponent(
-				makeSessionWithLastMessage(null, false, {
-					cost: 2.67,
-					advisorCost: 0.41,
-					usingSubscription: true,
-					advisorUsingSubscription: true,
-				}) as unknown as AgentSession,
+			const statusLine = statusLines.track(
+				new StatusLineComponent(
+					makeSessionWithLastMessage(null, false, {
+						cost: 2.67,
+						advisorCost: 0.41,
+						usingSubscription: true,
+						advisorUsingSubscription: true,
+					}) as unknown as AgentSession,
+				),
 			);
 			const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
 			expect(stripped).toContain("\u{f067a} 2.67 + \uea70 \u{f067a} 0.41");

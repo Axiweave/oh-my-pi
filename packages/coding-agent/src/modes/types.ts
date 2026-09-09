@@ -43,6 +43,7 @@ import type { TranscriptContainer } from "./components/transcript-container";
 import type { RecentSession } from "./components/welcome";
 import type { Composer } from "./composer";
 import type { EventController } from "./controllers/event-controller";
+import type { LoopConditionConfig } from "./loop-condition";
 import type { LoopLimitRuntime } from "./loop-limit";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { Theme } from "./theme/theme";
@@ -194,6 +195,7 @@ export interface InteractiveModeContext {
 	loopModePaused: boolean;
 	loopPrompt?: string;
 	loopLimit?: LoopLimitRuntime;
+	loopCondition?: LoopConditionConfig;
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	/**

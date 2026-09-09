@@ -28,6 +28,8 @@ export function withoutTerminalMultiplexer(): void {
 		"CMUX_REMOTE_TRANSPORT",
 		"TERM",
 		"INSIDE_EMACS",
+		"TERM_PROGRAM",
+		"PI_TUI_RESIZE_IN_PLACE",
 	] as const;
 	const previous = new Map<string, string | undefined>();
 
