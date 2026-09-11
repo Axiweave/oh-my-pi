@@ -61,6 +61,7 @@ import type { MCPServerConfig } from "../../mcp/types";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
 import { hashPlanContent } from "../../plan-mode/debate";
+import { autosaveApprovedPlan } from "../../plan-mode/plan-autosave";
 import { type PlanModeState, parseImplReviewState, serializePlanModeState } from "../../plan-mode/state";
 import acpPlanApprovedPrompt from "../../prompts/system/acp-plan-approved.md" with { type: "text" };
 import planDebateConsensusInvalidatedPrompt from "../../prompts/system/plan-debate-consensus-invalidated.md" with { type: "text" };
@@ -2056,6 +2057,21 @@ export class AcpAgent implements Agent {
 			session.setPlanProposalHandler?.(async (_title, context) => session.prepareImplReviewProposal(context));
 			implReviewStarted = true;
 		}
+		let autosaveFailed = false;
+		try {
+			await autosaveApprovedPlan({
+				settings: session.settings,
+				cwd: session.sessionManager.getCwd(),
+				title: approval.title,
+				planContent,
+			});
+		} catch (error) {
+			logger.warn("Failed to autosave approved plan", {
+				sessionId: session.sessionId,
+				error,
+			});
+			autosaveFailed = true;
+		}
 		try {
 			await this.#connection.sessionUpdate({
 				sessionId: session.sessionId,
@@ -2075,6 +2091,7 @@ export class AcpAgent implements Agent {
 					text: prompt.render(acpPlanApprovedPrompt, {
 						planFilePath: approval.planFilePath,
 						implReview: implReviewStarted,
+						autosaveFailed,
 					}),
 				},
 			],

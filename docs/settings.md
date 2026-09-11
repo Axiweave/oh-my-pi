@@ -726,6 +726,8 @@ The enabled mode includes unfinished paragraphs and open code fences.
 Markdown edits and width changes can clear and redraw history, including when `tui.resizeScrollback` is `append` or `preserve`.
 Smooth-streaming timing, tool preview limits, thinking visibility, and the terminal's own scrollback limit still apply.
 
+The `cost` segment shows recorded session costs. For an active provider/model with scheduled pricing, it appends `↑` during peak hours or `↓` off-peak, refreshing at boundaries even while idle. The arrow reflects the current tariff, not past spending; flat-price models and explicit cost overrides have no arrow. See [usage costs and time-based pricing](models.md#usage-costs-and-time-based-pricing) for the UTC schedule and estimation semantics.
+
 ### Interaction
 
 | Key                    | Type    | Default         | Values                                                                                                  |

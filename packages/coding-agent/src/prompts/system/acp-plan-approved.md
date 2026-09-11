@@ -1,1 +1,1 @@
-Plan approved at {{planFilePath}}. Plan mode exited; proceed with the implementation.{{#if implReview}} When every plan step is complete, write the plan slug as plain text to xd://propose to submit the implementation for independent review.{{/if}}
+Plan approved at {{planFilePath}}. Plan mode exited; proceed with the implementation.{{#if autosaveFailed}} (Plan autosave failed; continuing.){{/if}}{{#if implReview}} When every plan step is complete, write the plan slug as plain text to xd://propose to submit the implementation for independent review.{{/if}}
