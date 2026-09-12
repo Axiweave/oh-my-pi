@@ -227,7 +227,15 @@ pub(super) fn post_keyboard(pid: pid_t, event: &CGEvent) -> CoreResult<()> {
 	Ok(())
 }
 
-pub(super) fn activate_without_raise(pid: pid_t, wid: u32) -> CoreResult<()> {
+/// Runs `action` while `wid`'s process holds window-server focus without being
+/// raised, then hands focus back to the process that had it. Without the
+/// restore the frontmost application keeps its place in the window order but
+/// no longer receives the user's clicks until they switch applications.
+pub(super) fn with_background_focus<T>(
+	pid: pid_t,
+	wid: u32,
+	action: impl FnOnce() -> CoreResult<T>,
+) -> CoreResult<T> {
 	let spi = required()?;
 	let mut previous = ProcessSerialNumber::default();
 	// SAFETY: `previous` is writable and exactly the 8-byte PSN record expected by
@@ -244,6 +252,34 @@ pub(super) fn activate_without_raise(pid: pid_t, wid: u32) -> CoreResult<()> {
 			 with delivery:\"foreground\" or use ax actions",
 		))
 	})?;
+	if let Err(error) = move_focus_without_raise(spi, &previous, &target, wid) {
+		// The defocus post may have landed before the focus post failed.
+		let _ = move_focus_without_raise(spi, &target, &previous, wid);
+		return Err(error);
+	}
+	thread::sleep(Duration::from_millis(50));
+	let result = action();
+	thread::sleep(Duration::from_millis(50));
+	let restored = move_focus_without_raise(spi, &target, &previous, wid);
+	// An action error is the primary fault and must not be masked; a restore
+	// failure after a successful action is itself a focus leak worth reporting.
+	match (result, restored) {
+		(Ok(value), Ok(())) => Ok(value),
+		(Err(error), _) => Err(error),
+		(Ok(_), Err(error)) => Err(DesktopError::background_unavailable(format!(
+			"input reached window {wid} but focus could not be handed back to the previous \
+			 application ({}); switch applications to recover",
+			error.message,
+		))),
+	}
+}
+
+fn move_focus_without_raise(
+	spi: &RequiredSpi,
+	from: &ProcessSerialNumber,
+	to: &ProcessSerialNumber,
+	wid: u32,
+) -> CoreResult<()> {
 	let mut record = [0u8; EVENT_RECORD_LENGTH];
 	record[0x04] = EVENT_RECORD_LENGTH_BYTE;
 	record[0x08] = EVENT_RECORD_KIND;
@@ -251,18 +287,17 @@ pub(super) fn activate_without_raise(pid: pid_t, wid: u32) -> CoreResult<()> {
 	record[FOCUS_MARKER_OFFSET] = 0x02;
 	// SAFETY: Both PSNs and the complete 248-byte record live through the
 	// synchronous SPI call.
-	let defocused = unsafe { (spi.post_record)(&previous, record.as_ptr()) } == 0;
+	let defocused = unsafe { (spi.post_record)(from, record.as_ptr()) } == 0;
 	record[FOCUS_MARKER_OFFSET] = 0x01;
 	// SAFETY: Both PSNs and the complete 248-byte record live through the
 	// synchronous SPI call.
-	let focused = unsafe { (spi.post_record)(&target, record.as_ptr()) } == 0;
+	let focused = unsafe { (spi.post_record)(to, record.as_ptr()) } == 0;
 	if !defocused || !focused {
 		return Err(DesktopError::background_unavailable(format!(
 			"window {wid} rejected the 248-byte SkyLight focus-without-raise record; retry with \
 			 delivery:\"foreground\" or use ax actions",
 		)));
 	}
-	thread::sleep(Duration::from_millis(50));
 	Ok(())
 }
 

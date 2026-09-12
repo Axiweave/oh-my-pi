@@ -54,23 +54,21 @@ impl MacInput {
 		mode: DeliveryMode,
 		capture: &MacCapture,
 	) -> CoreResult<()> {
-		match target {
-			Target::Desktop => global_pointer(&self.source, event),
-			Target::Window(id) => {
+		match (target, mode) {
+			(Target::Desktop, DeliveryMode::Foreground) => global_pointer(&self.source, event),
+			(Target::Desktop, DeliveryMode::Background) => {
+				let (x, y) = pointer_origin(&event)?;
+				let window = desktop_background_target(&capture.windows()?, x, y)?;
+				background_window_pointer(&self.source, &window, event)
+			},
+			(Target::Window(id), DeliveryMode::Background) => {
+				let window = capture.window(id)?;
+				background_window_pointer(&self.source, &window, event)
+			},
+			(Target::Window(id), DeliveryMode::Foreground) => {
 				let window = capture.window(id)?;
 				let (pid, wid) = window_identity(&window)?;
-				match mode {
-					DeliveryMode::Background => {
-						background_guard(&window, pointer_kind(&event), pointer_button(&event))?;
-						if !window.focused {
-							skylight::activate_without_raise(pid, wid)?;
-						}
-						background_pointer(&self.source, pid, wid, &window, event)
-					},
-					DeliveryMode::Foreground => {
-						skylight::with_foreground(pid, wid, || global_pointer(&self.source, event))
-					},
-				}
+				skylight::with_foreground(pid, wid, || global_pointer(&self.source, event))
 			},
 		}
 	}
@@ -94,8 +92,10 @@ impl MacInput {
 				match mode {
 					DeliveryMode::Background => {
 						background_guard(&window, "keyboard", None)?;
-						prepare_background_keys(&window, pid, wid, capture)?;
-						background_type(&self.source, pid, text)
+						prepare_background_keys(&window, wid, capture)?;
+						skylight::with_background_focus(pid, wid, || {
+							background_type(&self.source, pid, text)
+						})
 					},
 					DeliveryMode::Foreground => skylight::with_foreground(pid, wid, || {
 						let _ = ax::prepare_foreground_input(&window);
@@ -125,8 +125,10 @@ impl MacInput {
 				match mode {
 					DeliveryMode::Background => {
 						background_guard(&window, "keyboard", None)?;
-						prepare_background_keys(&window, pid, wid, capture)?;
-						background_chord(&self.source, pid, keys)
+						prepare_background_keys(&window, wid, capture)?;
+						skylight::with_background_focus(pid, wid, || {
+							background_chord(&self.source, pid, keys)
+						})
 					},
 					DeliveryMode::Foreground => skylight::with_foreground(pid, wid, || {
 						let _ = ax::prepare_foreground_input(&window);
@@ -136,6 +138,84 @@ impl MacInput {
 			},
 		}
 	}
+}
+
+fn background_window_pointer(
+	source: &CGEventSource,
+	window: &DesktopWindow,
+	event: PointerEvent,
+) -> CoreResult<()> {
+	let (pid, wid) = window_identity(window)?;
+	background_guard(window, pointer_kind(&event), pointer_button(&event))?;
+	if window.focused {
+		return background_pointer(source, pid, wid, window, event);
+	}
+	skylight::with_background_focus(pid, wid, || background_pointer(source, pid, wid, window, event))
+}
+
+/// Global logical point a pointer event starts at; drags use the first path
+/// point.
+fn pointer_origin(event: &PointerEvent) -> CoreResult<(f64, f64)> {
+	match event {
+		PointerEvent::Click { x, y, .. }
+		| PointerEvent::Move { x, y }
+		| PointerEvent::Scroll { x, y, .. } => Ok((*x, *y)),
+		PointerEvent::Drag { path, .. } => path
+			.first()
+			.copied()
+			.ok_or_else(|| DesktopError::input_failed("drag path must contain at least two points")),
+	}
+}
+
+/// Owner names of macOS surfaces that must never receive background input.
+/// A match blocks the point; the hit-test does not fall through to the window
+/// beneath, because that window is not what the screenshot shows there.
+const SYSTEM_SURFACES: [&str; 6] = [
+	"window server",
+	"dock",
+	"control center",
+	"systemuiserver",
+	"notification center",
+	"loginwindow",
+];
+
+fn is_system_surface(app: &str) -> bool {
+	let app = app.trim().to_ascii_lowercase();
+	SYSTEM_SURFACES.contains(&app.as_str())
+}
+
+/// Resolves the window that receives a desktop-root background pointer event
+/// at global logical point `(x, y)`: the frontmost listed window whose bounds
+/// contain the point.
+// ponytail: rectangular front-to-back hit-test; a transparent overlay window
+// wins the point. Upgrade path: AXUIElementCopyElementAtPosition to find the
+// owning pid.
+fn desktop_background_target(
+	windows: &[DesktopWindow],
+	x: f64,
+	y: f64,
+) -> CoreResult<DesktopWindow> {
+	let hit = windows.iter().find(|w| {
+		x >= f64::from(w.x)
+			&& x < f64::from(w.x) + f64::from(w.width)
+			&& y >= f64::from(w.y)
+			&& y < f64::from(w.y) + f64::from(w.height)
+	});
+	let Some(window) = hit else {
+		return Err(DesktopError::background_unavailable(format!(
+			"no application window at ({x}, {y}) on the desktop composite; background delivery \
+			 cannot use the shared cursor there, so retry with delivery:\"foreground\" or target a \
+			 window handle",
+		)));
+	};
+	if is_system_surface(&window.app) {
+		return Err(DesktopError::background_unavailable(format!(
+			"point ({x}, {y}) is over the macOS '{}' surface, which cannot receive background input; \
+			 retry with delivery:\"foreground\"",
+			window.app,
+		)));
+	}
+	Ok(window.clone())
 }
 
 fn window_identity(window: &DesktopWindow) -> CoreResult<(libc::pid_t, u32)> {
@@ -162,10 +242,9 @@ fn window_identity(window: &DesktopWindow) -> CoreResult<(libc::pid_t, u32)> {
 /// reports every window owned by the active application as focused on macOS.
 ///
 /// The refusal decision itself reads no mutable state, so it cannot be fooled
-/// by the activation below.
+/// by the activation the caller performs afterwards.
 fn prepare_background_keys(
 	window: &DesktopWindow,
-	pid: libc::pid_t,
 	wid: u32,
 	capture: &MacCapture,
 ) -> CoreResult<()> {
@@ -181,10 +260,10 @@ fn prepare_background_keys(
 			 delivery:\"foreground\" or use ax actions",
 		)));
 	}
-	// Sole window of its process, so the target is unambiguous: make it key
-	// without raising it or changing the frontmost application. A background app
-	// otherwise has no key window and drops the keystrokes entirely.
-	skylight::activate_without_raise(pid, wid)
+	// Sole window of its process, so the target is unambiguous. The caller makes
+	// it key without raising it: a background app otherwise has no key window
+	// and drops the keystrokes entirely.
+	Ok(())
 }
 
 const fn pointer_kind(event: &PointerEvent) -> &'static str {
@@ -1004,5 +1083,64 @@ mod tests {
 				LOCAL_EVENT_FILTER,
 			);
 		}
+	}
+
+	fn win(id: &str, app: &str, x: i32, y: i32, width: u32, height: u32) -> DesktopWindow {
+		DesktopWindow {
+			id: id.to_string(),
+			title: String::new(),
+			app: app.to_string(),
+			pid: Some(1),
+			x,
+			y,
+			width,
+			height,
+			focused: false,
+		}
+	}
+
+	#[test]
+	fn desktop_background_target_picks_frontmost_window_containing_point() {
+		let windows = [win("a", "TextEdit", 0, 0, 100, 100), win("b", "Safari", 0, 0, 300, 300)];
+		assert_eq!(desktop_background_target(&windows, 50.0, 50.0).unwrap().id, "a");
+		assert_eq!(
+			desktop_background_target(&windows, 200.0, 200.0)
+				.unwrap()
+				.id,
+			"b"
+		);
+		assert_eq!(desktop_background_target(&windows, 100.0, 50.0).unwrap().id, "b");
+	}
+
+	#[test]
+	fn desktop_background_target_fails_closed_without_window() {
+		let windows = [win("a", "TextEdit", 0, 0, 100, 100), win("b", "Safari", 0, 0, 300, 300)];
+		let err = desktop_background_target(&windows, 500.0, 500.0).unwrap_err();
+		assert_eq!(err.code.as_str(), "BackgroundUnavailable");
+	}
+
+	#[test]
+	fn desktop_background_target_blocks_system_surface() {
+		let windows =
+			[win("menubar", "Window Server", 0, 0, 1000, 25), win("a", "TextEdit", 0, 0, 100, 100)];
+		let err = desktop_background_target(&windows, 10.0, 10.0).unwrap_err();
+		assert_eq!(err.code.as_str(), "BackgroundUnavailable");
+		assert!(err.message.contains("Window Server"), "{}", err.message);
+	}
+
+	#[test]
+	fn pointer_origin_uses_first_drag_point() {
+		let drag = PointerEvent::Drag {
+			path:      vec![(3.0, 4.0), (9.0, 9.0)],
+			button:    MouseButton::Left,
+			modifiers: Modifiers::default(),
+		};
+		assert_eq!(pointer_origin(&drag).unwrap(), (3.0, 4.0));
+		let empty = PointerEvent::Drag {
+			path:      Vec::new(),
+			button:    MouseButton::Left,
+			modifiers: Modifiers::default(),
+		};
+		assert!(pointer_origin(&empty).is_err());
 	}
 }

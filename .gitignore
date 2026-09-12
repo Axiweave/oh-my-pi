@@ -53,6 +53,9 @@ packages/ai/test/.temp-images/
 compaction-results/
 changes/
 __pycache__/
+# Reference checkouts and comparison notes (see claude-code-ide.el convention)
+refs/
+ref-docs/
 
 # Scratch files
 syntax.jsonl
