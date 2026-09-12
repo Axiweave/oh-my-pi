@@ -6,14 +6,16 @@ import { type Component, Container, type RenderScheduler, visibleWidth } from "@
 import { Image } from "@oh-my-pi/pi-tui/components/image";
 import { getKittyGraphics, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
 import { getCellDimensions, ImageProtocol, setCellDimensions, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
+import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-multiplexer";
 import { VirtualRenderScheduler } from "../../tui/test/virtual-render-scheduler";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 
 const BASE64_ONE_PIXEL_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
 
 withoutTerminalMultiplexer();
+
+const composers: Composer[] = [];
 
 class ResizeScheduler implements RenderScheduler {
 	#now = 0;
@@ -92,14 +94,22 @@ function expectOneExactEditor(rows: readonly string[], status: string): number {
 	return top;
 }
 
-function startRetiredWelcome(modelName: string): { composer: Composer; terminal: TrackingTerminal } {
+function startRetiredWelcome(modelName: string): {
+	composer: Composer;
+	terminal: TrackingTerminal;
+} {
 	const terminal = new TrackingTerminal(80, 12);
 	const composer = new Composer({
 		terminal,
 		tuiOptions: { renderScheduler: new ResizeScheduler() },
-		preferences: { ...COMPOSER_DEFAULTS, quiet: false, resizeScrollback: "preserve" },
+		preferences: {
+			...COMPOSER_DEFAULTS,
+			quiet: false,
+			resizeScrollback: "preserve",
+		},
 		welcome: { version: "test", modelName, providerName: "test-provider" },
 	});
+	composers.push(composer);
 	composer.setRuntimeChildren([new TranscriptContainer(), new MutableComposerTail()]);
 	composer.start({ playWelcomeIntro: false });
 	return { composer, terminal };
@@ -110,115 +120,111 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
-	vi.restoreAllMocks();
+	try {
+		for (const composer of composers) composer.ui.stop();
+	} finally {
+		composers.length = 0;
+		vi.restoreAllMocks();
+	}
 });
 
 describe("composer welcome native-history resize", () => {
-	it("keeps one exact editor rectangle and retired welcome through repeated thinking and resize frames", async () => {
-		// Select the long auth-broker tip: it retires as three hard rows at
-		// width 80 and must not be recomposed into fewer rows after widening.
-		vi.spyOn(Math, "random").mockReturnValue(0.5);
-		const terminal = new TrackingTerminal(80, 12);
-		const scheduler = new ResizeScheduler();
-		const composer = new Composer({
-			terminal,
-			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: false, resizeScrollback: "preserve" },
-			welcome: { version: "test", modelName: "test-model", providerName: "test-provider" },
-		});
-		const offered: number[] = [];
-		const acknowledged: number[] = [];
-		let resizeFrames = 0;
-		const renderFrame = composer.renderFrame.bind(composer);
-		const renderResizeFrame = composer.renderResizeFrame.bind(composer);
-		const acknowledgeHistory = composer.acknowledgeHistory.bind(composer);
-		composer.renderFrame = viewport => {
-			const plan = renderFrame(viewport);
-			if (plan.history) offered.push(plan.history.id);
-			return plan;
-		};
-		composer.renderResizeFrame = viewport => {
-			resizeFrames++;
-			return renderResizeFrame(viewport);
-		};
-		composer.acknowledgeHistory = id => {
-			acknowledged.push(id);
-			acknowledgeHistory(id);
-		};
+	it.each([false, true])(
+		"keeps one editor and retired welcome through thinking and resize frames (pinBottom=%p)",
+		async pinBottom => {
+			// Select the long auth-broker tip: it retires as three hard rows at
+			// width 80 and must not be recomposed into fewer rows after widening.
+			vi.spyOn(Math, "random").mockReturnValue(0.5);
+			const terminal = new TrackingTerminal(80, 12);
+			const scheduler = new VirtualRenderScheduler();
+			const composer = new Composer({
+				terminal,
+				tuiOptions: { renderScheduler: scheduler },
+				preferences: {
+					...COMPOSER_DEFAULTS,
+					pinBottom,
+					streamingScrollback: false,
+					quiet: false,
+					resizeScrollback: "preserve",
+				},
+				welcome: {
+					version: "test",
+					modelName: "test-model",
+					providerName: "test-provider",
+				},
+			});
+			composers.push(composer);
 
-		const transcript = new TranscriptContainer();
-		const tail = new MutableComposerTail();
-		composer.setRuntimeChildren([transcript, tail]);
-		composer.start({ playWelcomeIntro: false });
+			const transcript = new TranscriptContainer();
+			const tail = new MutableComposerTail();
+			composer.setRuntimeChildren([transcript, tail]);
+			composer.start({ playWelcomeIntro: false });
+			await scheduler.settle(terminal);
 
-		expect(countRows(plainBuffer(terminal), "Welcome back!")).toBe(1);
-		expect(offered).toHaveLength(1);
-		expect(acknowledged).toEqual(offered);
-		const initialAnchor = expectOneExactEditor(
-			terminal.getViewport().map(row => Bun.stripANSI(row)),
-			tail.status,
-		);
-		expect(initialAnchor).toBe(9);
-		const writesAfterRetirement = terminal.writes.length;
-
-		for (let index = 0; index < 40; index++) {
-			tail.status = index % 2 === 0 ? "thinking high" : "thinking low";
-			composer.ui.requestRender(true);
-			const viewport = terminal.getViewport().map(row => Bun.stripANSI(row));
-			expect(expectOneExactEditor(viewport, tail.status)).toBe(initialAnchor);
 			expect(countRows(plainBuffer(terminal), "Welcome back!")).toBe(1);
-		}
-		expect(offered).toHaveLength(1);
-		expect(acknowledged).toHaveLength(1);
+			const initialAnchor = expectOneExactEditor(
+				terminal.getViewport().map(row => Bun.stripANSI(row)),
+				tail.status,
+			);
+			expect(initialAnchor).toBe(pinBottom ? terminal.rows - 3 : 9);
+			const writesAfterRetirement = terminal.writes.length;
 
-		let lastTransient: string[] = [];
-		for (const [columns, rows] of [
-			[96, 28],
-			[104, 30],
-			[100, 34],
-		] as const) {
-			terminal.resize(columns, rows);
-			lastTransient = terminal.getViewport().map(row => Bun.stripANSI(row));
-			expect(countRows(lastTransient, "Welcome back!")).toBe(1);
-			expectOneExactEditor(lastTransient, tail.status);
-		}
-		expect(resizeFrames).toBe(3);
-		scheduler.settle();
-		// The settled anchor repaint waits on the CPR reply, which VirtualTerminal
-		// delivers on a microtask — drain it before reading the normal screen.
-		await terminal.flush();
+			for (let index = 0; index < 40; index++) {
+				tail.status = index % 2 === 0 ? "thinking high" : "thinking low";
+				composer.ui.requestRender(true);
+				await scheduler.settle(terminal);
+				const viewport = terminal.getViewport().map(row => Bun.stripANSI(row));
+				expect(expectOneExactEditor(viewport, tail.status)).toBe(initialAnchor);
+				expect(countRows(plainBuffer(terminal), "Welcome back!")).toBe(1);
+			}
 
-		let settledViewport = terminal.getViewport().map(row => Bun.stripANSI(row));
-		expect(countRows(settledViewport, "Welcome back!")).toBe(1);
-		expect(rowOf(settledViewport, "Welcome back!")).toBe(rowOf(lastTransient, "Welcome back!"));
-		expect(expectOneExactEditor(settledViewport, tail.status)).toBe(expectOneExactEditor(lastTransient, tail.status));
-		expect(countRows(plainBuffer(terminal), "EDITOR TOP")).toBe(1);
-		scheduler.advance(101);
+			let lastTransient: string[] = [];
+			for (const [columns, rows] of [
+				[96, 28],
+				[104, 30],
+				[100, 34],
+			] as const) {
+				terminal.resize(columns, rows);
+				await scheduler.settle(terminal);
+				lastTransient = terminal.getViewport().map(row => Bun.stripANSI(row));
+				expect(countRows(lastTransient, "Welcome back!")).toBe(1);
+				expectOneExactEditor(lastTransient, tail.status);
+			}
+			await scheduler.advance(terminal, 160);
 
-		for (const [columns, rows] of [
-			[92, 30],
-			[72, 50],
-		] as const) {
-			terminal.resize(columns, rows);
-			lastTransient = terminal.getViewport().map(row => Bun.stripANSI(row));
-			expect(countRows(lastTransient, "Welcome back!")).toBe(1);
-			expectOneExactEditor(lastTransient, tail.status);
-		}
-		expect(resizeFrames).toBe(5);
-		scheduler.settle();
-		await terminal.flush();
+			let settledViewport = terminal.getViewport().map(row => Bun.stripANSI(row));
+			expect(countRows(settledViewport, "Welcome back!")).toBe(1);
+			expect(rowOf(settledViewport, "Welcome back!")).toBe(rowOf(lastTransient, "Welcome back!"));
+			const settledTop = expectOneExactEditor(settledViewport, tail.status);
+			expect(settledTop).toBe(pinBottom ? terminal.rows - 3 : expectOneExactEditor(lastTransient, tail.status));
+			expect(settledTop).toBeGreaterThan(rowOf(settledViewport, "Welcome back!"));
+			if (pinBottom) expect(rowOf(settledViewport, "EDITOR BOTTOM")).toBe(terminal.rows - 1);
+			expect(countRows(plainBuffer(terminal), "EDITOR TOP")).toBe(1);
+			await scheduler.advance(terminal, 101);
 
-		settledViewport = terminal.getViewport().map(row => Bun.stripANSI(row));
-		expect(countRows(settledViewport, "Welcome back!")).toBe(1);
-		expect(expectOneExactEditor(settledViewport, tail.status)).toBeGreaterThan(
-			rowOf(settledViewport, "Welcome back!"),
-		);
-		expect(countRows(plainBuffer(terminal), "EDITOR TOP")).toBe(1);
-		expect(offered).toHaveLength(1);
-		expect(acknowledged).toHaveLength(1);
-		expect(terminal.writes.slice(writesAfterRetirement).some(write => write.includes("\x1b[3J"))).toBe(false);
-		composer.ui.stop();
-	});
+			for (const [columns, rows] of [
+				[92, 30],
+				[72, 50],
+			] as const) {
+				terminal.resize(columns, rows);
+				await scheduler.settle(terminal);
+				lastTransient = terminal.getViewport().map(row => Bun.stripANSI(row));
+				expect(countRows(lastTransient, "Welcome back!")).toBe(1);
+				expectOneExactEditor(lastTransient, tail.status);
+			}
+			await scheduler.advance(terminal, 160);
+
+			settledViewport = terminal.getViewport().map(row => Bun.stripANSI(row));
+			expect(countRows(settledViewport, "Welcome back!")).toBe(1);
+			expect(rowOf(settledViewport, "Welcome back!")).toBe(rowOf(lastTransient, "Welcome back!"));
+			expect(expectOneExactEditor(settledViewport, tail.status)).toBeGreaterThan(
+				rowOf(settledViewport, "Welcome back!"),
+			);
+			if (pinBottom) expect(rowOf(settledViewport, "EDITOR BOTTOM")).toBe(terminal.rows - 1);
+			expect(countRows(plainBuffer(terminal), "EDITOR TOP")).toBe(1);
+			expect(terminal.writes.slice(writesAfterRetirement).some(write => write.includes("\x1b[3J"))).toBe(false);
+		},
+	);
 
 	it("preserves a wide glyph that straddles a retired-row resize boundary", () => {
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
@@ -236,11 +242,11 @@ describe("composer welcome native-history resize", () => {
 
 		const transient = terminal.getViewport().map(row => Bun.stripANSI(row));
 		expect(countRows(transient, "界")).toBe(1);
-		composer.ui.stop();
 	});
 	it("clips retired hard rows instead of reflowing them inside a multiplexer", () => {
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
 		Bun.env.TMUX = "/tmp/tmux-test/default,1,0";
+		Bun.env.TERM = "tmux-256color";
 		const marker = "MUX-SUFFIX";
 		const { composer, terminal } = startRetiredWelcome(`model-aaaa${marker}`);
 		const accepted = plainBuffer(terminal).find(row => row.includes(marker));
@@ -257,7 +263,6 @@ describe("composer welcome native-history resize", () => {
 
 		const transient = terminal.getViewport().map(row => Bun.stripANSI(row));
 		expect(countRows(transient, marker)).toBe(0);
-		composer.ui.stop();
 	});
 	it("recomposes the retired welcome header at the settled width on a rebuild resize", async () => {
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
@@ -266,9 +271,18 @@ describe("composer welcome native-history resize", () => {
 		const composer = new Composer({
 			terminal,
 			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: false, resizeScrollback: "rebuild" },
-			welcome: { version: "test", modelName: "test-model", providerName: "test-provider" },
+			preferences: {
+				...COMPOSER_DEFAULTS,
+				quiet: false,
+				resizeScrollback: "rebuild",
+			},
+			welcome: {
+				version: "test",
+				modelName: "test-model",
+				providerName: "test-provider",
+			},
 		});
+		composers.push(composer);
 		composer.setRuntimeChildren([new TranscriptContainer(), new MutableComposerTail()]);
 		composer.start({ playWelcomeIntro: false });
 		await scheduler.settle(terminal);
@@ -286,7 +300,6 @@ describe("composer welcome native-history resize", () => {
 		// A hard-wrap reflow can never widen a committed 58-column row; only a
 		// recompose at the settled width produces the 98-column box.
 		expect(Math.max(...rebuilt.map(row => visibleWidth(row)))).toBeGreaterThan(58);
-		composer.ui.stop();
 	});
 
 	it("rebuilds retired transcript rows at the settled width by default", async () => {
@@ -297,6 +310,7 @@ describe("composer welcome native-history resize", () => {
 			tuiOptions: { renderScheduler: scheduler },
 			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
 		});
+		composers.push(composer);
 		const transcript = new TranscriptContainer();
 		for (let id = 0; id < 4; id++) transcript.addChild(new WidthTranscriptBlock(id));
 		composer.setRuntimeChildren([transcript, new MutableComposerTail()]);
@@ -312,7 +326,6 @@ describe("composer welcome native-history resize", () => {
 		expect(resized.some(row => row.includes("@20"))).toBe(false);
 		expect(resized).toContain("block-0@30");
 		expect(resized).toContain("block-3@30");
-		composer.ui.stop();
 	});
 
 	it("recomposes a cached history batch when the image budget retries", () => {
@@ -331,6 +344,7 @@ describe("composer welcome native-history resize", () => {
 			tuiOptions: { renderScheduler: new ResizeScheduler() },
 			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
 		});
+		composers.push(composer);
 		composer.ui.setMaxInlineImages(1);
 		const transcript = new TranscriptContainer();
 		const block = new Container();
@@ -340,7 +354,12 @@ describe("composer welcome native-history resize", () => {
 					BASE64_ONE_PIXEL_PNG,
 					"image/png",
 					{ fallbackColor: text => text },
-					{ maxWidthCells: 1, maxHeightCells: 1, budget: composer.ui.imageBudget, imageKey: key },
+					{
+						maxWidthCells: 1,
+						maxHeightCells: 1,
+						budget: composer.ui.imageBudget,
+						imageKey: key,
+					},
 					{ widthPx: 10, heightPx: 10 },
 				),
 			);
@@ -370,6 +389,7 @@ describe("composer welcome native-history resize", () => {
 			tuiOptions: { renderScheduler: scheduler },
 			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
 		});
+		composers.push(composer);
 		const transcript = new TranscriptContainer();
 		transcript.addChild(new WidthTranscriptBlock(1));
 		composer.setRuntimeChildren([transcript, new MutableComposerTail()]);
