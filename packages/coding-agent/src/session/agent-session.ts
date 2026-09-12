@@ -355,7 +355,12 @@ import {
 	VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 } from "./messages";
 import { ModelControls, type ModelControlsHost } from "./model-controls";
-import { isPrewalkPlanNudge, PrewalkCoordinator, type PrewalkCoordinatorHost } from "./prewalk";
+import {
+	isPrewalkPlanNudge,
+	PrewalkCoordinator,
+	type PrewalkCoordinatorHost,
+	type PrewalkRestartResult,
+} from "./prewalk";
 import {
 	isAdvisorCard,
 	isDisplayableQueuedMessage,
@@ -1223,6 +1228,16 @@ export class AgentSession {
 	 */
 	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
 		return this.#prewalk.arm(target, thinkingLevel);
+	}
+
+	/** Restore a planning model and re-arm prewalk without partially applying a rejected restart. */
+	restartPrewalk(
+		source: Model,
+		sourceThinkingLevel: ConfiguredThinkingLevel | undefined,
+		target: Model,
+		targetThinkingLevel: ConfiguredThinkingLevel | undefined,
+	): Promise<PrewalkRestartResult> {
+		return this.#prewalk.restart(source, sourceThinkingLevel, target, targetThinkingLevel);
 	}
 
 	/** Validate the active plan artifact and prepare its host-independent proposal outcome. */
@@ -8562,30 +8577,39 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Set steering mode.
-	 * Saves to settings.
+	 * Set steering mode. Persists to global config by default; pass
+	 * `persist: false` for a session-only change (RPC) that leaves Settings —
+	 * and therefore later sessions and subagents — untouched.
 	 */
-	setSteeringMode(mode: "all" | "one-at-a-time"): void {
+	setSteeringMode(mode: "all" | "one-at-a-time", persist = true): void {
 		this.agent.setSteeringMode(mode);
-		this.settings.set("steeringMode", mode);
+		if (persist) {
+			this.settings.set("steeringMode", mode);
+		}
 	}
 
 	/**
-	 * Set follow-up mode.
-	 * Saves to settings.
+	 * Set follow-up mode. Persists to global config by default; pass
+	 * `persist: false` for a session-only change (RPC) that leaves Settings —
+	 * and therefore later sessions and subagents — untouched.
 	 */
-	setFollowUpMode(mode: "all" | "one-at-a-time"): void {
+	setFollowUpMode(mode: "all" | "one-at-a-time", persist = true): void {
 		this.agent.setFollowUpMode(mode);
-		this.settings.set("followUpMode", mode);
+		if (persist) {
+			this.settings.set("followUpMode", mode);
+		}
 	}
 
 	/**
-	 * Set interrupt mode.
-	 * Saves to settings.
+	 * Set interrupt mode. Persists to global config by default; pass
+	 * `persist: false` for a session-only change (RPC) that leaves Settings —
+	 * and therefore later sessions and subagents — untouched.
 	 */
-	setInterruptMode(mode: "immediate" | "wait"): void {
+	setInterruptMode(mode: "immediate" | "wait", persist = true): void {
 		this.agent.setInterruptMode(mode);
-		this.settings.set("interruptMode", mode);
+		if (persist) {
+			this.settings.set("interruptMode", mode);
+		}
 	}
 
 	/**

@@ -127,6 +127,41 @@ async function streamNumberedParagraphs(rig: Rig, assistant: AssistantMessageCom
 }
 
 describe("Composer streaming scrollback", () => {
+	it.each([false, true])(
+		"keeps click targets aligned with pinned rows when streamingScrollback=%s",
+		async streamingScrollback => {
+			const rig = makeRig({ streamingScrollback, pinBottom: true }, 40, 12);
+			const card = Object.assign(new MutableBlock(["TASK_CARD"]), {
+				getClickFocusAgentIds: () => ["Worker"],
+			});
+			const hud = {
+				render: () => ["AGENT_HUD"],
+				getClickAgentAtRow: () => "HudWorker",
+			};
+			rig.transcript.addChild(card);
+			rig.composer.setRuntimeChildren([rig.transcript, hud, rig.composer.editor]);
+			await settle(rig);
+			const frame = rig.composer.renderFrame({ columns: 40, rows: 12 });
+			const lines = frame.viewport.map(row => Bun.stripANSI(row));
+			const cardRow = lines.findIndex(row => row.includes("TASK_CARD"));
+			const hudRow = lines.findIndex(row => row.includes("AGENT_HUD"));
+			expect(cardRow).toBeGreaterThanOrEqual(0);
+			expect(hudRow).toBeGreaterThan(cardRow + 1);
+			expect(rig.composer.viewportClickCandidates(cardRow)).toEqual(["Worker"]);
+			expect(rig.composer.viewportClickCandidates(cardRow + 1)).toEqual([]);
+			expect(rig.composer.viewportClickCandidates(hudRow)).toEqual(["HudWorker"]);
+
+			card.setLines(Array.from({ length: 30 }, (_, index) => `TASK_ROW_${index}`));
+			await settle(rig);
+			const clipped = rig.composer.renderFrame({ columns: 40, rows: 12 });
+			for (const [index, row] of clipped.viewport.entries()) {
+				if (row.includes("TASK_ROW_")) {
+					expect(rig.composer.viewportClickCandidates(index)).toEqual(["Worker"]);
+				}
+			}
+		},
+	);
+
 	it("keeps every streamed marker once when enabled and omits the earliest marker by default", async () => {
 		const disabled = makeRig({}, 40, 8);
 		const disabledAssistant = new AssistantMessageComponent();
