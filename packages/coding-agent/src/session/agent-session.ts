@@ -8233,8 +8233,11 @@ export class AgentSession {
 		let sessionTransitioned = false;
 		try {
 			advisorRecordersDetached = true;
+			let lastModelChangeRole: string | undefined;
 			await this.#advisors.drainAndDetachRecorders();
 			try {
+				// Read from the outgoing transcript; the new one has no entries yet.
+				lastModelChangeRole = this.sessionManager.getLastModelChangeRole();
 				this.agent.reset();
 				if (options?.drop && previousSessionFile) {
 					try {
@@ -8285,6 +8288,18 @@ export class AgentSession {
 			this.#queuedMessageDrainBlocked = false;
 			this.#usagePreflightReadyForNextModelCall = false;
 
+			// The new transcript starts empty, so record the model and profile it
+			// inherits: resume reads both from `model_change`, and the profile has no
+			// assistant-message fallback (the model does, but only after a turn).
+			const model = this.model;
+			if (model) {
+				this.sessionManager.appendModelChange(
+					`${model.provider}/${model.id}`,
+					lastModelChangeRole,
+					false,
+					this.#models.activeModelProfile,
+				);
+			}
 			this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
 			this.sessionManager.appendServiceTierChange(this.#models.serviceTierEntry());
 

@@ -308,6 +308,34 @@ describe("AgentSession model profiles", () => {
 		await written.dispose();
 	});
 
+	it("carries the active profile and model into the transcript /new starts", async () => {
+		const roles = { default: selector(sonnet45()), plan: selector(sonnet45()) };
+		const profiles = { fast: { default: selector(haiku()), plan: selector(haiku()) } };
+		createSession({
+			initialModelId: sonnet45().id,
+			modelRoles: roles,
+			modelProfiles: profiles,
+			sessionManager: SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions")),
+		});
+		const written = session;
+
+		await written.applyModelProfile("fast");
+		expect(await written.newSession()).toBe(true);
+		const newSessionFile = written.sessionManager.getSessionFile();
+		if (!newSessionFile) throw new Error("Expected the new session to be persisted");
+		await written.sessionManager.flush();
+
+		// Process restart: reopen the post-/new JSONL. It has no assistant
+		// message to infer a model from, so both must come from what /new wrote.
+		const reopened = await SessionManager.open(newSessionFile, tempDir.path());
+		expect(reopened.getLastModelProfile()).toBe("fast");
+		expect(reopened.buildSessionContext().models.default).toBe(selector(haiku()));
+
+		createSession({ initialModelId: sonnet45().id, modelRoles: roles, modelProfiles: profiles, sessionManager: reopened });
+		expect(session.activeModelProfile).toBe("fast");
+		await written.dispose();
+	});
+
 	it("boots on the configured startup profile before any switch", () => {
 		createSession({
 			initialModelId: sonnet45().id,
