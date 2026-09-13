@@ -357,3 +357,17 @@ Location: `packages/*/CHANGELOG.md` (per package).
 2. Run `bun run release`.
 
 The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+
+## Agent skills
+
+### Issue tracker
+
+Local work uses Spec Kit specifications and tasks. Before tracker operations, MUST read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage roles. Before triage, MUST read `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use single-context domain docs. Before codebase exploration, MUST read `docs/agents/domain.md`.
