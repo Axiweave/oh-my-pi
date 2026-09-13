@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.1.18` on 2026-09-12.
+**Reviewed against:** `v18.1.19` on 2026-09-13.
 
 ## Maintenance
 

@@ -124,6 +124,7 @@ function makeTurnEndContext(
 		messages: [] as AssistantMessage[],
 		getLastAssistantMessage: () => options.lastAssistantMessage,
 		getContextUsage: () => undefined,
+		agent: { getPendingToolResults: () => [] },
 	};
 	const viewSession = options.focusedSubagent ? { ...session, isStreaming: true } : session;
 	return {

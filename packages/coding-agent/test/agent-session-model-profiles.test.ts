@@ -331,7 +331,12 @@ describe("AgentSession model profiles", () => {
 		expect(reopened.getLastModelProfile()).toBe("fast");
 		expect(reopened.buildSessionContext().models.default).toBe(selector(haiku()));
 
-		createSession({ initialModelId: sonnet45().id, modelRoles: roles, modelProfiles: profiles, sessionManager: reopened });
+		createSession({
+			initialModelId: sonnet45().id,
+			modelRoles: roles,
+			modelProfiles: profiles,
+			sessionManager: reopened,
+		});
 		expect(session.activeModelProfile).toBe("fast");
 		await written.dispose();
 	});
