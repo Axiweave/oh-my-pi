@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.1.20` on 2026-09-13.
+**Reviewed against:** `v18.1.21` on 2026-09-14.
 
 ## Maintenance
 
@@ -128,3 +128,10 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Why:** One global threshold cannot fit models with very different context windows.
 - **Key paths:** `packages/coding-agent/src/session/compaction-methods.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
 - **Checks:** `packages/coding-agent/test/compaction-model-overrides.test.ts` and `packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts`.
+
+### Native JJ snapshot contract test
+
+- **Decision:** Keep the fork's `native JJ workspace queries` snapshot test. It asserts that status comes from the recorded working copy until `changedFiles([], true)` takes an explicit snapshot.
+- **Why:** The revised assertions match the observed native `pi-vcs` behavior. Upstream deleted the older version of this test instead of revising it, so an unwatched merge would drop the coverage.
+- **Key path:** `packages/coding-agent/test/utils/jj.test.ts`.
+- **Check:** `packages/coding-agent/test/utils/jj.test.ts`.
