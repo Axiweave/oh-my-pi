@@ -47,7 +47,7 @@ import {
 } from "../../utils/clipboard";
 import { getSlashCommandUsage, loadSlashCommandUsage, recordSlashCommandUsage } from "../../utils/command-usage";
 import { EnhancedPasteController } from "../../utils/enhanced-paste";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { openInEditor, takeEditorOrigin } from "../../utils/external-editor";
 import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } from "../../utils/image-loading";
 import {
 	VideoError,
@@ -852,6 +852,8 @@ export class InputController {
 
 	setupEditorSubmitHandler(): void {
 		this.ctx.editor.onSubmit = async (text: string) => {
+			// Before any await: an editor-origin nonce armed by the Return that submitted this text.
+			const editorOrigin = takeEditorOrigin() ?? "";
 			text = this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
 			if ((!isSettingsInitialized() || settings.get("emojiAutocomplete")) && text) text = expandEmoticons(text);
@@ -956,7 +958,12 @@ export class InputController {
 					(inputImages?.length ?? 0) > 0 || (inputImageLinks?.length ?? 0) > 0
 						? { images: inputImages, imageLinks: inputImageLinks }
 						: undefined;
-				const slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx, input, draftDetached });
+				const slashResult = await executeBuiltinSlashCommand(text, {
+					ctx: this.ctx,
+					input,
+					draftDetached,
+					editorOrigin,
+				});
 				if (slashResult === true) {
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 					return;
@@ -1607,6 +1614,8 @@ export class InputController {
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
+		// Before any await: an editor-origin nonce armed for the key that ran this command.
+		const editorOrigin = takeEditorOrigin() ?? "";
 		let text = this.#compactDraftImages(this.ctx.editor.getExpandedText().trim());
 		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 		const imageLinks =
@@ -1632,7 +1641,7 @@ export class InputController {
 
 		if (text) {
 			const input = (images?.length ?? 0) > 0 || (imageLinks?.length ?? 0) > 0 ? { images, imageLinks } : undefined;
-			const slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx, input });
+			const slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx, input, editorOrigin });
 			if (slashResult === true) {
 				if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 				return;
@@ -2416,26 +2425,23 @@ export class InputController {
 	}
 
 	async openExternalEditor(): Promise<void> {
-		const editorCmd = getEditorCommand();
-		if (!editorCmd) {
-			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
-			return;
-		}
-
+		const origin = takeEditorOrigin() ?? "";
 		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
 
 		try {
-			this.ctx.ui.stop();
-			const result = await openInEditor(editorCmd, currentText, { extension: ".omp.md" });
-			if (result !== null) {
-				this.ctx.editor.setText(result);
+			const result = await openInEditor(this.ctx.ui, currentText, {
+				origin,
+				extension: ".omp.md",
+				apply: text => this.ctx.editor.setText(text),
+			});
+			if (result === undefined) {
+				this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			}
 		} catch (error) {
 			this.ctx.showWarning(
 				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		} finally {
-			this.ctx.ui.start();
 			this.ctx.ui.requestRender();
 		}
 	}

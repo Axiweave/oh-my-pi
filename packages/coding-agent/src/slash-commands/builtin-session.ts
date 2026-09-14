@@ -171,7 +171,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 		handle: handleTodoAcp,
 		handleTui: async (command, runtime) => {
-			await runtime.ctx.handleTodoCommand(command.args);
+			await runtime.ctx.handleTodoCommand(command.args, runtime.editorOrigin);
 			runtime.ctx.editor.setText("");
 		},
 	},

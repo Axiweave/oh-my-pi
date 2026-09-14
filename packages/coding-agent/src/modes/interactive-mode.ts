@@ -168,7 +168,7 @@ import { renderTreeList } from "../tui/tree-list";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
 import type { EventBus } from "../utils/event-bus";
-import { getEditorCommand, openInEditor } from "../utils/external-editor";
+import { openInEditor, takeEditorOrigin } from "../utils/external-editor";
 import { resumeCommand } from "../utils/resume-command";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
 import { startTerminalDirectoryReporting } from "../utils/terminal-directory";
@@ -4300,12 +4300,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
-		const editorCmd = getEditorCommand();
-		if (!editorCmd) {
-			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
-			return;
-		}
-
+		const origin = takeEditorOrigin() ?? "";
 		const resolvedPath = this.#resolvePlanFilePath(planFilePath);
 		let currentText: string;
 		try {
@@ -4320,41 +4315,36 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		try {
-			this.ui.stop();
-			const result = await openInEditor(editorCmd, currentText, {
+			const result = await openInEditor(this.ui, currentText, {
+				origin,
 				extension: path.extname(resolvedPath) || ".md",
 				trimTrailingNewline: false,
+				apply: async text => {
+					await Bun.write(resolvedPath, text);
+					this.#planReviewOverlay?.setPlanContent(text);
+					this.showStatus("Plan updated in external editor.");
+				},
 			});
-			if (result !== null) {
-				await Bun.write(resolvedPath, result);
-				this.#planReviewOverlay?.setPlanContent(result);
-				this.showStatus("Plan updated in external editor.");
+			if (result === undefined) {
+				this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			}
 		} catch (error) {
 			this.showWarning(`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`);
 		} finally {
-			this.ui.start();
 			this.ui.requestRender(true);
 		}
 	}
 
 	async #openPlanAnnotationInExternalEditor(draft: string, commit: (text: string | null) => void): Promise<void> {
-		const editorCmd = getEditorCommand();
-		if (!editorCmd) {
-			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
-			return;
-		}
-
+		const origin = takeEditorOrigin() ?? "";
 		try {
-			this.ui.stop();
-			const result = await openInEditor(editorCmd, draft, { extension: ".md" });
-			if (result !== null) {
-				commit(result);
+			const result = await openInEditor(this.ui, draft, { origin, extension: ".md", apply: commit });
+			if (result === undefined) {
+				this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			}
 		} catch (error) {
 			this.showWarning(`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`);
 		} finally {
-			this.ui.start();
 			this.ui.requestRender(true);
 		}
 	}
@@ -6307,8 +6297,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleShareCommand();
 	}
 
-	handleTodoCommand(args: string): Promise<void> {
-		return this.#todoCommandController.handleTodoCommand(args);
+	handleTodoCommand(args: string, editorOrigin?: string): Promise<void> {
+		return this.#todoCommandController.handleTodoCommand(args, editorOrigin);
 	}
 
 	handleSessionCommand(): Promise<void> {

@@ -17,6 +17,7 @@ import {
 	type ViewportSize,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import { handleEditorInput } from "../utils/external-editor";
 import { CustomEditor } from "./components/custom-editor";
 import { type AnimationFrame, isRowPrefix, TranscriptContainer } from "./components/transcript-container";
 import { type LspServerInfo, type RecentSession, WelcomeComponent } from "./components/welcome";
@@ -286,6 +287,9 @@ export class Composer implements TerminalFrameProvider {
 		);
 		this.ui.setFrameProvider(this);
 		this.ui.addInputListener(data => {
+			// Editor handoff packets, origin lease, and ctrl+c-while-pending come first.
+			const editorResult = handleEditorInput(data);
+			if (editorResult) return editorResult;
 			if (!data.startsWith("\x1b_pi:")) return;
 			// `pi:prompt;<name>` replaces the leading slash command; `pi:keyword;<word>`
 			// puts a standalone word (ultrathink, orchestrate, workflowz, …) at the message start.

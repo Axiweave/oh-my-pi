@@ -15,7 +15,7 @@ import {
 	matchesAppFollowUp,
 	matchesAppInterrupt,
 } from "../../modes/utils/keybinding-matchers";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { openInEditor, takeEditorOrigin } from "../../utils/external-editor";
 import { OverlayPanel } from "./overlay-box";
 
 export interface HookEditorOptions {
@@ -255,18 +255,16 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 	}
 
 	async #openExternalEditor(): Promise<void> {
-		const editorCmd = getEditorCommand();
-		if (!editorCmd) return;
-
+		const origin = takeEditorOrigin() ?? "";
 		const currentText = this.#editor.getExpandedText();
 		try {
-			this.#tui.stop();
-			const result = await openInEditor(editorCmd, currentText);
-			if (!this.#disposed && result !== null) {
-				this.#editor.setText(result);
-			}
+			await openInEditor(this.#tui, currentText, {
+				origin,
+				apply: text => {
+					if (!this.#disposed) this.#editor.setText(text);
+				},
+			});
 		} finally {
-			this.#tui.start();
 			this.#tui.requestRender(true);
 		}
 	}

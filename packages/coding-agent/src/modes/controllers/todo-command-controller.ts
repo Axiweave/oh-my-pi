@@ -10,7 +10,7 @@ import {
 	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "../../tools/todo";
 import { copyToClipboard } from "../../utils/clipboard";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { openInEditor } from "../../utils/external-editor";
 import type { InteractiveModeContext } from "../types";
 
 const USAGE = [
@@ -145,7 +145,7 @@ export class TodoCommandController {
 		return this.ctx.session.getTodoPhases();
 	}
 
-	async handleTodoCommand(args: string): Promise<void> {
+	async handleTodoCommand(args: string, editorOrigin = ""): Promise<void> {
 		const trimmed = args.trim();
 		if (!trimmed) {
 			this.#showCurrent();
@@ -164,7 +164,7 @@ export class TodoCommandController {
 				if (this.ctx.todoExpanded) this.ctx.toggleTodoExpansion();
 				return;
 			case "edit":
-				await this.#editInExternalEditor();
+				await this.#editInExternalEditor(editorOrigin);
 				return;
 			case "copy":
 				this.#copyMarkdown();
@@ -407,38 +407,36 @@ export class TodoCommandController {
 
 	// ------------------------------------------------------------- editor
 
-	async #editInExternalEditor(): Promise<void> {
-		const editorCmd = getEditorCommand();
-		if (!editorCmd) {
-			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
-			return;
-		}
-
+	async #editInExternalEditor(origin: string): Promise<void> {
 		const current = this.#currentPhases();
 		const initialMarkdown =
 			current.length > 0 ? phasesToMarkdown(current) : "# Todos\n- [ ] (replace this with your tasks)\n";
 
-		this.ctx.ui.stop();
 		try {
-			const result = await openInEditor(editorCmd, initialMarkdown, { extension: ".todo.md" });
-			if (result === null) {
+			const result = await openInEditor(this.ctx.ui, initialMarkdown, {
+				origin,
+				extension: ".todo.md",
+				apply: text => {
+					const { phases: parsed, errors } = markdownToPhases(text);
+					if (errors.length > 0) {
+						this.ctx.showError(`Could not parse Markdown:\n  ${errors.join("\n  ")}`);
+						return;
+					}
+					this.#commit(parsed, "/todo edit");
+					const taskCount = parsed.reduce((sum, p) => sum + p.tasks.length, 0);
+					this.ctx.showStatus(`Todos updated from editor: ${parsed.length} phase(s), ${taskCount} task(s).`);
+				},
+			});
+			if (result === undefined) {
+				this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			} else if (result === null) {
 				this.ctx.showWarning("Editor exited without saving; todos unchanged.");
-				return;
 			}
-			const { phases: parsed, errors } = markdownToPhases(result);
-			if (errors.length > 0) {
-				this.ctx.showError(`Could not parse Markdown:\n  ${errors.join("\n  ")}`);
-				return;
-			}
-			this.#commit(parsed, "/todo edit");
-			const taskCount = parsed.reduce((sum, p) => sum + p.tasks.length, 0);
-			this.ctx.showStatus(`Todos updated from editor: ${parsed.length} phase(s), ${taskCount} task(s).`);
 		} catch (error) {
 			this.ctx.showWarning(
 				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		} finally {
-			this.ctx.ui.start();
 			this.ctx.ui.requestRender();
 		}
 	}
