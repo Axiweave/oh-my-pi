@@ -27,6 +27,30 @@
 - Fixed dismissing an extension dialog throwing when its context carries no session view. The IDE `session_state_changed` publisher runs inside the dialog's settle handler, so it now reads a missing session or transcript as `idle` instead of failing the dismissal.
 - Fixed the transcript rebuild throwing `Settings not initialized` when a host renders chat rows before `Settings.init()`. Both command-card render gates now fall back to the `display.collapseCommandCards` schema default.
 
+## [18.1.22] - 2026-09-14
+
+### Breaking Changes
+
+- Hub message/job waits now always use the adaptive window (5s, lengthening to 5m across back-to-back waits); removed the `timeoutMs` argument and `async.pollWaitDuration` setting.
+
+### Added
+
+- Added a privacy warning to memory reports reminding users to review data for secrets before sharing
+- `omp git` / `/git`: `delete` discards the selected file's changes (press twice to confirm) — in the sidebar on a file or whole directory, in the diff pane on the shown file; untracked files are removed, staged files reset to HEAD
+
+### Changed
+
+- Pressing `c` on a `/btw` answer now shows a green "✓ Copied to clipboard" confirmation in the panel and history detail, and BTW history accepts `Ctrl+/` to switch panes ([#12052](https://github.com/can1357/oh-my-pi/pull/12052) by [@H4vC](https://github.com/H4vC)).
+
+### Fixed
+
+- Automatic session titles no longer draw from canned prompt examples.
+- Sessions titled by a local Ollama model (e.g. LFM2.5) no longer stay unnamed when the model's chat template spends the whole output budget on reasoning.
+- `/debug` memory reports now include numeric memory statistics instead of raw heap snapshots that could expose provider and MCP credentials.
+- Multi-step logins (e.g. Perplexity email → code) now move the input field under the latest prompt instead of leaving it stuck beneath the first one.
+- Todo updates made through Eval's `tool.todo(...)` now persist to the session, so they survive resume/rewind/fork and no longer trigger false incomplete-todo reminders.
+- Native background security scans now accept provider-owned AWS authentication for Amazon Bedrock and Bedrock Mantle without requiring a stored OAuth account ([#12013](https://github.com/can1357/oh-my-pi/issues/12013)).
+
 ## [18.1.21] - 2026-09-14
 
 ### Fixed
