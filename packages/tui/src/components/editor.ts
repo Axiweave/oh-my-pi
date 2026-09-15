@@ -692,11 +692,17 @@ export class Editor implements Component, Focusable {
 	}
 
 	/** Half-open `[start, end)` column ranges of recognized command keywords on the given logical
-	 *  line: the leading `/name` on line 0 plus inline `/skill:name` tokens on any line. Hosts use
-	 *  this from `decorateText` to color-highlight valid commands as they're typed, independent of
-	 *  whether the autocomplete dropdown is open. */
-	getRecognizedCommandRanges(line: number): Array<[number, number]> {
-		return this.#autocompleteProvider?.getRecognizedCommandRanges?.(this.#state.lines[line] ?? "", line === 0) ?? [];
+	 *  line: the leading `/name` on the message's first line plus inline `/skill:name` tokens on any
+	 *  line. Hosts use this from `decorateText` to color-highlight valid commands as they're typed,
+	 *  independent of whether the autocomplete dropdown is open.
+	 *
+	 *  `anchor` names the column where the message starts on that line and `messageStart` says the
+	 *  line opens the message. A host prefix such as the `->` queue shorthand sits before the anchor
+	 *  and is not scanned. Ranges are absolute columns on the line. */
+	getRecognizedCommandRanges(line: number, anchor = 0, messageStart = line === 0): Array<[number, number]> {
+		const text = (this.#state.lines[line] ?? "").slice(anchor);
+		const ranges = this.#autocompleteProvider?.getRecognizedCommandRanges?.(text, messageStart) ?? [];
+		return anchor === 0 ? ranges : ranges.map(([start, end]) => [start + anchor, end + anchor]);
 	}
 
 	/** Install prose assistance without changing command/file autocomplete. */
@@ -2541,28 +2547,42 @@ export class Editor implements Component, Focusable {
 	}
 
 	/**
-	 * Replace or insert the draft's leading slash command. The body cursor keeps
-	 * its position, except in an empty draft: there it lands after the inserted
-	 * command and its trailing space, ready for arguments.
+	 * Replace or insert the draft's leading slash command at or after `anchor`, the
+	 * index of the message start on `line`. A host whose drafts carry a prefix — the
+	 * `->` queue shorthand — names the body line and the offset past that prefix. The
+	 * body cursor keeps its position, except in a body with no text yet: there the
+	 * caret lands after the inserted command and its trailing space, ready for
+	 * arguments. A `line` past the last one is appended to hold the command.
 	 */
-	setLeadingSlashCommand(command: string): void {
+	setLeadingSlashCommand(command: string, line = 0, anchor = 0): void {
 		this.#exitHistoryForEditing();
-		const line = this.#state.lines[0] ?? "";
-		const start = findLeadingSlashCommandStart(line);
-		const tokenEnd = start === null ? -1 : line.slice(start).search(/\s/u);
-		const oldEnd = start === null ? 0 : tokenEnd === -1 ? line.length : start + tokenEnd;
-		const replacement = `/${command}${start === null || oldEnd === line.length ? " " : ""}`;
-		const nextLine = line.slice(0, start ?? 0) + replacement + line.slice(oldEnd);
-		if (nextLine === line) return;
-		const emptyDraft = line === "" && this.#state.lines.length === 1;
+		if (line > this.#state.lines.length) return;
+		const target = this.#state.lines[line] ?? "";
+		const leadingStart = findLeadingSlashCommandStart(target.slice(anchor));
+		const start = leadingStart === null ? anchor : anchor + leadingStart;
+		const tokenEnd = leadingStart === null ? -1 : target.slice(start).search(/\s/u);
+		const oldEnd = leadingStart === null ? anchor : tokenEnd === -1 ? target.length : start + tokenEnd;
+		const lead = anchor > 0 && start === anchor && !/^\s/u.test(target[anchor - 1] ?? "") ? " " : "";
+		const replacement = `${lead}/${command}${leadingStart === null || oldEnd === target.length ? " " : ""}`;
+		const nextLine = target.slice(0, start) + replacement + target.slice(oldEnd);
+		if (nextLine === target) return;
+		const append = line === this.#state.lines.length;
+		const emptyBody = target.slice(anchor).trim() === "" && line === this.#state.lines.length - 1;
 
 		this.#resetKillSequence();
 		this.#recordUndoState();
-		this.#state.lines[0] = nextLine;
-		if (this.#state.cursorLine === 0) {
-			if (start === null && (this.#state.cursorCol > 0 || emptyDraft)) {
+		if (append) this.#state.lines.push("");
+		this.#state.lines[line] = nextLine;
+		if (append) {
+			this.#state.cursorLine = line;
+			this.#setCursorCol(replacement.length);
+		} else if (this.#state.cursorLine === line) {
+			if (
+				leadingStart === null &&
+				(this.#state.cursorCol > anchor || (emptyBody && this.#state.cursorCol >= anchor))
+			) {
 				this.#setCursorCol(this.#state.cursorCol + replacement.length);
-			} else if (start !== null && this.#state.cursorCol >= start) {
+			} else if (leadingStart !== null && this.#state.cursorCol >= start) {
 				this.#setCursorCol(
 					this.#state.cursorCol <= oldEnd
 						? start + replacement.length
@@ -2576,28 +2596,36 @@ export class Editor implements Component, Focusable {
 	}
 
 	/**
-	 * Insert `word` as a standalone token at the start of the message, after a
-	 * leading slash command when one is present. A word already present as a
-	 * standalone token is left alone. The body cursor keeps its position.
+	 * Insert `word` as a standalone token at the message start — `line` and `anchor`,
+	 * as in {@link setLeadingSlashCommand} — after a leading slash command when one is
+	 * present. A word already present as a standalone token is left alone. The body
+	 * cursor keeps its position. A `line` past the last one is appended to hold the word.
 	 */
-	insertLeadingKeyword(word: string): void {
+	insertLeadingKeyword(word: string, line = 0, anchor = 0): void {
 		if (new RegExp(`(?:^|\\s)${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`, "u").test(this.getText()))
 			return;
 		this.#exitHistoryForEditing();
-		const line = this.#state.lines[0] ?? "";
-		const start = findLeadingSlashCommandStart(line);
-		const tokenEnd = start === null ? -1 : line.slice(start).search(/\s/u);
-		const at = start === null ? 0 : tokenEnd === -1 ? line.length : start + tokenEnd;
-		const before = line.slice(0, at);
-		const after = line.slice(at);
+		if (line > this.#state.lines.length) return;
+		const target = this.#state.lines[line] ?? "";
+		const leadingStart = findLeadingSlashCommandStart(target.slice(anchor));
+		const start = leadingStart === null ? anchor : anchor + leadingStart;
+		const tokenEnd = leadingStart === null ? -1 : target.slice(start).search(/\s/u);
+		const at = leadingStart === null ? anchor : tokenEnd === -1 ? target.length : start + tokenEnd;
+		const before = target.slice(0, at);
+		const after = target.slice(at);
 		const lead = at > 0 && !/\s$/u.test(before) ? " " : "";
 		const trail = /^\s/u.test(after) ? "" : " ";
 		const insert = `${lead}${word}${trail}`;
+		const append = line === this.#state.lines.length;
 
 		this.#resetKillSequence();
 		this.#recordUndoState();
-		this.#state.lines[0] = before + insert + after;
-		if (this.#state.cursorLine === 0 && this.#state.cursorCol >= at) {
+		if (append) this.#state.lines.push("");
+		this.#state.lines[line] = before + insert + after;
+		if (append) {
+			this.#state.cursorLine = line;
+			this.#setCursorCol(insert.length);
+		} else if (this.#state.cursorLine === line && this.#state.cursorCol >= at) {
 			this.#setCursorCol(this.#state.cursorCol + insert.length);
 		}
 		this.#cancelAutocomplete();

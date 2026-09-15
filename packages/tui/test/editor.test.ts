@@ -446,6 +446,40 @@ describe("Editor component", () => {
 		});
 	});
 
+	describe("host insertion anchors", () => {
+		it("inserts a command after the message start a host names", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("-> fix the bug");
+
+			// The `->` queue shorthand owns the line head: the command goes after it.
+			editor.setLeadingSlashCommand("compact", 0, 3);
+			expect(editor.getText()).toBe("-> /compact fix the bug");
+		});
+
+		it("appends the body line when the draft has none", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("->");
+
+			editor.setLeadingSlashCommand("compact", 1, 0);
+			expect(editor.getText()).toBe("->\n/compact ");
+			expect(editor.getCursor()).toEqual({ line: 1, col: 9 });
+
+			editor.insertLeadingKeyword("ultrathink", 1, 0);
+			// A keyword already present as a standalone token is left alone.
+			editor.insertLeadingKeyword("ultrathink", 1, 0);
+			expect(editor.getText()).toBe("->\n/compact ultrathink ");
+		});
+
+		it("leaves a cursor parked inside the host prefix where it is", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("->");
+
+			editor.moveToMessageStart();
+			editor.setLeadingSlashCommand("compact", 0, 2);
+			expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+		});
+	});
+
 	describe("autocomplete triggers", () => {
 		it("triggers slash-command autocomplete without losing the hardware cursor anchor", async () => {
 			const editor = new Editor(defaultEditorTheme);
