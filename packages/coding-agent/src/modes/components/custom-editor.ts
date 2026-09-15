@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	addKeyAliases,
+	type AutocompleteProvider,
 	canonicalKeyId,
 	Editor,
 	type EditorTextDecorationContext,
@@ -24,7 +25,12 @@ import {
 } from "../composer-attachments";
 import { MacOSSpellingProvider, type SpellingFeatures } from "../macos-spelling";
 import { hasMagicKeyword, highlightMagicKeywords } from "../magic-keywords";
-import { isQueuedMessageList, parseQueueShorthand, QUEUE_LIST_MARKER_RE } from "../queue-input";
+import {
+	isQueuedMessageList,
+	parseQueueShorthand,
+	queueShorthandBodyStart,
+	QUEUE_LIST_MARKER_RE,
+} from "../queue-input";
 import { fgOrPlain, theme } from "../theme/theme";
 
 type ConfigurableEditorAction = Extract<
@@ -621,6 +627,13 @@ export class CustomEditor extends Editor {
 	#queueListActive = false;
 	#recognizedCommandRanges: ReadonlyArray<ReadonlyArray<[number, number]>> = [];
 
+	/** A replaced provider carries a new command list, so cached recognition from the old one is
+	 *  stale even while the draft text stays the same. */
+	override setAutocompleteProvider(provider: AutocompleteProvider): void {
+		super.setAutocompleteProvider(provider);
+		this.#queueDecorationText = undefined;
+	}
+
 	/** Decorate magic keywords, attachments, the queue-composer header/list markers, and
 	 *  recognized slash commands. Queue shorthand reserves its first logical line as a dim
 	 *  `Queueing` label; sequential item markers use the accent color so separate follow-ups remain
@@ -637,7 +650,14 @@ export class CustomEditor extends Editor {
 			const queueBody = parseQueueShorthand(editorText);
 			this.#queueShorthandActive = queueBody !== undefined;
 			this.#queueListActive = queueBody !== undefined && isQueuedMessageList(queueBody);
-			this.#recognizedCommandRanges = this.#decorationLines.map((_, i) => this.getRecognizedCommandRanges(i));
+			// The shorthand's body is the message, so its line carries the leading command and may
+			// sit behind the `->` prefix on the shorthand line itself.
+			const body = queueShorthandBodyStart(editorText);
+			this.#recognizedCommandRanges = this.#decorationLines.map((_, i) =>
+				i === body.line
+					? this.getRecognizedCommandRanges(i, body.anchor, true)
+					: this.getRecognizedCommandRanges(i),
+			);
 		}
 		let sourceSearchOffset = 0;
 		const locateSource = (value: string): number => {

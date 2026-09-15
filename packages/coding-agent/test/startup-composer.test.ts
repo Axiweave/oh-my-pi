@@ -349,6 +349,37 @@ describe("Composer prepaint", () => {
 			expect(composer.editor.getCursor()).toEqual({ line: 0, col: 9 });
 			terminal.sendInput("arg");
 			expect(composer.editor.getExpandedText()).toBe("/skill:a arg");
+
+			// A queue draft keeps its `->` header: the command lands on the body line,
+			// which is appended when the draft has only the prefix.
+			composer.editor.setText("-> ");
+			stdin.process("\x1b_pi:prompt;skill:a\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("-> \n/skill:a ");
+			expect(composer.editor.getCursor()).toEqual({ line: 1, col: 9 });
+			terminal.sendInput("arg");
+			expect(composer.editor.getExpandedText()).toBe("-> \n/skill:a arg");
+
+			composer.editor.setText("->");
+			stdin.process("\x1b_pi:prompt;compact\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("->\n/compact ");
+			expect(composer.editor.getCursor()).toEqual({ line: 1, col: 9 });
+
+			composer.editor.setText("=>");
+			stdin.process("\x1b_pi:prompt;compact\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("=>\n/compact ");
+
+			// Body text on the prefix line keeps that line: only the command token is replaced.
+			composer.editor.setText("-> /old body");
+			stdin.process("\x1b_pi:prompt;new\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("-> /new body");
+
+			composer.editor.setText("->\n/old junk");
+			stdin.process("\x1b_pi:prompt;review\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("->\n/review junk");
+
+			composer.editor.setText("->\nfix the bug");
+			stdin.process("\x1b_pi:prompt;compact\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("->\n/compact fix the bug");
 		} finally {
 			stdin.destroy();
 			composer.stop();
@@ -380,6 +411,28 @@ describe("Composer prepaint", () => {
 			composer.editor.setText("/plan body");
 			stdin.process("\x1b_pi:keyword;workflowz\x1b\\");
 			expect(composer.editor.getExpandedText()).toBe("/plan workflowz body");
+
+			// A queue draft keeps its `->` header: the keyword lands on the body line.
+			composer.editor.setText("-> fix the bug");
+			stdin.process("\x1b_pi:keyword;orchestrate\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("-> orchestrate fix the bug");
+
+			composer.editor.setText("->\nfix the bug");
+			stdin.process("\x1b_pi:keyword;ultrathink\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("->\nultrathink fix the bug");
+
+			composer.editor.setText("-> /plan body");
+			stdin.process("\x1b_pi:keyword;workflowz\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("-> /plan workflowz body");
+
+			composer.editor.setText("->");
+			stdin.process("\x1b_pi:keyword;workflowz\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("->\nworkflowz ");
+			expect(composer.editor.getCursor()).toEqual({ line: 1, col: 10 });
+
+			// The shorthand dedupe still sees a keyword already queued in the body.
+			stdin.process("\x1b_pi:keyword;workflowz\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("->\nworkflowz ");
 
 			const draft = composer.editor.getExpandedText();
 			stdin.process("\x1b_pi:keyword;bad word\x1b\\");

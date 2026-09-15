@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- `ESC _ pi:prompt;…` and `ESC _ pi:keyword;…` packets no longer land in front of a `->` / `=>` queue shorthand. The command or keyword now goes to the queued body — a prompt packet on a bare `->` keeps that header line and appends the body line holding `/compact …` — instead of `/compact -> …`. A command in the queued body also keeps the accent highlight a normal draft gives it, whether the body sits on the shorthand line or on the line below.
 - OMP now rediscovers the IDE endpoint and reconnects automatically when an editor restarts.
 - Collapsed command cards now show the full typed line (`/name arg1 arg2`) instead of dropping arguments behind just the command name.
 - Fixed a pasted image sometimes showing an earlier image instead of the one on the clipboard. The composer chip thumbnail keyed its terminal-graphics id on the MIME type, the base64 length, and the first 32 base64 characters — for a PNG that covers only the signature and the IHDR width/height — so two same-size attachments shared one id, the second was never transmitted, and the terminal re-drew the first image. Chip slots now carry a full-content tag, and assistant, tool-result, and bash-output images do too (their `native:<index>` key also collided across messages).

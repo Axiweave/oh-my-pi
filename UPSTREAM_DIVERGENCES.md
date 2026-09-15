@@ -135,3 +135,12 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Why:** The revised assertions match the observed native `pi-vcs` behavior. Upstream deleted the older version of this test instead of revising it, so an unwatched merge would drop the coverage.
 - **Key path:** `packages/coding-agent/test/utils/jj.test.ts`.
 - **Check:** `packages/coding-agent/test/utils/jj.test.ts`.
+
+### Composer input packets and queue-body commands
+
+- **Decision:** Accept `ESC _ pi:prompt;<command> ESC \` and `ESC _ pi:keyword;<word> ESC \` input packets from terminal hosts. A prompt packet replaces or inserts the draft's leading slash command, a keyword packet places a standalone word at the message start, and neither moves the body cursor.
+- **Decision:** Treat a `->` / `=>` queue shorthand as a header. Packets, the leading-command edits, and command recognition take the body line and anchor from `queueShorthandBodyStart`, so a command never lands in front of the shorthand and a bare prefix keeps its header line with the body appended below.
+- **Decision:** Color-highlight a fully recognized leading command and inline `/skill:name` tokens in the composer, scanning from the message start rather than column 0 so a queued body keeps its highlight. A replaced autocomplete provider invalidates the cached recognition.
+- **Why:** Editors such as claude-code-ide.el drive the composer through these packets instead of terminal keystrokes, and a command queued for the next yield must stay visible and reach the message body. Upstream has no packet intake, no leading-command editor API, and no recognition ranges.
+- **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/queue-input.ts`, `packages/coding-agent/src/modes/components/custom-editor.ts`, `packages/tui/src/components/editor.ts`, and `packages/tui/src/autocomplete.ts`.
+- **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/coding-agent/test/modes/components/custom-editor.test.ts`, and `packages/tui/test/editor.test.ts`.

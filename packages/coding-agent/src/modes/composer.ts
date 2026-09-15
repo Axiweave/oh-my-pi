@@ -21,6 +21,7 @@ import { handleEditorInput } from "../utils/external-editor";
 import { CustomEditor } from "./components/custom-editor";
 import { type AnimationFrame, isRowPrefix, TranscriptContainer } from "./components/transcript-container";
 import { type LspServerInfo, type RecentSession, WelcomeComponent } from "./components/welcome";
+import { queueShorthandBodyStart } from "./queue-input";
 import { getEditorTheme, initThemeSync, theme } from "./theme/theme";
 
 const DOUBLE_INTERRUPT_MS = 500;
@@ -295,8 +296,11 @@ export class Composer implements TerminalFrameProvider {
 			// puts a standalone word (ultrathink, orchestrate, workflowz, …) at the message start.
 			const match = /^\x1b_pi:(prompt|keyword);([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
 			if (match && this.ui.getFocused() === this.editor) {
-				if (match[1] === "prompt") this.editor.setLeadingSlashCommand(match[2] ?? "");
-				else this.editor.insertLeadingKeyword(match[2] ?? "");
+				// A `->` / `=>` queue draft keeps its header line: the command or keyword
+				// belongs to the queued body, not in front of the shorthand.
+				const body = queueShorthandBodyStart(this.editor.getText());
+				if (match[1] === "prompt") this.editor.setLeadingSlashCommand(match[2] ?? "", body.line, body.anchor);
+				else this.editor.insertLeadingKeyword(match[2] ?? "", body.line, body.anchor);
 				this.ui.requestRender();
 			}
 			return { consume: true };

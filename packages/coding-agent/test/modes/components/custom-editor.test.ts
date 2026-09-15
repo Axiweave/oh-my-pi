@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
+import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { $ } from "bun";
 import { getDefaultPasteImageKeys } from "../../../src/config/keybindings";
@@ -173,6 +174,48 @@ describe("CustomEditor queue shorthand decoration", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.setText("=>\n1. first\n3. third");
 		expect(editor.decorateText("1. first", { line: 1, startCol: 0, endCol: 8 })).toBe("1. first");
+	});
+
+	it("highlights a recognized command in the shorthand body, inline or on the next line", () => {
+		const commands = [{ name: "speckit.plan", description: "Plan a feature" }];
+		const command = "/speckit.plan";
+		const accent = theme.fg("accent", `\x1b[1m${command}\x1b[22m`);
+
+		const inline = new CustomEditor(getEditorTheme());
+		inline.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, "/tmp"));
+		inline.setText(`-> ${command}`);
+		const line = `-> ${command}`;
+		const decorated = inline.decorateText(line, { line: 0, startCol: 0, endCol: line.length });
+		expect(Bun.stripANSI(decorated)).toBe(`Queueing ${theme.nav.selected} ${command}`);
+		expect(decorated).toContain(accent);
+
+		const body = new CustomEditor(getEditorTheme());
+		body.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, "/tmp"));
+		body.setText(`->\n${command}`);
+		expect(body.decorateText(command, { line: 1, startCol: 0, endCol: command.length })).toBe(accent);
+
+		const plain = new CustomEditor(getEditorTheme());
+		plain.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, "/tmp"));
+		plain.setText(command);
+		expect(plain.decorateText(command, { line: 0, startCol: 0, endCol: command.length })).toBe(accent);
+
+		const unknown = new CustomEditor(getEditorTheme());
+		unknown.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, "/tmp"));
+		unknown.setText("-> /never-registered");
+		expect(unknown.decorateText("/never-registered", { line: 0, startCol: 3, endCol: 20 })).toBe("/never-registered");
+	});
+
+	it("re-reads command recognition when the provider is replaced mid-draft", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setText("-> /speckit.plan");
+		const segment = { line: 0, startCol: 3, endCol: 16 };
+		expect(editor.decorateText("/speckit.plan", segment)).toBe("/speckit.plan");
+
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider([{ name: "speckit.plan", description: "Plan a feature" }], "/tmp"),
+		);
+
+		expect(editor.decorateText("/speckit.plan", segment)).toBe(theme.fg("accent", "\x1b[1m/speckit.plan\x1b[22m"));
 	});
 });
 

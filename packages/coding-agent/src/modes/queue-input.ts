@@ -23,6 +23,30 @@ export function parseQueueShorthand(text: string): string | undefined {
 	return prefix ? text.slice(prefix.length).trim() : undefined;
 }
 
+/** Where the queued message body starts: the line to edit, and the index within it. */
+export interface QueueShorthandBodyStart {
+	/** Body line index. A prefix alone on its line hands the body to line 1. */
+	readonly line: number;
+	/** Index of the body start within that line. */
+	readonly anchor: number;
+}
+
+/**
+ * Locate the queued message body. A `->` / `=>` prefix keeps its line, so body text
+ * typed after the prefix stays on line 0. A prefix line with no text after it leaves
+ * the body to the next line, which the host appends when the draft has none. A draft
+ * without a prefix starts at the top of the message.
+ */
+export function queueShorthandBodyStart(text: string): QueueShorthandBodyStart {
+	const lines = text.split("\n");
+	const first = lines[0] ?? "";
+	const prefix = QUEUE_PREFIXES.find(candidate => first.startsWith(candidate));
+	if (!prefix) return { line: 0, anchor: 0 };
+	const after = first.slice(prefix.length);
+	if (after.trim() !== "") return { line: 0, anchor: prefix.length + (after.length - after.trimStart().length) };
+	return { line: 1, anchor: 0 };
+}
+
 function parseEnumeratedItem(line: string, lineIndex: number): EnumeratedItem | undefined {
 	const match = QUEUE_LIST_MARKER_RE.exec(line);
 	if (!match) return undefined;
