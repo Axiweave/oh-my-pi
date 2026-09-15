@@ -13,6 +13,18 @@
 
 - `ImageBudget.acquireId` now takes an optional content tag beside the placement key. A key whose bytes changed supersedes its old graphics id (purging the stale data from the terminal store) instead of keeping an id that `shouldTransmit` had already marked sent, which made the terminal re-draw the previous image.
 
+## [18.2.0] - 2026-09-15
+
+### Added
+
+- Added `Editor.textRevision` for content-dependent render caches, including undo and draft restoration.
+- Added collapseToAtom method to compress text spans into UI-friendly atoms
+
+### Changed
+
+- Redrawing unchanged terminal rows now avoids rescanning ANSI, hyperlinks, and images.
+- Terminal UIs reach their first frame with a smaller startup module graph.
+
 ## [18.1.17] - 2026-09-10
 
 ### Added

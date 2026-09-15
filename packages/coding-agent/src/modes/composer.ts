@@ -1,22 +1,19 @@
+import type { EditorTopBorder } from "@oh-my-pi/pi-tui/components/composer/types";
+import { Spacer } from "@oh-my-pi/pi-tui/components/spacer";
+import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
+import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import {
 	type Component,
 	Container,
-	type EditorTopBorder,
 	type HistoryBatch,
-	isInsideTerminalMultiplexer,
-	ProcessTerminal,
 	type ResizeScrollbackMode,
-	Spacer,
-	sliceWithWidth,
-	type Terminal,
 	type TerminalFramePlan,
 	type TerminalFrameProvider,
-	truncateToWidth,
 	TUI,
 	type TUIOptions,
 	type ViewportSize,
-	visibleWidth,
-} from "@oh-my-pi/pi-tui";
+} from "@oh-my-pi/pi-tui/tui";
+import { sliceWithWidth, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { handleEditorInput } from "../utils/external-editor";
 import { CustomEditor } from "./components/custom-editor";
 import { type AnimationFrame, isRowPrefix, TranscriptContainer } from "./components/transcript-container";
@@ -894,6 +891,10 @@ export class Composer implements TerminalFrameProvider {
 		this.#started = true;
 		this.ui.start({ clearScrollback: options.clearScrollback === true, deferInput: options.deferInput === true });
 		if (options.playWelcomeIntro !== false) this.playWelcomeIntro();
+		// Deferred input identifies the CLI prepaint handoff. Flush the queued
+		// forced frame before returning so subsequent dynamic-import evaluation
+		// cannot monopolize the event loop ahead of the speculative status chrome.
+		if (options.deferInput === true) this.ui.renderNow({ clearScrollback: options.clearScrollback === true });
 	}
 	/** Take raw-input ownership after a deferred-input start. Idempotent. */
 	enableInput(): void {

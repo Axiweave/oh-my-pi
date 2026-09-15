@@ -7,6 +7,7 @@ import {
 	directoryIsMissing,
 	getProjectDir,
 	onProjectDirChanged,
+	relativePathWithinRoot,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils/dirs";
 
@@ -47,6 +48,19 @@ describe("project directory state", () => {
 			expect(await directoryIsMissing(path.join(os.tmpdir(), "blocked"))).toBe(false);
 		} finally {
 			stat.mockRestore();
+		}
+	});
+
+	it("normalizes each containment operand only once", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-dirs-containment-"));
+		const candidate = path.join(root, "child");
+		fs.mkdirSync(candidate);
+		const realpath = spyOn(fs, "realpathSync");
+		try {
+			expect(relativePathWithinRoot(root, candidate)).toBe("child");
+			expect(realpath).toHaveBeenCalledTimes(2);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
 
