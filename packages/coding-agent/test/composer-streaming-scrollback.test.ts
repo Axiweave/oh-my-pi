@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
@@ -127,6 +127,59 @@ async function streamNumberedParagraphs(rig: Rig, assistant: AssistantMessageCom
 }
 
 describe("Composer streaming scrollback", () => {
+	it.each([false, true])("preserves shell history on streaming startup with pinBottom=%s", async pinBottom => {
+		const terminal = new VirtualTerminal(40, 8, 4_000);
+		terminal.write(`${Array.from({ length: 12 }, (_, i) => `SHELL_${i}`).join("\r\n")}\r\n`);
+		const shellHistory = historyRows(terminal);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { quiet: true, streamingScrollback: true, pinBottom },
+		});
+		composers.push(composer);
+		const transcript = new TranscriptContainer();
+		composer.setRuntimeChildren([transcript, composer.editor]);
+		composer.start({ playWelcomeIntro: false });
+		await scheduler.settle(terminal);
+		expect(scrollBuffer(terminal).slice(0, shellHistory.length)).toEqual(shellHistory);
+		transcript.addChild(new MutableBlock(Array.from({ length: 20 }, (_, i) => `READ_${i}`)));
+		composer.ui.requestRender();
+		await scheduler.settle(terminal);
+		expect(scrollBuffer(terminal).slice(0, shellHistory.length)).toEqual(shellHistory);
+		expect(scrollBuffer(terminal).filter(row => row.startsWith("READ_"))).toEqual(
+			Array.from({ length: 20 }, (_, i) => `READ_${i}`),
+		);
+	});
+
+	it.each([20, 60])(
+		"flushes pending streaming rows without clearing history after resize to %s columns",
+		async columns => {
+			// Accepted rows remain once. Shutdown appends the pending tail without a destructive replay.
+			const rig = makeRig({ streamingScrollback: true, pinBottom: false }, 40, 8);
+			const rows = Array.from({ length: 20 }, (_, i) => `ROW_${i} ${"x".repeat(24)}`);
+			const block = new MutableBlock(rows);
+			rig.transcript.addChild(block);
+			await settle(rig);
+			const writes = spyOn(rig.terminal, "write");
+			try {
+				const finalRows = [...rows, `FINAL_PENDING ${"x".repeat(24)}`];
+				block.setLines(finalRows);
+				rig.terminal.resize(columns, 8);
+				writes.mockClear();
+				rig.composer.stop();
+				const output = writes.mock.calls.map(([data]) => data).join("");
+				expect(output).not.toContain("\x1b[3J");
+				expect(output).not.toContain("ROW_0");
+				const text = scrollBuffer(rig.terminal).join("").replaceAll(" ", "");
+				// Native reflow can move old live rows before SIGWINCH. Shutdown must preserve their text.
+				for (const row of finalRows) expect(text).toContain(row.replaceAll(" ", ""));
+			} finally {
+				writes.mockRestore();
+			}
+		},
+	);
+
 	it.each([false, true])(
 		"keeps click targets aligned with pinned rows when streamingScrollback=%s",
 		async streamingScrollback => {

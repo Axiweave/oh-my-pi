@@ -19,6 +19,7 @@ import {
 	type ImplReviewState,
 	type PlanModeState,
 	serializeImplReviewState,
+	serializePlanModeState,
 } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type {
 	AgentSession,
@@ -1321,6 +1322,196 @@ describe("ACP agent", () => {
 		expect(loaded.implReviewState).toBeUndefined();
 		expect(loaded.activeTools).not.toContain("write");
 		expect(loaded.sessionManager.buildSessionContext().mode).toBe("none");
+
+		harness.abortController.abort();
+	});
+
+	it("load restores a persisted plan entry and reports plan as the current mode", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange(
+			"plan",
+			serializePlanModeState({ enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel" }),
+		);
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const loaded = await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		expect(loaded.modes?.currentModeId).toBe("plan");
+		const session = harness.sessions.at(-1)!;
+		expect(session.planModeState).toEqual(
+			expect.objectContaining({ enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel" }),
+		);
+		expect(session.planProposalHandler).toBeDefined();
+
+		harness.abortController.abort();
+	});
+
+	it("load restores a persisted debate consensus and reports debate as the current mode", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange(
+			"plan",
+			serializePlanModeState({
+				enabled: true,
+				planFilePath: "local://auth-plan.md",
+				workflow: "debate",
+				debate: { phase: "consensus", round: 1, planHash: "reviewed-hash", summary: "Ready" },
+			}),
+		);
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const loaded = await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		expect(loaded.modes?.currentModeId).toBe("debate");
+		const session = harness.sessions.at(-1)!;
+		expect(session.planModeState?.debate).toEqual(
+			expect.objectContaining({ phase: "consensus", round: 1, planHash: "reviewed-hash", summary: "Ready" }),
+		);
+
+		harness.abortController.abort();
+	});
+
+	it("load converts an interrupted debate review phase to failed instead of dropping the plan", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange(
+			"plan",
+			serializePlanModeState({
+				enabled: true,
+				planFilePath: "local://auth-plan.md",
+				workflow: "debate",
+				debate: { phase: "reviewing", round: 1, planHash: "hash-1", activeReviewId: "rev-1" },
+			}),
+		);
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const loaded = await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		expect(loaded.modes?.currentModeId).toBe("debate");
+		const session = harness.sessions.at(-1)!;
+		expect(session.planModeState?.debate).toMatchObject({ phase: "failed", planHash: "hash-1" });
+
+		harness.abortController.abort();
+	});
+
+	it("load discards an invalid plan entry", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange("plan", { bogus: true });
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const loaded = await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		expect(loaded.modes?.currentModeId).toBe("default");
+		const session = harness.sessions.at(-1)!;
+		expect(session.planModeState).toBeUndefined();
+		expect(session.sessionManager.buildSessionContext().mode).toBe("none");
+
+		harness.abortController.abort();
+	});
+
+	it("load discards a persisted plan entry when plan mode is disabled", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", false);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange(
+			"plan",
+			serializePlanModeState({ enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel" }),
+		);
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const loaded = await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		expect(loaded.modes?.currentModeId).toBe("default");
+		const session = harness.sessions.at(-1)!;
+		expect(session.planModeState).toBeUndefined();
+		expect(session.sessionManager.buildSessionContext().mode).toBe("none");
+
+		harness.abortController.abort();
+	});
+
+	it("load installs a persisted plan_paused entry into memory with enabled:false, keeping the default mode and inactive tool gates", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
+		stored.sessionManager.appendModeChange(
+			"plan_paused",
+			serializePlanModeState({
+				enabled: false,
+				planFilePath: "local://auth-plan.md",
+				workflow: "debate",
+				debate: { phase: "consensus", round: 2, planHash: "paused-hash", summary: "Ready" },
+			}),
+		);
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const loaded = await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		// Paused plan mode grants no tool gates: the current mode reported to the
+		// client is the default, unguarded mode.
+		expect(loaded.modes?.currentModeId).toBe("default");
+		const session = harness.sessions.at(-1)!;
+		// The parsed state (workflow, debate round/hash/summary) is installed into
+		// memory with enabled:false — not left as a bare persisted record — so
+		// status/introspection callers that read `getPlanModeState()` see it.
+		expect(session.planModeState).toEqual(
+			expect.objectContaining({
+				enabled: false,
+				planFilePath: "local://auth-plan.md",
+				workflow: "debate",
+				debate: { phase: "consensus", round: 2, planHash: "paused-hash", summary: "Ready" },
+			}),
+		);
+		// The paused entry itself is preserved for a later interactive resume —
+		// restoration must not collapse it to "none".
+		expect(session.sessionManager.buildSessionContext().mode).toBe("plan_paused");
 
 		harness.abortController.abort();
 	});

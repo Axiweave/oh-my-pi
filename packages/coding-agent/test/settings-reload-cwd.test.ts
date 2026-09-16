@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { getProjectAgentDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -116,6 +117,7 @@ it("layers project modelProfiles over global ones", async () => {
 		// ...and overrides only the roles it names inside a shared bundle.
 		expect(profiles.fast).toEqual({ default: "anthropic/project-fast", plan: "anthropic/global-plan" });
 	} finally {
+		AgentStorage.close();
 		if (fs.existsSync(testDir)) removeSyncWithRetries(testDir);
 	}
 });
@@ -137,6 +139,7 @@ it("layers a project modelProfile selector over the global one", async () => {
 		const withoutProject = await Settings.loadIsolated({ cwd: bare, agentDir: testDir });
 		expect(withoutProject.get("modelProfile")).toBe("globalone");
 	} finally {
+		AgentStorage.close();
 		if (fs.existsSync(testDir)) removeSyncWithRetries(testDir);
 	}
 });
@@ -275,6 +278,7 @@ describe("Settings.reloadForCwd", () => {
 
 		afterEach(() => {
 			resetSettingsForTest();
+			AgentStorage.close();
 			if (fs.existsSync(testDir)) {
 				removeSyncWithRetries(testDir);
 			}

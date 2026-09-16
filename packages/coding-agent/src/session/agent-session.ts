@@ -10055,7 +10055,7 @@ export class AgentSession {
 
 			// Before the model restore: the incoming session's bundle (or none)
 			// replaces the outgoing session's role layer wholesale.
-			this.#models.restoreModelProfile(this.sessionManager.getLastModelProfile());
+			this.#models.restoreModelProfile(this.sessionManager.getLastModelProfile(), { force: true });
 
 			// Restore model if saved
 			const targetModelStrings = getRestorableSessionModels(

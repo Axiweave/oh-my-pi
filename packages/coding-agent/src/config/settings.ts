@@ -583,6 +583,9 @@ export class Settings {
 	 */
 	#modelProfileBaseRoles?: Record<string, string>;
 
+	/** Startup profile name, valid only until the next runtime role-layer write. */
+	#startupModelProfileName?: string;
+
 	/** Legacy `lastChangelogVersion` captured from config.yml during migration (now a marker file). */
 	#legacyLastChangelogVersion?: string;
 
@@ -1173,6 +1176,7 @@ export class Settings {
 	#setRuntimeModelRoleOverrides(next: Record<string, string>): void {
 		const prev = this.get("modelRoles");
 		setByPath(this.#overrides, ["modelRoles"], next);
+		this.#startupModelProfileName = undefined;
 		this.#rebuildMerged();
 		this.#fireEffectiveSettingChanged("modelRoles", this.get("modelRoles"), prev);
 	}
@@ -1483,20 +1487,18 @@ export class Settings {
 	}
 
 	/**
-	 * Install the configured startup `modelProfile` beneath the runtime override
-	 * layer and return its name, or `undefined` when unset/unknown.
-	 *
-	 * Under the layer, not over it: an explicit `--smol`/`--slow`/`--plan` beats
-	 * a config field, while every role the flags do not name follows the
-	 * profile. Idempotent — re-running with the same config yields the same
-	 * layer.
+	 * Install startup roles beneath CLI overrides. Repeated construction must
+	 * not replace a live session's profile when another session shares its settings.
+	 * Use `force` for an explicit switch to an empty, untagged session.
 	 */
-	installStartupModelProfile(): string | undefined {
+	installStartupModelProfile(options?: { force?: boolean }): string | undefined {
 		const name = this.get("modelProfile")?.trim();
 		if (!name) return undefined;
+		if (this.#modelProfileBaseRoles && !options?.force) return this.#startupModelProfileName;
 		const roles = this.getModelProfiles()[name];
 		if (!roles) return undefined;
 		this.applyModelProfileRoles(roles, { under: true });
+		this.#startupModelProfileName = name;
 		return name;
 	}
 

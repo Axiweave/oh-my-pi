@@ -62,7 +62,12 @@ import { loadAllExtensions } from "../../modes/components/extensions/state-manag
 import { theme } from "../../modes/theme/theme";
 import { hashPlanContent } from "../../plan-mode/debate";
 import { autosaveApprovedPlan } from "../../plan-mode/plan-autosave";
-import { type PlanModeState, parseImplReviewState, serializePlanModeState } from "../../plan-mode/state";
+import {
+	type PlanModeState,
+	parseImplReviewState,
+	parsePlanModeState,
+	serializePlanModeState,
+} from "../../plan-mode/state";
 import acpPlanApprovedPrompt from "../../prompts/system/acp-plan-approved.md" with { type: "text" };
 import planDebateConsensusInvalidatedPrompt from "../../prompts/system/plan-debate-consensus-invalidated.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
@@ -1337,6 +1342,7 @@ export class AcpAgent implements Agent {
 			await this.#configureMcpServers(record, mcpServers);
 			this.#sessions.set(session.sessionId, record);
 			await this.#reconcileImplReview(session);
+			await this.#reconcilePlanMode(session);
 			return record;
 		} catch (error) {
 			await this.#disposeSessionRecord(record);
@@ -1372,6 +1378,23 @@ export class AcpAgent implements Agent {
 					session.setImplReviewState({ ...restored, restoreTools: active });
 				}
 			}
+		}
+	}
+
+	/** Restore active or paused plans without discarding persisted review state. */
+	async #reconcilePlanMode(session: AgentSession): Promise<void> {
+		const ctx = session.sessionManager.buildSessionContext();
+		if (ctx.mode !== "plan" && ctx.mode !== "plan_paused") return;
+		const enabled = ctx.mode === "plan";
+		const restored = session.settings.get("plan.enabled") ? parsePlanModeState(ctx.modeData, enabled) : undefined;
+		if (!restored) {
+			session.sessionManager.appendModeChange("none");
+			return;
+		}
+		if (enabled) await session.supersedeImplReview();
+		session.setPlanModeState({ ...restored, enabled });
+		if (enabled) {
+			session.setPlanProposalHandler?.((title, context) => this.#handleAcpPlanProposal(session, title, context));
 		}
 	}
 

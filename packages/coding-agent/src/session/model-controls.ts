@@ -483,8 +483,11 @@ export class ModelControls {
 	 * already outranks the config roles, so claiming the startup profile here
 	 * would report a bundle whose `default` model is not the one running. The
 	 * config field names where a new session starts, not what a resumed one is.
+	 *
+	 * @param options.force - Restore startup roles on an explicit session
+	 *   switch. Construction omits this to preserve shared runtime roles.
 	 */
-	restoreModelProfile(name: string | undefined): void {
+	restoreModelProfile(name: string | undefined, options?: { force?: boolean }): void {
 		const profile = name ? this.#host.settings.getModelProfiles()[name] : undefined;
 		if (profile) {
 			this.#host.settings.applyModelProfileRoles(profile);
@@ -498,7 +501,7 @@ export class ModelControls {
 		// transcript is the "nothing to honor yet" signal; the branch itself is
 		// not (a fresh session already carries model/thinking records).
 		if (this.#host.agent.state.messages.length === 0) {
-			const configured = this.#host.settings.installStartupModelProfile();
+			const configured = this.#host.settings.installStartupModelProfile({ force: options?.force });
 			if (configured) {
 				this.#activeModelProfile = configured;
 				return;

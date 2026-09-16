@@ -13,7 +13,7 @@ import {
 	type TUIOptions,
 	type ViewportSize,
 } from "@oh-my-pi/pi-tui/tui";
-import { sliceWithWidth, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { sliceWithWidth, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import { postmortem } from "@oh-my-pi/pi-utils";
 import { handleEditorInput } from "../utils/external-editor";
 import { CustomEditor } from "./components/custom-editor";
@@ -357,12 +357,16 @@ export class Composer implements TerminalFrameProvider {
 	/** Compose the bounded mutable viewport and the next ordered history append. */
 	renderFrame(viewport: ViewportSize): TerminalFramePlan {
 		if (!this.#started || this.#stopped) return { viewport: [] };
-		const width = Math.max(1, viewport.columns);
+		// Shutdown keeps the accepted layout so a resize cannot change the history boundary.
+		const width = Math.max(
+			1,
+			this.#historyFlush && this.#preferences.streamingScrollback
+				? (this.#streamingHistory?.width ?? viewport.columns)
+				: viewport.columns,
+		);
 		const rows = Math.max(0, viewport.rows);
-		// Rows the writer has already anchored above the mutable viewport as
-		// native history; a padded frame must keep `viewport.length` within
-		// `rows - historyTop` or the writer's anchor clamps backward over
-		// those rows on the next write, overwriting them (see ViewportSize).
+		// Padding must not push visible history out of the screen. Real content
+		// can grow beyond this boundary. The writer scrolls committed rows.
 		const historyTop = viewport.historyRows ?? 0;
 		if (this.#resizeRetiredHeaderStart !== undefined) {
 			this.#retiredHeaderStart = this.#resizeRetiredHeaderStart;
@@ -448,6 +452,7 @@ export class Composer implements TerminalFrameProvider {
 				after,
 				afterSpans,
 				history,
+				Math.max(1, viewport.columns),
 			);
 		}
 		// Offer history under capacity pressure only: blocks stay live (and keep
@@ -492,23 +497,12 @@ export class Composer implements TerminalFrameProvider {
 		// pre-offer geometry, not the anchor the writer will settle on after
 		// appending it.
 		if (this.#preferences.pinBottom && history === undefined) {
-			// Fill up to the rows the writer actually has left, not to a capacity
-			// derived from `belowFloor`: that floor is a session-long minimum (see
-			// the retirement comment above), so the live chrome can sit a row or
-			// more above it for the rest of the run. A floor-derived spare then
-			// claims rows the writer anchored elsewhere, and the frame grows past
-			// the screen bottom by exactly that difference — one scroll per render.
+			// Use current chrome height, not the retirement floor, to avoid
+			// adding filler that forces another scroll on every repaint.
 			const spareCapacity = Math.max(0, rows - before.length - after.length - historyTop);
 			if (active.length < spareCapacity) active = active.concat(new Array(spareCapacity - active.length).fill(""));
 		}
-		// Fit the tail to the rows the writer has left below its anchor, not to the
-		// full screen height: `historyRows` rows already sit above the viewport, so
-		// a frame measured against `rows` writes past the screen bottom and every
-		// render scrolls a live prompt row into native scrollback. Non-padding
-		// chrome (a pending image-chip band) survives the clip; the transcript
-		// head absorbs it.
-		const availableRows = Math.max(0, rows - historyTop);
-		const drop = Math.max(0, before.length + active.length + after.length - availableRows);
+		const drop = Math.max(0, before.length + active.length + after.length - rows);
 		const mutable = [...before, ...active, ...after].slice(drop);
 		const spans = this.#mapClickSpans(
 			activeSpans,
@@ -594,8 +588,24 @@ export class Composer implements TerminalFrameProvider {
 		after: readonly string[],
 		afterSpans: readonly ViewportClickSpan[],
 		logicalHistory: HistoryBatch | undefined,
+		outputWidth: number,
 	): TerminalFramePlan {
 		const document = [...before, ...transcript.render(width)];
+		const accepted = this.#streamingHistory;
+		if (this.#historyFlush) {
+			// Retire the remaining tail once, without rewriting accepted history.
+			// Rewrap only these new rows when shutdown follows an unsettled resize.
+			const pending = document.slice(accepted?.rows.length ?? 0);
+			const chrome = after.flatMap(row => wrapTextWithAnsi(row, outputWidth));
+			const viewport = chrome.slice(Math.max(0, chrome.length - rows));
+			if (pending.length === 0 && !logicalHistory && !this.#streamingOffer) return { viewport };
+			const id = this.#streamingOffer?.id ?? logicalHistory?.id ?? this.#nextHistoryId++;
+			this.#streamingOffer = { id, rows: document, width };
+			return {
+				history: { id, rows: pending.flatMap(row => wrapTextWithAnsi(row, outputWidth)), kind: "append" },
+				viewport,
+			};
+		}
 		const capacity = Math.max(0, rows - after.length);
 		const cut = Math.max(0, document.length - capacity);
 		const prefix = document.slice(0, cut);
@@ -621,14 +631,11 @@ export class Composer implements TerminalFrameProvider {
 			mutable.length - drop,
 		);
 		const viewport = this.#paintHoverBand(mutable.slice(drop), spans);
-		const accepted = this.#streamingHistory;
 		// ponytail: full-history row comparison in opt-in mode; cache unchanged transcript prefixes if profiling shows a bottleneck.
 		const replacement =
-			accepted === undefined ||
 			this.#streamingReplayRequested ||
-			accepted.width !== width ||
-			!isRowPrefix(accepted.rows, prefix);
-		if (!replacement && accepted.rows.length === prefix.length && !logicalHistory && !this.#streamingOffer) {
+			(accepted !== undefined && (accepted.width !== width || !isRowPrefix(accepted.rows, prefix)));
+		if (!replacement && (accepted?.rows.length ?? 0) === prefix.length && !logicalHistory && !this.#streamingOffer) {
 			return { viewport };
 		}
 		const id = this.#streamingOffer?.id ?? logicalHistory?.id ?? this.#nextHistoryId++;
@@ -636,7 +643,7 @@ export class Composer implements TerminalFrameProvider {
 		return {
 			history: replacement
 				? { id, rows: prefix, kind: "replay", clearScrollback: true }
-				: { id, rows: prefix.slice(accepted.rows.length), kind: "append" },
+				: { id, rows: prefix.slice(accepted?.rows.length ?? 0), kind: "append" },
 			viewport,
 		};
 	}
@@ -1066,7 +1073,7 @@ export class Composer implements TerminalFrameProvider {
 		) {
 			this.#streamingHistory = undefined;
 			this.#streamingOffer = undefined;
-			this.#streamingReplayRequested = true;
+			this.#streamingReplayRequested ||= this.#runtimeChildren.some(child => child instanceof TranscriptContainer);
 		}
 		this.ui.removeChild(this.#statusHost);
 		if (this.#runtimeMounted) {

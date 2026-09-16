@@ -35,6 +35,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 - **Decision:** Keep the `/debate` plan workflow: an independent read-only reviewer must reach exact-byte consensus on the plan before human approval, capped at `plan.debateMaxRounds` with deadlock escalation.
 - **Decision:** Extend the contract through execution: after debate approval, the agent submits the finished implementation through `xd://propose` and the reviewer must accept it (toggle: `plan.implReview`, default on).
+- **Decision:** Restore active and paused debate state in ACP after session load, including consensus and interrupted reviews.
 - **Why:** Upstream plan mode ends at human approval; this fork wants machine review on both the plan and its implementation with the human as the escalation path.
 - **Key paths:** `packages/coding-agent/src/plan-mode/state.ts`, `packages/coding-agent/src/plan-mode/debate.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/modes/acp/acp-agent.ts`, `packages/coding-agent/src/prompts/agents/impl-reviewer.md`, and `docs/debate-plan-mode.md`.
 - **Checks:** `packages/coding-agent/test/plan-mode/debate.test.ts`, `packages/coding-agent/test/plan-mode/impl-review.test.ts`, `packages/coding-agent/test/agent-session-impl-review.test.ts`, `packages/coding-agent/test/interactive-mode-impl-review.test.ts`, and `packages/coding-agent/test/acp-agent.test.ts`.
@@ -55,6 +56,14 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Key path:** `packages/coding-agent/src/modes/interactive-mode.ts`.
 - **Check:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts`.
 
+### Working message timer
+
+- **Decision:** Show elapsed turn time on the working row with `tui.workingTimer` (default: `true`).
+- **Decision:** Use `tui.workingTimerMinSeconds` (default: `0`) to delay the timer. Hide it when the status brand already shows one.
+- **Why:** Users need turn duration when the selected footer omits the status brand.
+- **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/utils/src/format.ts`.
+- **Checks:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts` and `packages/utils/test/format.test.ts`.
+
 ### IDE selection and open-file context
 
 - **Decision:** Read IDE MCP notifications for selections and open files.
@@ -71,7 +80,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 - **Decision:** Let `tui.pinComposerBottom` keep the composer at the viewport bottom.
 - **Decision:** Preserve the pin after transcript history commits and cold startup.
-- **Decision:** Bill the pinned filler against the live chrome below the transcript, not upstream's retirement floor. That floor is a session-long minimum, so once the status host grows past its startup height it stays stale for the rest of the run, and a floor-derived spare pads the frame one row past what the writer anchored — every render then writes past the screen bottom and scrolls the frame up by one row.
+- **Decision:** Size filler from the current chrome and visible history. Let real content grow to full screen height and move older history into scrollback.
 - **Why:** A stable input position reduces visual movement in long sessions.
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts` and `packages/coding-agent/test/startup-composer.test.ts`.
@@ -80,6 +89,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 - **Decision:** Keep `display.streamingScrollback` as an opt-in setting, defaulting to `false`.
 - **Decision:** Render the full mutable Markdown transcript through atomic history replacements when earlier rows change.
+- **Decision:** Preserve existing shell history on startup. Shutdown appends the unretired tail without clearing or replaying accepted history.
 - **Decision:** Leave the default (disabled) mode on upstream's row-pressure retirement. A live append-only head still retires its finished rows to native history in one batch per cycle, so the default viewport follows upstream instead of holding unfinalized rows back. The fork adds the opt-in full-stream path and does not re-pace upstream's retirement.
 - **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/tui/src/tui.ts`.
@@ -120,9 +130,10 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Support named `modelProfiles` bundles for role models.
 - **Decision:** Support startup selection, cycling, CLI selection, and `/model-profile` changes.
 - **Decision:** Preserve project profiles during discovery reloads and restore the profile default after plan mode.
+- **Decision:** Nested session construction must not replace a live session's role bundle. Explicit session restoration still applies the incoming session's profile policy.
 - **Why:** One action must switch the complete role-model set for a workflow.
 - **Key paths:** `packages/coding-agent/src/config/model-roles.ts`, `packages/coding-agent/src/config/settings.ts`, `packages/coding-agent/src/session/model-controls.ts`, and `packages/coding-agent/src/session/agent-session.ts`.
-- **Checks:** `packages/coding-agent/test/agent-session-model-profiles.test.ts`, `packages/coding-agent/test/cli-model-profile-flag.test.ts`, and `packages/coding-agent/test/slash-commands/model-profile.test.ts`.
+- **Checks:** `packages/coding-agent/test/agent-session-model-profiles.test.ts`, `packages/coding-agent/test/sdk-nested-session-shared-settings.test.ts`, `packages/coding-agent/test/cli-model-profile-flag.test.ts`, and `packages/coding-agent/test/slash-commands/model-profile.test.ts`.
 
 ### Per-model compaction thresholds
 

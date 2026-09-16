@@ -131,12 +131,10 @@ export interface ViewportSize {
 	readonly columns: number;
 	readonly rows: number;
 	/**
-	 * Screen rows already occupied by anchored native history above the
-	 * mutable viewport (see `#providerViewportTop`), 0 before anything has
-	 * committed. Only populated for the main `renderFrame` call — a provider
-	 * padding its returned viewport must keep `viewport.length` within
-	 * `rows - historyRows` or the writer's anchor math clamps backward over
-	 * already-committed rows on the next write, overwriting them.
+	 * Visible committed rows above the mutable viewport, initially zero.
+	 * Only populated for the main `renderFrame` call. Limit filler to the
+	 * remaining `rows - historyRows` space. Real content can exceed that
+	 * space: the writer scrolls older committed rows into native scrollback.
 	 */
 	readonly historyRows?: number;
 }
@@ -1945,16 +1943,12 @@ export class TUI extends Container {
 		while (true) {
 			let plan: TerminalFramePlan;
 			let viewport: string[];
-			let repeat: boolean;
 			do {
 				this.#imageBudget.beginPass();
 				plan = provider.renderFrame({ columns: width, rows: height });
 				viewport = Array.from(plan.viewport);
 				if (viewport.length > height) viewport = viewport.slice(0, height);
-				const imagePass = this.#imageBudget.endPass();
-				const replacement = this.#prepareHistoryReplacement(plan.history);
-				repeat = imagePass || replacement;
-			} while (repeat);
+			} while (this.#imageBudget.endPass());
 			if (plan.history === undefined) return;
 			const acceptedBefore = this.#acceptedHistoryBatchId;
 			this.#emitPlanFrame(width, height, viewport, plan.history, provider);
