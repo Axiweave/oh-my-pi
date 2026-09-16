@@ -4,13 +4,16 @@ import * as url from "node:url";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CustomEditor } from "@oh-my-pi/pi-coding-agent/modes/components/custom-editor";
-import { UserMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/user-message";
+import {
+	CollapsedSyntheticMessageComponent,
+	UserMessageComponent,
+} from "@oh-my-pi/pi-coding-agent/modes/components/user-message";
 import { chipLabel } from "@oh-my-pi/pi-coding-agent/modes/composer-attachments";
 import { imageReferenceHyperlink } from "@oh-my-pi/pi-coding-agent/modes/image-references";
 import { getEditorTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import { Container } from "@oh-my-pi/pi-tui";
+import { Container, visibleWidth } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -53,32 +56,6 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 		const raw = render("intro\n```\norchestrate\n```");
 		expect(Bun.stripANSI(raw)).toContain("orchestrate");
 		expect(raw).toContain("orchestrate");
-	});
-
-	it("closes the OSC 133 prompt zone and leaves no command zone open", () => {
-		const raw = render("first line\nsecond line");
-		expect(raw).toContain("\x1b]133;A\x07");
-		expect(raw).toContain("\x1b]133;B\x07");
-		// #8030: the command-start marker is required. Terminals latch a sticky
-		// `.input` cursor semantic on 133;B that only 133;C clears; without it every
-		// later cell stays tagged as prompt input and click-to-move injects arrow
-		// keys into the pty.
-		expect(raw).toContain("\x1b]133;C\x07");
-		// ...but the zone is closed inside the same render, so terminals still cannot
-		// group later assistant/tool output under the submitted prompt.
-		expect(raw).toContain("\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07");
-		expect(raw.endsWith("\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07")).toBe(true);
-		// Exactly one balanced command zone per bubble.
-		expect(countOccurrences(raw, "\x1b]133;C\x07")).toBe(1);
-		expect(countOccurrences(raw, "\x1b]133;D;0\x07")).toBe(1);
-	});
-
-	it("closes the OSC 133 command zone for a single-line message too", () => {
-		const raw = render("only line");
-		expect(raw).toContain("\x1b]133;A\x07");
-		expect(raw.endsWith("\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07")).toBe(true);
-		expect(countOccurrences(raw, "\x1b]133;C\x07")).toBe(1);
-		expect(countOccurrences(raw, "\x1b]133;D;0\x07")).toBe(1);
 	});
 
 	it("collapses image markers to identity-colored chip tokens in the rendered bubble", () => {
@@ -187,5 +164,65 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 		expect(Bun.stripANSI(raw)).toContain("[Image #1, 800x600]");
 		expect(raw).toContain("\x1b]8;id=");
 		expect(raw).toContain(imageUri);
+	});
+});
+
+describe("UserMessageComponent OSC 133 prompt zone", () => {
+	const OSC_A = "\x1b]133;A\x07";
+	const OSC_B = "\x1b]133;B\x07";
+	const OSC_C = "\x1b]133;C\x07";
+	const OSC_D = "\x1b]133;D;0\x07";
+	const OSC_ANY = /\x1b\]133;[^\x07]*\x07/g;
+	const seed = 0x133;
+
+	it.each([8, 24, 80])("marks one input without changing its presentation at width=%s, seed=307", width => {
+		// Conservation and bounds: markers preserve visible rows and exclude padding.
+		const texts = [0, 1, width - 2, width - 1, 2 * width + 1].map(length =>
+			Array.from({ length }, (_, i) => String.fromCharCode(97 + ((seed + i) % 26))).join(""),
+		);
+		texts.push(" \n \n ", "first line\nsecond line\nthird line", "中文 café\nnext line", "# Heading\n\nBody");
+		for (const text of texts) {
+			const detail = `seed=${seed}, width=${width}, text=${JSON.stringify(text)}`;
+			const rows = new UserMessageComponent(text).render(width);
+			const plain = rows.map(row => Bun.stripANSI(row));
+			const synthetic = new UserMessageComponent(text, { synthetic: true }).render(width);
+			expect(plain, detail).toEqual(synthetic.map(row => Bun.stripANSI(row)));
+			expect(synthetic.join(""), detail).not.toContain("\x1b]133;");
+			const first = plain.findIndex(row => row.trim().length > 0);
+			const last = plain.findLastIndex(row => row.trim().length > 0);
+			const markers = Array.from(rows.join("").matchAll(OSC_ANY), match => match[0]);
+			expect(markers, detail).toEqual(first < 0 ? [] : [OSC_A, OSC_B, OSC_C, OSC_D]);
+			if (first < 0) continue;
+			const start = rows[first]!;
+			expect(start.indexOf(OSC_A), detail).toBe(0);
+			expect(visibleWidth(start.slice(OSC_A.length, start.indexOf(OSC_B))), detail).toBe(1);
+			expect(rows[last]!.endsWith(OSC_C + OSC_D), detail).toBe(true);
+			for (let index = 0; index < rows.length; index++) {
+				if (index !== first && index !== last) expect(rows[index], detail).not.toContain("\x1b]133;");
+			}
+		}
+	});
+
+	it("keeps reactions outside the input boundary, including synthetic bubbles", () => {
+		for (const synthetic of [false, true]) {
+			const bubble = new UserMessageComponent("only line", { synthetic });
+			bubble.setReaction("\u{1F44D}");
+			const rows = bubble.render(80);
+			expect(rows[0]).toContain("\u{1F44D}");
+			expect(rows[0]).not.toContain("\x1b]133;");
+			expect(countOccurrences(rows.join(""), OSC_A)).toBe(synthetic ? 0 : 1);
+		}
+	});
+
+	it("keeps one prompt zone when a command body expands and collapses", () => {
+		const card = new CollapsedSyntheticMessageComponent("body line\nmore body", undefined, "/tmpl a b", true);
+		const collapsed = card.render(80).join("\n");
+		for (const expanded of [true, false]) {
+			card.setExpanded(expanded);
+			const raw = card.render(80).join("\n");
+			expect(Array.from(raw.matchAll(OSC_ANY), match => match[0])).toEqual([OSC_A, OSC_B, OSC_C, OSC_D]);
+			expect(Bun.stripANSI(raw).includes("body line")).toBe(expanded);
+			if (!expanded) expect(raw).toBe(collapsed);
+		}
 	});
 });

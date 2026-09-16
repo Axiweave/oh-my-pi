@@ -1,4 +1,12 @@
-import { applyBackgroundToLine, type Component, Container, Markdown, padding, visibleWidth } from "@oh-my-pi/pi-tui";
+import {
+	applyBackgroundToLine,
+	type Component,
+	Container,
+	Markdown,
+	padding,
+	sliceByColumn,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import { ensureThemeSync, getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { attachmentSgr, collapseImageMarkers, renderPlaceholders, skillChipStyle } from "../composer-attachments";
@@ -8,33 +16,22 @@ import { highlightMagicKeywords } from "../magic-keywords";
 import type { ReactionTarget } from "./reaction";
 import { DynamicBorder } from "./dynamic-border";
 
-// OSC 133 shell integration: marks prompt zones for terminal multiplexers.
-//
-// The zone must be *closed* within the same render. `133;B` sets a sticky
-// cursor semantic of `.input` in Ghostty (and Ghostty-derived terminals such
-// as cmux) that only a command-start marker clears; leaving it latched makes
-// `cursorIsAtPrompt()` permanently true and tags every subsequently painted
-// cell as `.input`. Combined with `cursor-click-to-move = true` (Ghostty's
-// default) that turns every left-click inside the pane into a burst of
-// synthesized arrow keys on omp's pty, slamming the editor caret to column 0
-// (#8030, #6115).
-//
-// `133;C` is therefore emitted immediately followed by `133;D;0` at the end of
-// the bubble. That clears the input state without reintroducing the grouping
-// problem the marker was originally omitted to avoid: the command zone opens
-// and finishes inside this component, so later assistant/tool output can never
-// be grouped under the first submitted prompt.
-const OSC133_ZONE_START = "\x1b]133;A\x07";
-const OSC133_ZONE_END = "\x1b]133;B\x07";
+// OSC 133 marks one submitted input, excluding the bubble's padding.
+// A precedes the one-column margin; B precedes the first content row's text.
+// Continuation rows remain input until C/D close after the last content row.
+// Close the input state in the same render so Ghostty click-to-move cannot
+// mistake later output for active shell input (#8030, #6115).
+const OSC133_PROMPT_START = "\x1b]133;A\x07";
+const OSC133_INPUT_START = "\x1b]133;B\x07";
 const OSC133_COMMAND_START = "\x1b]133;C\x07";
 const OSC133_COMMAND_DONE = "\x1b]133;D;0\x07";
-const OSC133_ZONE_CLOSE = OSC133_ZONE_END + OSC133_COMMAND_START + OSC133_COMMAND_DONE;
+const OSC133_COMMAND_CLOSE = OSC133_COMMAND_START + OSC133_COMMAND_DONE;
 
 /** How a user bubble styles its prose and chips (see {@link userBubbleColor}). */
 export interface UserBubbleOptions {
 	/** Materialized `file://` targets per attached image, indexed by chip number. */
 	imageLinks?: readonly (string | undefined)[];
-	/** Agent-attributed input: dim, flat prose. */
+	/** Agent-attributed input: dim, flat prose, and no OSC 133 prompt zone. */
 	synthetic?: boolean;
 	/** SKILL.md path for a skill chip by name; `undefined` leaves the chip unlinked. */
 	skillPath?: (name: string) => string | undefined;
@@ -93,10 +90,12 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 	#zoneLines: string[] | undefined;
 	readonly #bgColor: (value: string) => string;
 	#reaction: string | undefined;
+	readonly #synthetic: boolean;
 
 	constructor(text: string, options: UserBubbleOptions = {}) {
 		super();
 		ensureThemeSync();
+		this.#synthetic = options.synthetic ?? false;
 		// Display-only collapse: the stored/wire text carries bracketed `[Image #N, WxH]` markers,
 		// but the transcript shows the same compact `<icon> #N` chip the composer used. Runs before
 		// Markdown layout so wrapping and bubble padding are computed on the visible text.
@@ -125,7 +124,7 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 
 	override render(width: number): readonly string[] {
 		const lines = super.render(width);
-		if (lines.length === 0) {
+		if (lines.length === 0 || (this.#synthetic && this.#reaction === undefined)) {
 			return lines;
 		}
 		if (this.#zoneSource === lines && this.#zoneLines !== undefined) {
@@ -133,8 +132,15 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 		}
 		const wrapped = lines.slice();
 		if (this.#reaction !== undefined) wrapped[0] = this.#reactionRow(width);
-		wrapped[0] = OSC133_ZONE_START + wrapped[0];
-		wrapped[wrapped.length - 1] = wrapped[wrapped.length - 1] + OSC133_ZONE_CLOSE;
+		// Markdown has one padding row above and below, independent of reactions.
+		const firstContent = 1;
+		const lastContent = wrapped.length - 2;
+		if (!this.#synthetic && lastContent >= firstContent) {
+			const row = wrapped[firstContent];
+			const prefix = sliceByColumn(row, 0, 1);
+			wrapped[firstContent] = OSC133_PROMPT_START + prefix + OSC133_INPUT_START + row.slice(prefix.length);
+			wrapped[lastContent] = wrapped[lastContent] + OSC133_COMMAND_CLOSE;
+		}
 		this.#zoneSource = lines;
 		this.#zoneLines = wrapped;
 		return wrapped;

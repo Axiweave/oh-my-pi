@@ -160,3 +160,11 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Why:** Editors such as claude-code-ide.el drive the composer through these packets instead of terminal keystrokes, and a command queued for the next yield must stay visible and reach the message body. Upstream has no packet intake, no leading-command editor API, and no recognition ranges.
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/queue-input.ts`, `packages/coding-agent/src/modes/components/custom-editor.ts`, `packages/tui/src/components/editor.ts`, and `packages/tui/src/autocomplete.ts`.
 - **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/coding-agent/test/modes/components/custom-editor.test.ts`, and `packages/tui/test/editor.test.ts`.
+
+### OSC 133 prompt markers on submitted messages
+
+- **Decision:** Emit OSC 133 `A` before the first content row's one-column margin and `B` before its text. Close `C` and `D;0` after the last content row.
+- **Decision:** Leave padding outside the prompt zone. Empty messages and synthetic bodies emit no prompt markers.
+- **Why:** Ghostel navigation must find one input boundary per submitted message, not a separate prompt on each rendered row.
+- **Key paths:** `packages/coding-agent/src/modes/components/user-message.ts`.
+- **Checks:** `packages/coding-agent/test/modes/components/user-message-keywords.test.ts`.

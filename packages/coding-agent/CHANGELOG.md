@@ -33,6 +33,7 @@
 - Fixed a crash when a module graph reached the transcript formatter before `session/messages` finished loading. `PRIMARY_CONTEXT_CUSTOM_TYPES` read an imported constant while its own module body ran, and the import cycle through `config/settings` made that read throw (`Cannot access 'CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE' before initialization`). The set is now built on first use, behind `isPrimaryContextCustomType()`.
 - Fixed dismissing an extension dialog throwing when its context carries no session view. The IDE `session_state_changed` publisher runs inside the dialog's settle handler, so it now reads a missing session or transcript as `idle` instead of failing the dismissal.
 - Fixed the transcript rebuild throwing `Settings not initialized` when a host renders chat rows before `Settings.init()`. Both command-card render gates now fall back to the `display.collapseCommandCards` schema default.
+- Fixed Ghostel prompt navigation landing on blank padding instead of the first input character, including multiline prompts. Synthetic messages and expanded command bodies no longer create extra prompt markers.
 
 ## [18.2.2] - 2026-09-16
 
