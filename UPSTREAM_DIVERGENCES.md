@@ -98,7 +98,8 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 ### Collapsed command cards
 
-- **Decision:** Collapse expanded prompt-template and file slash-command submissions into one-line `/name` transcript cards; ctrl+o shows the body.
+- **Decision:** Show submitted prompt-template and file commands in bordered normal-prompt blocks with terminal prompt markers.
+- **Decision:** Keep the command, size, line count, and `ctrl+o` summary below. Hide the expanded template body until `ctrl+o`.
 - **Decision:** Gate both card kinds at render time with `display.collapseCommandCards` (default on).
 - **Why:** The transcript should show the submitted command without repeating expanded template text.
 - **Key paths:** `packages/coding-agent/src/config/prompt-templates.ts`, `packages/coding-agent/src/extensibility/slash-commands.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/modes/components/user-message.ts`, `packages/coding-agent/src/modes/components/chat-transcript-builder.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.

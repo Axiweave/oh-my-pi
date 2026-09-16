@@ -314,6 +314,7 @@ export class UiHelpers {
 							textContent,
 							imageLinks,
 							(message.role === "user" && message.promptTemplateInput) || `/${templateName}`,
+							true,
 						);
 						userComponent.setExpanded(this.ctx.toolOutputExpanded);
 					} else if (cached instanceof UserMessageComponent) {

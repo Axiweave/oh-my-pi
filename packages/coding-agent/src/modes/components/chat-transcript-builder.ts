@@ -327,6 +327,7 @@ export class ChatTranscriptBuilder {
 							templateName
 								? (message.role === "user" && message.promptTemplateInput) || `/${templateName}`
 								: undefined,
+							!!templateName && !isSynthetic,
 						);
 						this.#trackExpandable(collapsed);
 						this.container.addChild(collapsed);

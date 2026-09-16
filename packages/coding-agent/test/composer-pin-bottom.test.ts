@@ -191,7 +191,7 @@ describe("Composer#renderFrame pinBottom", () => {
 			composer.setRuntimeChildren([transcript, new Footer(chrome)]);
 			composer.start({ playWelcomeIntro: false });
 			await scheduler.settle(terminal);
-			transcript.addChild(new CollapsedSyntheticMessageComponent("task prompt", undefined, "/speckit.tasks"));
+			transcript.addChild(new CollapsedSyntheticMessageComponent("task prompt", undefined, "/speckit.tasks", true));
 			const toolRows = ["READ .specify/extensions.yml", ...Array.from({ length: 8 }, (_, i) => `BASH_OUTPUT_${i}`)];
 			transcript.addChild(new Block(toolRows, true));
 			chrome.unshift("TODO", "TASK_1", "TASK_2", "TASK_3", "WORKING");
@@ -220,7 +220,7 @@ describe("Composer#renderFrame pinBottom", () => {
 				composer.ui.requestRender();
 				await scheduler.settle(terminal);
 				const buffer = terminal.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
-				expect(buffer.filter(row => row.includes("/speckit.tasks"))).toHaveLength(1);
+				expect(buffer.filter(row => row.includes("/speckit.tasks"))).toHaveLength(2);
 				expect(buffer.filter(row => /^(COMMITTED_|READ |BASH_OUTPUT_)/.test(row))).toEqual([
 					...committed,
 					...toolRows,
@@ -230,7 +230,7 @@ describe("Composer#renderFrame pinBottom", () => {
 			composer.ui.requestRender();
 			await scheduler.settle(terminal);
 			const buffer = terminal.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
-			expect(buffer.filter(row => row.includes("/speckit.tasks"))).toHaveLength(1);
+			expect(buffer.filter(row => row.includes("/speckit.tasks"))).toHaveLength(2);
 			expect(buffer.filter(row => /^(COMMITTED_|READ |BASH_OUTPUT_)/.test(row))).toEqual([
 				...committed,
 				...toolRows,

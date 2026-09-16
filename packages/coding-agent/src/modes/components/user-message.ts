@@ -6,6 +6,7 @@ import { fileHyperlink } from "../../tui";
 import { imageReferenceHyperlink } from "../image-references";
 import { highlightMagicKeywords } from "../magic-keywords";
 import type { ReactionTarget } from "./reaction";
+import { DynamicBorder } from "./dynamic-border";
 
 // OSC 133 shell integration: marks prompt zones for terminal multiplexers.
 //
@@ -147,24 +148,31 @@ export class UserMessageComponent extends Container implements ReactionTarget {
  * blocked the TUI for tens of seconds while every historical body was laid out
  * before the viewport clip (issue #6308).
  *
- * Collapsed by default: renders one dim summary row (label · size · line count ·
- * expand hint) and builds NO Markdown. The heavy {@link UserMessageComponent} is
- * constructed lazily only when expanded via `ctrl+o`, so blocks above the
- * viewport never pay layout cost until the reader asks to see them. The raw
- * observability data stays intact in `__advisor.jsonl`.
+ * Synthetic inputs render one dim summary row without laying out the body.
+ * Command cards also show the submitted command in a normal prompt above it.
+ * The expanded body stays lazy until `ctrl+o`; raw synthetic observability
+ * data stays intact in `__advisor.jsonl`.
  */
 export class CollapsedSyntheticMessageComponent implements Component {
 	#expanded = false;
 	#cache?: { width: number; lines: readonly string[] };
 	#body?: UserMessageComponent;
+	readonly #prompt?: Container;
 	readonly #summary: string;
 
 	constructor(
 		private readonly text: string,
 		private readonly imageLinks?: readonly (string | undefined)[],
 		label?: string,
+		commandCard = false,
 	) {
 		this.#summary = summarizeSyntheticInput(text, label);
+		if (commandCard && label) {
+			this.#prompt = new Container();
+			this.#prompt.addChild(new DynamicBorder());
+			this.#prompt.addChild(new UserMessageComponent(label));
+			this.#prompt.addChild(new DynamicBorder());
+		}
 	}
 
 	/** ctrl+o toggle: reveal/hide the full Markdown body. */
@@ -177,16 +185,20 @@ export class CollapsedSyntheticMessageComponent implements Component {
 	invalidate(): void {
 		this.#cache = undefined;
 		this.#body?.invalidate?.();
+		this.#prompt?.invalidate();
 	}
 
 	dispose(): void {
 		this.#body?.dispose?.();
+		this.#prompt?.dispose();
 	}
 
 	render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		if (this.#cache?.width === width) return this.#cache.lines;
-		const lines = this.#expanded ? this.#renderExpanded(width) : [` ${this.#summaryRow(width)}`];
+		const lines = this.#prompt ? [...this.#prompt.render(width)] : [];
+		lines.push(` ${this.#summaryRow(width)}`);
+		if (this.#expanded) lines.push(...this.#renderExpanded(width));
 		this.#cache = { width, lines };
 		return lines;
 	}
@@ -194,7 +206,7 @@ export class CollapsedSyntheticMessageComponent implements Component {
 	#renderExpanded(width: number): readonly string[] {
 		if (!this.#body)
 			this.#body = new UserMessageComponent(this.text, { synthetic: true, imageLinks: this.imageLinks });
-		return [` ${this.#summaryRow(width)}`, ...this.#body.render(width)];
+		return this.#body.render(width);
 	}
 
 	#summaryRow(width: number): string {
