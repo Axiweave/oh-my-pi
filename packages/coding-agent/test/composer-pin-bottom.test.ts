@@ -116,4 +116,54 @@ describe("Composer#renderFrame pinBottom", () => {
 		const plan = composer.renderFrame({ columns: 40, rows: 8, historyRows: 6 });
 		expect(plan.viewport).toEqual(["line-a", "> prompt"]);
 	});
+
+	it("bills filler against the live chrome, not a stale retirement floor", () => {
+		// The retirement floor is a session-long minimum: a transient tall editor
+		// or dialog below the transcript must not permanently commit transcript
+		// rows. That floor therefore stays below the live chrome once the status
+		// host grows a row and never returns to its startup height — as it does
+		// during every real launch, where the status host renders 2 rows while
+		// the session loads and 3 after. A filler measured from the floor's
+		// capacity then claims one row more than the writer anchored, so each
+		// render writes past the screen bottom and scrolls the whole frame up
+		// by one row (the "text buffer keeps scrolling up" launch bug).
+		const composer = makeComposer(true);
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Block(["line-a"]));
+		const status = new Footer(["status"]);
+		composer.setRuntimeChildren([transcript, status]);
+
+		// Frame 1 captures the floor while the chrome below the transcript is
+		// one row tall.
+		composer.renderFrame({ columns: 40, rows: 8 });
+
+		// The chrome grows a row; the floor stays put.
+		composer.setRuntimeChildren([transcript, status, new Footer(["extra"])]);
+		const plan = composer.renderFrame({ columns: 40, rows: 8, historyRows: 3 });
+
+		// 8 screen rows - 3 already anchored = 5 rows for the live tail, filled
+		// exactly so the footer group stays glued to the screen bottom.
+		expect(plan.viewport).toEqual(["line-a", "", "", "status", "extra"]);
+	});
+
+	it("keeps the live tail inside the anchor budget when the chrome alone overflows it", () => {
+		// A pending attachment band (image chips) is several rows of chrome below
+		// the transcript, and it is not padding: it must survive the fit. Clipping
+		// the composed tail against the full screen height instead of the rows the
+		// writer has left returns a frame one or more rows past the screen bottom,
+		// and every render then scrolls the previous live prompt into native
+		// scrollback.
+		const composer = makeComposer(true);
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Block(["prompt-line", "reply-line"]));
+		const chips = new Footer(["chip-1", "chip-2", "chip-3", "chip-4", "chip-5", "chip-6"]);
+		composer.setRuntimeChildren([transcript, chips]);
+
+		// 8 screen rows - 3 already anchored = 5 rows. The clip eats the oldest
+		// rows first — both transcript rows, then the band's head — so the frame
+		// claims exactly the 5 rows the writer has left instead of spilling.
+		const plan = composer.renderFrame({ columns: 40, rows: 8, historyRows: 3 });
+		expect(plan.viewport.length).toBeLessThanOrEqual(8 - 3);
+		expect(plan.viewport).toEqual(["chip-2", "chip-3", "chip-4", "chip-5", "chip-6"]);
+	});
 });

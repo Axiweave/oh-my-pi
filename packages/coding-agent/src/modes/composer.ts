@@ -492,10 +492,23 @@ export class Composer implements TerminalFrameProvider {
 		// pre-offer geometry, not the anchor the writer will settle on after
 		// appending it.
 		if (this.#preferences.pinBottom && history === undefined) {
-			const spareCapacity = Math.max(0, capacity - historyTop);
+			// Fill up to the rows the writer actually has left, not to a capacity
+			// derived from `belowFloor`: that floor is a session-long minimum (see
+			// the retirement comment above), so the live chrome can sit a row or
+			// more above it for the rest of the run. A floor-derived spare then
+			// claims rows the writer anchored elsewhere, and the frame grows past
+			// the screen bottom by exactly that difference — one scroll per render.
+			const spareCapacity = Math.max(0, rows - before.length - after.length - historyTop);
 			if (active.length < spareCapacity) active = active.concat(new Array(spareCapacity - active.length).fill(""));
 		}
-		const drop = Math.max(0, before.length + active.length + after.length - rows);
+		// Fit the tail to the rows the writer has left below its anchor, not to the
+		// full screen height: `historyRows` rows already sit above the viewport, so
+		// a frame measured against `rows` writes past the screen bottom and every
+		// render scrolls a live prompt row into native scrollback. Non-padding
+		// chrome (a pending image-chip band) survives the clip; the transcript
+		// head absorbs it.
+		const availableRows = Math.max(0, rows - historyTop);
+		const drop = Math.max(0, before.length + active.length + after.length - availableRows);
 		const mutable = [...before, ...active, ...after].slice(drop);
 		const spans = this.#mapClickSpans(
 			activeSpans,

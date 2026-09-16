@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Fixed the whole frame scrolling up one row on every input once a session had anchored transcript rows to native scrollback. The pinned composer filler was measured against the retirement floor, which is a session-long minimum, so once the status host grew a row past its startup height (2 rows while the session loads, 3 after) the filler claimed one row more than the writer had anchored there. Every render then wrote one row past the screen bottom, pushing the oldest row into scrollback and stepping the writer's anchor up one row — permanently, since the next frame repeated the same overshoot. The filler now fills to the rows the writer actually has left, so the transcript stays put and the composer stays glued to the screen bottom.
 - `ESC _ pi:prompt;…` and `ESC _ pi:keyword;…` packets no longer land in front of a `->` / `=>` queue shorthand. The command or keyword now goes to the queued body — a prompt packet on a bare `->` keeps that header line and appends the body line holding `/compact …` — instead of `/compact -> …`. A command in the queued body also keeps the accent highlight a normal draft gives it, whether the body sits on the shorthand line or on the line below.
 - OMP now rediscovers the IDE endpoint and reconnects automatically when an editor restarts.
 - Collapsed command cards now show the full typed line (`/name arg1 arg2`) instead of dropping arguments behind just the command name.

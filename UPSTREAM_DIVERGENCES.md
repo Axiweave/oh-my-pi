@@ -71,6 +71,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 - **Decision:** Let `tui.pinComposerBottom` keep the composer at the viewport bottom.
 - **Decision:** Preserve the pin after transcript history commits and cold startup.
+- **Decision:** Bill the pinned filler against the live chrome below the transcript, not upstream's retirement floor. That floor is a session-long minimum, so once the status host grows past its startup height it stays stale for the rest of the run, and a floor-derived spare pads the frame one row past what the writer anchored — every render then writes past the screen bottom and scrolls the frame up by one row.
 - **Why:** A stable input position reduces visual movement in long sessions.
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts` and `packages/coding-agent/test/startup-composer.test.ts`.
