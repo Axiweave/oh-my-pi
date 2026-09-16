@@ -117,53 +117,66 @@ describe("Composer#renderFrame pinBottom", () => {
 		expect(plan.viewport).toEqual(["line-a", "> prompt"]);
 	});
 
-	it("bills filler against the live chrome, not a stale retirement floor", () => {
-		// The retirement floor is a session-long minimum: a transient tall editor
-		// or dialog below the transcript must not permanently commit transcript
-		// rows. That floor therefore stays below the live chrome once the status
-		// host grows a row and never returns to its startup height — as it does
-		// during every real launch, where the status host renders 2 rows while
-		// the session loads and 3 after. A filler measured from the floor's
-		// capacity then claims one row more than the writer anchored, so each
-		// render writes past the screen bottom and scrolls the whole frame up
-		// by one row (the "text buffer keeps scrolling up" launch bug).
-		const composer = makeComposer(true);
-		const transcript = new TranscriptContainer();
-		transcript.addChild(new Block(["line-a"]));
-		const status = new Footer(["status"]);
-		composer.setRuntimeChildren([transcript, status]);
+	const budgetCases = [
+		{ rows: 8, historyTop: 0, transcript: 1, chrome: 1 },
+		{ rows: 8, historyTop: 3, transcript: 2, chrome: 1 },
+		{ rows: 8, historyTop: 3, transcript: 2, chrome: 6 },
+		{ rows: 8, historyTop: 7, transcript: 3, chrome: 2 },
+		{ rows: 8, historyTop: 8, transcript: 2, chrome: 1 },
+		{ rows: 8, historyTop: 11, transcript: 2, chrome: 1 },
+		{ rows: 25, historyTop: 0, transcript: 0, chrome: 7 },
+		{ rows: 25, historyTop: 4, transcript: 40, chrome: 7 },
+		{ rows: 12, historyTop: 2, transcript: 5, chrome: 0 },
+	];
 
-		// Frame 1 captures the floor while the chrome below the transcript is
-		// one row tall.
-		composer.renderFrame({ columns: 40, rows: 8 });
+	it("keeps every pinned frame inside the writer's anchor budget", () => {
+		// The writer anchors `historyRows` rows above the viewport and writes the
+		// frame below them, so the frame may never claim more than the rows that
+		// are left. Two paths used to overshoot by exactly the difference between
+		// their budget and the real one: the filler was measured against the
+		// retirement floor — a session-long minimum that the live chrome outgrows
+		// for the rest of the run — and the composed tail was clipped against the
+		// full screen height. Each overshoot writes past the screen bottom, so
+		// every render scrolls the oldest live row into native scrollback.
+		for (const { rows, historyTop, transcript, chrome } of budgetCases) {
+			const label = `rows=${rows} history=${historyTop} transcript=${transcript} chrome=${chrome}`;
+			const budget = Math.max(0, rows - historyTop);
+			const composer = makeComposer(true);
+			const chat = new TranscriptContainer();
+			if (transcript > 0) {
+				chat.addChild(new Block(Array.from({ length: transcript }, (_, i) => `row-${i}`)));
+			}
+			const chromeRows = Array.from({ length: chrome }, (_, i) => `chrome-${i}`);
+			composer.setRuntimeChildren([chat, new Footer(chromeRows)]);
 
-		// The chrome grows a row; the floor stays put.
-		composer.setRuntimeChildren([transcript, status, new Footer(["extra"])]);
-		const plan = composer.renderFrame({ columns: 40, rows: 8, historyRows: 3 });
+			// A frame painted before the chrome settles captures the floor; the
+			// chrome then grows, which must not raise the frame's claim.
+			composer.renderFrame({ columns: 40, rows, historyRows: historyTop });
+			composer.setRuntimeChildren([chat, new Footer([...chromeRows, "chrome-extra"])]);
+			const plan = composer.renderFrame({ columns: 40, rows, historyRows: historyTop });
 
-		// 8 screen rows - 3 already anchored = 5 rows for the live tail, filled
-		// exactly so the footer group stays glued to the screen bottom.
-		expect(plan.viewport).toEqual(["line-a", "", "", "status", "extra"]);
-	});
-
-	it("keeps the live tail inside the anchor budget when the chrome alone overflows it", () => {
-		// A pending attachment band (image chips) is several rows of chrome below
-		// the transcript, and it is not padding: it must survive the fit. Clipping
-		// the composed tail against the full screen height instead of the rows the
-		// writer has left returns a frame one or more rows past the screen bottom,
-		// and every render then scrolls the previous live prompt into native
-		// scrollback.
-		const composer = makeComposer(true);
-		const transcript = new TranscriptContainer();
-		transcript.addChild(new Block(["prompt-line", "reply-line"]));
-		const chips = new Footer(["chip-1", "chip-2", "chip-3", "chip-4", "chip-5", "chip-6"]);
-		composer.setRuntimeChildren([transcript, chips]);
-
-		// 8 screen rows - 3 already anchored = 5 rows. The clip eats the oldest
-		// rows first — both transcript rows, then the band's head — so the frame
-		// claims exactly the 5 rows the writer has left instead of spilling.
-		const plan = composer.renderFrame({ columns: 40, rows: 8, historyRows: 3 });
-		expect(plan.viewport.length).toBeLessThanOrEqual(8 - 3);
-		expect(plan.viewport).toEqual(["chip-2", "chip-3", "chip-4", "chip-5", "chip-6"]);
+			expect(plan.viewport.length, label).toBeLessThanOrEqual(budget);
+			// Newest rows win and the chrome's last row keeps the bottom edge: the
+			// pin survives every budget, including one the chrome alone exhausts.
+			if (chrome > 0 && budget > 0) {
+				expect(plan.viewport.at(-1), label).toBe("chrome-extra");
+			}
+			// The overflow clips rows; it must never paint one twice.
+			const painted = plan.viewport.filter(row => row.trim().length > 0);
+			expect(new Set(painted).size, label).toBe(painted.length);
+			// Filler is only allowed to occupy rows the content cannot use: a live
+			// row dropped while filler sits in the frame leaves its previous paint
+			// on screen, since the frame no longer covers that row.
+			const content = plan.viewport.filter(row => row.startsWith("row-") || row.startsWith("chrome-")).length;
+			expect(content, label).toBe(Math.min(transcript + chromeRows.length + 1, budget));
+			// A larger budget never shows fewer rows.
+			const wider = composer.renderFrame({ columns: 40, rows: rows + 4, historyRows: historyTop });
+			expect(wider.viewport.length, label).toBeGreaterThanOrEqual(plan.viewport.length);
+			// With the pin on and nothing to retire, the tail fills whatever the
+			// writer left, so the composer group stays glued to the screen bottom
+			// instead of floating. A frame that offers history is the exception:
+			// its geometry describes the anchor before that batch is appended.
+			if (plan.history === undefined) expect(plan.viewport.length, label).toBe(budget);
+		}
 	});
 });
