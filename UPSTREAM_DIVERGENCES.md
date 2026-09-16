@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.2.0` on 2026-09-15.
+**Reviewed against:** `v18.2.2` on 2026-09-16.
 
 ## Maintenance
 
@@ -60,6 +60,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Read IDE MCP notifications for selections and open files.
 - **Decision:** Add the full file path to model reminders and show IDE state in the status footer.
 - **Decision:** Rediscover and reconnect the IDE MCP endpoint after the editor restarts.
+- **Decision:** Keep IDE-provider servers out of the generic lost-server retry schedule (`#lostRemoteServers`). The lockfile poll (`#scheduleIdeReconnectPoll`) owns discovery and pacing for the IDE bridge, so a second schedule would double every reconnect attempt.
 - **Decision:** Publish `session_state_changed` (`idle`, `working`, `needs-input`, `done`, `failed`) to the IDE MCP server at turn and modal-dialog boundaries, and re-announce it after every reconnect. Only the main session publishes: focusing a subagent sends nothing, and returning to main or closing an idle dialog re-announces how the main session's last turn ended instead of a blanket `idle`.
 - **Decision:** Carry the session working directory in every `session_state_changed` payload, and republish the unchanged state when the directory moves (`/wt`, `/move`, persistent `!cd`, cross-project `/resume`), so the editor can relabel a running session instead of showing its start directory.
 - **Why:** The model needs current editor context even when the editor or its endpoint restarts, and the editor needs the exact agent state instead of terminal-output guesses.
@@ -78,6 +79,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 - **Decision:** Keep `display.streamingScrollback` as an opt-in setting, defaulting to `false`.
 - **Decision:** Render the full mutable Markdown transcript through atomic history replacements when earlier rows change.
+- **Decision:** Leave the default (disabled) mode on upstream's row-pressure retirement. A live append-only head still retires its finished rows to native history in one batch per cycle, so the default viewport follows upstream instead of holding unfinalized rows back. The fork adds the opt-in full-stream path and does not re-pace upstream's retirement.
 - **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts` and `packages/tui/test/history-frame-plan.test.ts`.

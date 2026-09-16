@@ -265,6 +265,10 @@ export interface InteractiveModeContext {
 	/** True once `shutdown()` has started. Read-only from the context;
 	 *  controllers use this to skip work that races with teardown. */
 	readonly isShuttingDown: boolean;
+	/** True once a graceful `shutdown()` teardown failed at the dispose stage,
+	 *  so the next single Ctrl+C must escape (force-quit) rather than re-run the
+	 *  doomed teardown or merely clear the editor (#12238). */
+	readonly teardownFailed: boolean;
 	hookSelector: HookSelectorComponent | undefined;
 	hookInput: HookInputComponent | undefined;
 	hookEditor: HookEditorComponent | undefined;
@@ -281,6 +285,8 @@ export interface InteractiveModeContext {
 	shutdown(): Promise<void>;
 	/** Tear down like {@link shutdown}, then relaunch the CLI with the original launch flags, resuming this session. */
 	restart(): Promise<void>;
+	/** Request graceful shutdown at the next fully settled boundary, including background turns. */
+	requestShutdown(): void;
 	checkShutdownRequested(): Promise<void>;
 
 	// Extension UI integration
@@ -415,7 +421,7 @@ export interface InteractiveModeContext {
 	setTodos(todos: TodoItem[] | TodoPhase[]): void;
 	reloadTodos(source?: AgentSession): Promise<void>;
 	toggleTodoExpansion(): void;
-
+	setTodoExpanded(expanded: boolean): void;
 	// Command handling
 	handleExportCommand(text: string): Promise<void>;
 	handleTraceCommand(): Promise<void>;
@@ -435,7 +441,7 @@ export interface InteractiveModeContext {
 	handleClearCommand(): Promise<void>;
 	handleFreshCommand(): Promise<void>;
 	handleResetContextCommand(): Promise<void>;
-	handleDropCommand(): Promise<void>;
+	handleDeleteCommand(): Promise<void>;
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
@@ -553,6 +559,7 @@ export interface InteractiveModeContext {
 	): Promise<boolean>;
 	handleLoopCommand(args?: string): Promise<string | undefined>;
 	setLoopPrompt(prompt: string): void;
+	armLoopAutoSubmit(): void;
 	disableLoopMode(message?: string): void;
 	cancelGoalContinuation(): void;
 	disableGoalMode(message?: string): void;

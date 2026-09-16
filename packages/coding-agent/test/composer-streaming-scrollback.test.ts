@@ -162,14 +162,21 @@ describe("Composer streaming scrollback", () => {
 		},
 	);
 
-	it("keeps every streamed marker once when enabled and omits the earliest marker by default", async () => {
+	it("keeps every streamed marker once when enabled and confines the default viewport to the tail", async () => {
 		const disabled = makeRig({}, 40, 8);
 		const disabledAssistant = new AssistantMessageComponent();
 		disabled.transcript.addChild(disabledAssistant);
 		await streamNumberedParagraphs(disabled, disabledAssistant, 80);
-		// Legacy tail-only behavior: an unfinalized block never retires to
-		// history, so the earliest paragraph never reaches native scrollback.
-		expect(scrollBuffer(disabled.terminal).some(row => row.includes(markerText(0)))).toBe(false);
+		// Legacy tail-only behavior: the viewport shows the live tail only. Row
+		// pressure still retires the still-unfinalized block's finished rows to
+		// native history in one batch per cycle (upstream v18.2.2), so every
+		// paragraph reaches scrollback exactly once instead of the earliest ones
+		// being dropped off the top of the frame.
+		const disabledBuffer = scrollBuffer(disabled.terminal);
+		for (let i = 0; i < 80; i++) expect(countRows(disabledBuffer, markerText(i))).toBe(1);
+		const disabledViewport = disabledBuffer.slice(disabled.terminal.getBufferPosition().baseY);
+		expect(disabledViewport.some(row => row.includes(markerText(0)))).toBe(false);
+		expect(disabledViewport.some(row => row.includes(markerText(79)))).toBe(true);
 		disabled.composer.stop();
 
 		const enabled = makeRig({ streamingScrollback: true }, 40, 8);
@@ -311,14 +318,21 @@ describe("Composer streaming scrollback", () => {
 			await rig.scheduler.advance(rig.terminal, 200);
 			for (let i = 0; i < 30; i++) expect(countRows(scrollBuffer(rig.terminal), markerText(i))).toBe(1);
 
-			// Toggle off: tail-only behavior returns for the still-active message,
-			// so the earliest marker must no longer be visible anywhere.
+			// Toggle off: the viewport falls back to the tail-only form for the
+			// still-active message, so the earliest marker leaves the viewport. Its
+			// already-retired copy stays in native scrollback: upstream v18.2.2
+			// retires an overflowing append-only head's finished rows in bulk.
 			rig.composer.setPreferences({ streamingScrollback: false });
 			await settle(rig);
 			expect(rig.composer.editor.getText()).toBe("DRAFT_MARKER");
 			expect(countRows(scrollBuffer(rig.terminal), "DRAFT_MARKER")).toBe(1);
 			expect(historyRows(rig.terminal).some(row => row.includes("DRAFT_MARKER"))).toBe(false);
-			expect(scrollBuffer(rig.terminal).some(row => row.includes(markerText(0)))).toBe(false);
+			expect(countRows(scrollBuffer(rig.terminal), markerText(0))).toBe(1);
+			expect(
+				scrollBuffer(rig.terminal)
+					.slice(rig.terminal.getBufferPosition().baseY)
+					.some(row => row.includes(markerText(0))),
+			).toBe(false);
 
 			// Toggle back on: full-stream history returns without duplicating the draft.
 			rig.composer.setPreferences({ streamingScrollback: true });
