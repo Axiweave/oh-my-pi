@@ -266,15 +266,6 @@ export class Composer implements TerminalFrameProvider {
 	#retiredHeaderStart = 0;
 	#resizeRetiredHeaderStart: number | undefined;
 	#lastNormalRows = 0;
-	// Smallest below-transcript chrome height (editor + status + any transient
-	// inline dialog) seen since mount. Retirement is billed against this
-	// persistent baseline, never the transient peak, so a dialog or tall editor
-	// that later shrinks never leaves committed transcript rows the live viewport
-	// cannot reclaim (#11007). The baseline is terminal-height independent — the
-	// editor and status floors do not scale with rows — so it is retained across
-	// resizes rather than rediscovered from whatever chrome is expanded at the
-	// moment the height changes.
-	#retirementBelowFloor: number | undefined;
 	#lastInterruptAt = 0;
 	#started = false;
 	#stopped = false;
@@ -460,22 +451,16 @@ export class Composer implements TerminalFrameProvider {
 		// leaves the mutable viewport in the same frame it is appended, so its
 		// rows are never painted twice.
 		//
-		// Retirement is billed against the persistent below-transcript chrome
-		// baseline, not the transient peak: a confirmation dialog or a tall
-		// multi-line editor swapped in below the transcript clips the live tail
-		// for its lifetime, but must not permanently commit transcript rows to
-		// native history — otherwise a later shrink cannot refill the freed rows
-		// and the editor drifts up above a band of blank rows (#11007).
-		this.#retirementBelowFloor =
-			this.#retirementBelowFloor === undefined ? after.length : Math.min(this.#retirementBelowFloor, after.length);
-		const belowFloor = this.#retirementBelowFloor;
-		const history = this.#offerHistory(transcript, width, rows, preRoots.length + belowFloor);
+		// Retire against the current chrome height before clipping the viewport.
+		// A smaller historical height can hide settled rows without saving them.
+		// Pin-bottom padding uses the history anchor to absorb later chrome shrink.
+		const history = this.#offerHistory(transcript, width, rows, preRoots.length + after.length);
 		const headerVisible = !this.#headerRetired && this.#offeredHistory?.source !== "header";
 		const headerRows = headerVisible ? this.#header.render(width) : [];
 		const before = [...headerRows, ...preRoots];
 		const now = performance.now();
 		const frame: AnimationFrame = { now, tick: Math.floor(now / 80) };
-		const capacity = Math.max(0, rows - before.length - belowFloor);
+		const capacity = Math.max(0, rows - before.length - after.length);
 		let active = transcript.renderViewport(width, capacity, frame);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
@@ -497,8 +482,7 @@ export class Composer implements TerminalFrameProvider {
 		// pre-offer geometry, not the anchor the writer will settle on after
 		// appending it.
 		if (this.#preferences.pinBottom && history === undefined) {
-			// Use current chrome height, not the retirement floor, to avoid
-			// adding filler that forces another scroll on every repaint.
+			// Account for anchored history so filler never forces another scroll.
 			const spareCapacity = Math.max(0, rows - before.length - after.length - historyTop);
 			if (active.length < spareCapacity) active = active.concat(new Array(spareCapacity - active.length).fill(""));
 		}

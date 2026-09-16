@@ -81,16 +81,17 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Let `tui.pinComposerBottom` keep the composer at the viewport bottom.
 - **Decision:** Preserve the pin after transcript history commits and cold startup.
 - **Decision:** Size filler from the current chrome and visible history. Let real content grow to full screen height and move older history into scrollback.
+- **Decision:** Use the current chrome height for history retirement. Save displaced command and tool rows before clipping the viewport.
 - **Why:** A stable input position reduces visual movement in long sessions.
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
-- **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts` and `packages/coding-agent/test/startup-composer.test.ts`.
+- **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/coding-agent/test/composer-inline-shrink.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
 
 ### Full assistant text during streaming
 
 - **Decision:** Keep `display.streamingScrollback` as an opt-in setting, defaulting to `false`.
 - **Decision:** Render the full mutable Markdown transcript through atomic history replacements when earlier rows change.
 - **Decision:** Preserve existing shell history on startup. Shutdown appends the unretired tail without clearing or replaying accepted history.
-- **Decision:** Leave the default (disabled) mode on upstream's row-pressure retirement. A live append-only head still retires its finished rows to native history in one batch per cycle, so the default viewport follows upstream instead of holding unfinalized rows back. The fork adds the opt-in full-stream path and does not re-pace upstream's retirement.
+- **Decision:** Use row-pressure retirement by default, with capacity based on current chrome. A live append-only head retires finished rows to native history in one batch per cycle.
 - **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
 - **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts` and `packages/tui/test/history-frame-plan.test.ts`.

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
+import { CollapsedSyntheticMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/user-message";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-coding-agent/modes/composer";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { VirtualRenderScheduler } from "../../tui/test/virtual-render-scheduler";
@@ -169,7 +172,75 @@ describe("Composer#renderFrame pinBottom", () => {
 		}
 	});
 
-	it("does not scroll repeatedly after the status grows above its retirement floor", async () => {
+	it.each([false, true])(
+		"preserves command and tool rows during output after HUD growth with pinBottom=%s",
+		async pinBottom => {
+			// Conservation: every settled row stays exactly once in the viewport or native scrollback.
+			const terminal = new VirtualTerminal(90, 24, 1_000);
+			const scheduler = new VirtualRenderScheduler();
+			const composer = new Composer({
+				terminal,
+				tuiOptions: { renderScheduler: scheduler },
+				preferences: { quiet: true, pinBottom },
+			});
+			composers.push(composer);
+			const transcript = new TranscriptContainer();
+			const committed = Array.from({ length: 40 }, (_, i) => `COMMITTED_${i}`);
+			transcript.addChild(new Block(committed, true));
+			const chrome = ["EDITOR"];
+			composer.setRuntimeChildren([transcript, new Footer(chrome)]);
+			composer.start({ playWelcomeIntro: false });
+			await scheduler.settle(terminal);
+			transcript.addChild(new CollapsedSyntheticMessageComponent("task prompt", undefined, "/speckit.tasks"));
+			const toolRows = ["READ .specify/extensions.yml", ...Array.from({ length: 8 }, (_, i) => `BASH_OUTPUT_${i}`)];
+			transcript.addChild(new Block(toolRows, true));
+			chrome.unshift("TODO", "TASK_1", "TASK_2", "TASK_3", "WORKING");
+			const assistant = new AssistantMessageComponent();
+			transcript.addChild(assistant);
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: 1,
+			};
+			for (let count = 0; count <= 6; count++) {
+				const text = Array.from({ length: count }, (_, i) => `ASSISTANT_OUTPUT_${i}`).join("\n\n");
+				assistant.updateContent({ ...message, content: [{ type: "text", text }] }, { transient: true });
+				composer.ui.requestRender();
+				await scheduler.settle(terminal);
+				const buffer = terminal.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
+				expect(buffer.filter(row => row.includes("/speckit.tasks"))).toHaveLength(1);
+				expect(buffer.filter(row => /^(COMMITTED_|READ |BASH_OUTPUT_)/.test(row))).toEqual([
+					...committed,
+					...toolRows,
+				]);
+			}
+			chrome.splice(0, chrome.length, "EDITOR");
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			const buffer = terminal.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
+			expect(buffer.filter(row => row.includes("/speckit.tasks"))).toHaveLength(1);
+			expect(buffer.filter(row => /^(COMMITTED_|READ |BASH_OUTPUT_)/.test(row))).toEqual([
+				...committed,
+				...toolRows,
+			]);
+			expect(buffer.some(row => /^(TODO|TASK_|WORKING)/.test(row))).toBe(false);
+			if (pinBottom) expect(terminal.getViewport().at(-1)?.trimEnd()).toBe("EDITOR");
+		},
+	);
+
+	it("does not scroll repeatedly after the status grows", async () => {
 		const terminal = new VirtualTerminal(40, 8, 1_000);
 		const scheduler = new VirtualRenderScheduler();
 		const composer = new Composer({

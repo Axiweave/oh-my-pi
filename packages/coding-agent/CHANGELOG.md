@@ -21,6 +21,7 @@
 ### Fixed
 
 - Fixed growing transcript, Todo, and editor rows disappearing after history retirement, while keeping pinned input stable during typing.
+- Fixed command cards and completed tool output disappearing during assistant output after the Todo HUD or editor grows.
 - Fixed nested agent creation resetting the parent session's active model-profile roles.
 - Fixed ACP session reload losing active or paused debate state and reviewer consensus.
 - Fixed streaming-scrollback startup clearing existing shell history and shutdown clearing and replaying history after a resize.

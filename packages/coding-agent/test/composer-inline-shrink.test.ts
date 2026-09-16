@@ -88,29 +88,28 @@ describe("composer inline shrink (#11007)", () => {
 
 	it("retires transcript rows contiguously with no duplication or gaps across the grow/shrink cycle", async () => {
 		const h = makeHarness();
-		await cycleWidget(h);
-
-		// Every transcript row appears exactly once (native scrollback + live grid),
-		// in order — the shrink must not drop rows into a gap or duplicate them.
-		const indices = h.terminal
-			.getScrollBuffer()
-			.map(row => Bun.stripANSI(row).trimEnd())
-			.filter(row => row.startsWith(TRANSCRIPT_PREFIX))
-			.map(row => Number(row.slice(TRANSCRIPT_PREFIX.length)));
-		expect(indices).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
+		// Conservation holds during expansion too, not only after hidden rows can reappear.
+		for (const rows of [0, 24, 0]) {
+			h.widget.rows = rows;
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			const indices = h.terminal
+				.getScrollBuffer()
+				.map(row => Bun.stripANSI(row).trimEnd())
+				.filter(row => row.startsWith(TRANSCRIPT_PREFIX))
+				.map(row => Number(row.slice(TRANSCRIPT_PREFIX.length)));
+			expect(indices).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
+		}
 
 		h.composer.stop();
 	});
 
-	it("keeps the below-chrome baseline across a height resize while inline chrome is expanded", async () => {
+	it("keeps the editor pinned after a height resize while inline chrome is expanded", async () => {
 		const shorter = ROWS - 10;
 		const h = makeHarness();
 		await h.scheduler.settle(h.terminal);
 
-		// Expand, resize the terminal height *while still expanded*, then keep
-		// rendering before shrinking. The retirement baseline must not adopt the
-		// expanded peak at the resize, or the frames before the shrink retire
-		// rows the shrink cannot reclaim and the editor is stranded again.
+		// Resize while expanded, then shrink. The editor must remain at the bottom.
 		h.widget.rows = 24;
 		h.composer.ui.requestRender();
 		await h.scheduler.settle(h.terminal);
@@ -132,15 +131,11 @@ describe("composer inline shrink (#11007)", () => {
 		h.composer.stop();
 	});
 
-	it("clips the live tail from the top instead of compacting it when the chrome grows a few rows", async () => {
+	it("preserves transcript spacing when the chrome grows a few rows", async () => {
 		const h = makeHarness();
 		await h.scheduler.settle(h.terminal);
 
-		// A persistent few-row growth (multi-line prompt, todo HUD, subagent badge)
-		// lifts the chrome above the retirement baseline. The tail must scroll
-		// off the top like native history would — not collapse into the
-		// one-row-per-block emergency layout that drops every inter-block blank
-		// and strands the freed rows below the editor.
+		// Growth must preserve inter-block spacing rather than compress every block to one row.
 		h.widget.rows = 3;
 		h.composer.ui.requestRender();
 		await h.scheduler.settle(h.terminal);
