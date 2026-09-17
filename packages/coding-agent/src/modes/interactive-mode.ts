@@ -183,6 +183,7 @@ import { resumeCommand } from "../utils/resume-command";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
 import { startTerminalDirectoryReporting } from "../utils/terminal-directory";
 import { messageHasDisplayableThinking } from "../utils/thinking-display";
+import { TokenRateMeter } from "../utils/token-rate";
 import {
 	disposeTerminalTitleState,
 	initTerminalTitleState,
@@ -821,6 +822,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	streamingMessage: AssistantMessage | undefined = undefined;
 	lastAssistantUsage: Usage | undefined = undefined;
 	servedModelTracker = new ServedModelTracker();
+	tokenRate = new TokenRateMeter(text => this.session.agent.tokenizer.countTokens(text));
 	loadingAnimation: Loader | undefined = undefined;
 	autoCompactionLoader: Loader | undefined = undefined;
 	retryLoader: Loader | undefined = undefined;
@@ -848,18 +850,28 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (elapsed < settings.get("tui.workingTimerMinSeconds") * 1000) return undefined;
 		return `\x1b[2m${formatElapsed(elapsed)}\x1b[22m`;
 	}
-	/** Right-docked working-row suffix: band-mode session title, then the turn
-	 * timer, two cells apart. */
-	#workingRowTrailer(): string | undefined {
-		const title = this.#workingTitleTrailer();
-		const timer = this.#workingTimerTrailer();
-		if (title && timer) return `${title}  ${timer}`;
-		return title ?? timer;
+	/** Generation tok/s: live while streaming, the last reading between
+	 * turns, blank until a run has produced enough tokens to measure. */
+	#tokenRateLabel(): string | undefined {
+		if (!settings.get("composer.tokenRate")) return undefined;
+		const rate = this.tokenRate.rate();
+		if (rate === null) return undefined;
+		return theme.fg("dim", `${theme.icon.throughput} ${rate.toFixed(1)} tok/s`);
 	}
-	/** Idle stand-in for the working row in band mode: the docked title stays
-	 * readable between turns, in the same spot the loader's trailer uses. */
+	/** Right-docked working-row suffix: the tok/s readout, then the band-mode
+	 * session title, then the turn timer, two cells apart. */
+	#workingRowTrailer(): string | undefined {
+		const segments = [this.#tokenRateLabel(), this.#workingTitleTrailer(), this.#workingTimerTrailer()].filter(
+			(segment): segment is string => segment !== undefined,
+		);
+		if (segments.length === 0) return undefined;
+		return segments.join("  ");
+	}
+	/** Idle stand-in for the working row in band mode: the last tok/s reading
+	 * and the docked title stay readable between turns, in the same spot the
+	 * loader's trailer uses. */
 	renderIdleStatusHud(width: number): readonly string[] | undefined {
-		const trailer = this.#workingTitleTrailer();
+		const trailer = this.#workingRowTrailer();
 		if (!trailer) return undefined;
 		return ["", " ".repeat(Math.max(0, width - visibleWidth(trailer))) + trailer];
 	}
@@ -1086,6 +1098,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.streamingMessage = undefined;
 		this.lastAssistantUsage = undefined;
 		this.servedModelTracker = new ServedModelTracker();
+		this.tokenRate.reset();
 		this.pendingTools.clear();
 	}
 	readonly #uiHelpers: UiHelpers;

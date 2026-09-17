@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.2.3` on 2026-09-16.
+**Reviewed against:** `v18.2.4` on 2026-09-17.
 
 ## Maintenance
 
@@ -60,6 +60,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 - **Decision:** Show elapsed turn time on the working row with `tui.workingTimer` (default: `true`).
 - **Decision:** Use `tui.workingTimerMinSeconds` (default: `0`) to delay the timer. Hide it when the status brand already shows one.
+- **Decision:** Keep the working-row suffix order tok/s readout, session title, turn timer. The readout comes from upstream's `composer.tokenRate` (default off); the timer keeps its own gating beside it.
 - **Why:** Users need turn duration when the selected footer omits the status brand.
 - **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/utils/src/format.ts`.
 - **Checks:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts` and `packages/utils/test/format.test.ts`.
@@ -126,6 +127,15 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Why:** Stable preview geometry prevents the composer and transcript from moving during streamed arguments.
 - **Key path:** `packages/coding-agent/src/tools/write.ts`.
 - **Checks:** `packages/coding-agent/test/write-streaming-incremental.test.ts` and `packages/coding-agent/test/write-streaming-preview-expand.test.ts`.
+
+### Image identity keyed on content
+
+- **Decision:** Key terminal-graphics ids on the image bytes, not the placement site alone. Call sites embed `imageContentTag(image)` in the `imageKey` (assistant, tool, and bash images) or pass it as `contentTag` (composer attachment chips).
+- **Decision:** Keep `ImageBudget.acquireId(key, contentTag)`: a key names the placement site, and a changed tag supersedes the id so the new bytes transmit instead of the terminal redrawing the previous image.
+- **Decision:** Retire a superseded id like a demotion on the pass's own surface — cancel an unflushed transmit or queue `d=I` — and leave a copy resident on the other surface, plus its key, alone.
+- **Why:** A site whose bytes changed kept an id `shouldTransmit()` had already marked sent, so the terminal re-drew the earlier image forever. Upstream keys on the placement site and has no content tag.
+- **Key paths:** `packages/tui/src/components/image.ts`, `packages/coding-agent/src/modes/image-references.ts`, `packages/coding-agent/src/modes/components/assistant-message.ts`, `packages/coding-agent/src/modes/components/tool-execution.ts`, `packages/coding-agent/src/modes/components/bash-execution.ts`, and `packages/coding-agent/src/modes/components/attachment-chips.ts`.
+- **Checks:** `packages/tui/test/image-budget.test.ts` (`supersedes a key's id when its content tag changes so the new bytes transmit`, `cancels a superseded id's transmit instead of purging it when the bytes never flushed`).
 
 ### Model profiles
 
