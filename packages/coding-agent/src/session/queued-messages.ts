@@ -88,6 +88,7 @@ export function queueChipText(message: AgentMessage): string {
 	if (message.role === "custom") {
 		return readQueueChipText(message.details) ?? queuedTextContent(message) ?? "";
 	}
+	if (message.role === "user" && message.promptTemplateInput) return message.promptTemplateInput;
 	const text = queuedTextContent(message) ?? "";
 	if (text) return text;
 	return queuedImageContent(message) ? "[Image]" : "";

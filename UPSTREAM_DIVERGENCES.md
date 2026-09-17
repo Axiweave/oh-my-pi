@@ -102,9 +102,10 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Show submitted prompt-template and file commands in bordered normal-prompt blocks with terminal prompt markers.
 - **Decision:** Keep the command, size, line count, and `ctrl+o` summary below. Hide the expanded template body until `ctrl+o`.
 - **Decision:** Gate both card kinds at render time with `display.collapseCommandCards` (default on).
+- **Decision:** Preserve compact command cards for steering and follow-up messages. Queue labels and restored drafts use the original command and arguments.
 - **Why:** The transcript should show the submitted command without repeating expanded template text.
 - **Key paths:** `packages/coding-agent/src/config/prompt-templates.ts`, `packages/coding-agent/src/extensibility/slash-commands.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/modes/components/user-message.ts`, `packages/coding-agent/src/modes/components/chat-transcript-builder.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
-- **Check:** `packages/coding-agent/test/agent-session-command-card.test.ts`.
+- **Checks:** `packages/coding-agent/test/agent-session-command-card.test.ts` and `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`.
 
 ### Emacs-hosted resize behavior
 

@@ -22,6 +22,7 @@
 ### Fixed
 
 - Fixed queued file commands such as `-> /speckit.converge` reaching the model as literal text. Steering and follow-up messages now expand them.
+- Queued file commands and prompt templates now show the same compact command cards as composer input. Queue labels and restored drafts retain the original command and arguments.
 - Fixed `->`, `=>`, and `/queue` messages skipping `/skill:<name>` instructions.
 - Fixed compaction replay rejecting queued commands while busy or dropping their image attachments.
 - Fixed growing transcript, Todo, and editor rows disappearing after history retirement, while keeping pinned input stable during typing.

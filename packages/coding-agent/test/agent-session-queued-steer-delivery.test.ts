@@ -242,6 +242,8 @@ describe("AgentSession queued steer delivery", () => {
 			if (injected) return;
 			injected = true;
 			await session[mode]('/speckit.converge "two words"');
+			const queued = session.getQueuedMessages();
+			expect(mode === "steer" ? queued.steering : queued.followUp).toEqual(['/speckit.converge "two words"']);
 		});
 
 		await session.prompt("hello");
@@ -249,6 +251,14 @@ describe("AgentSession queued steer delivery", () => {
 
 		const message = mock.calls.at(-1)?.context.messages.findLast(message => message.role === "user");
 		expect(message?.content).toEqual([{ type: "text", text: "Review the remaining work: two words" }]);
+
+		// The live transcript and session reload must retain the compact invocation.
+		for (const messages of [session.state.messages, session.sessionManager.buildSessionContext().messages]) {
+			const queued = messages.findLast(message => message.role === "user");
+			if (queued?.role !== "user") throw new Error("Expected delivered queued command");
+			expect(queued.promptTemplate).toBe("review");
+			expect(queued.promptTemplateInput).toBe('/speckit.converge "two words"');
+		}
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 	});
 
@@ -269,6 +279,10 @@ describe("AgentSession queued steer delivery", () => {
 
 		const message = mock.calls.at(-1)?.context.messages.findLast(message => message.role === "user");
 		expect(message?.content).toEqual([{ type: "text", text: "/literal" }]);
+		const literal = session.state.messages.findLast(message => message.role === "user");
+		if (literal?.role !== "user") throw new Error("Expected literal queued command");
+		expect(literal.promptTemplate).toBeUndefined();
+		expect(literal.promptTemplateInput).toBeUndefined();
 	});
 
 	// Compaction replay must retain both command instructions and attachments while busy.

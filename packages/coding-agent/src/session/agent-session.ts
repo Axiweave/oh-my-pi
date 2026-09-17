@@ -6649,7 +6649,6 @@ export class AgentSession {
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
 		const typedText = text;
-		let matchedSlashCommand: FileSlashCommand | undefined;
 
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
@@ -6666,24 +6665,10 @@ export class AgentSession {
 				}
 				text = customResult;
 			}
-
-			// Try file-based slash commands (markdown files from commands/ directories)
-			// Only if text still starts with "/" (wasn't transformed by custom command)
-			if (text.startsWith("/")) {
-				matchedSlashCommand = resolveSlashCommand(text, this.#slashCommands);
-				text = expandSlashCommand(text, this.#slashCommands);
-			}
 		}
 
-		// Expand file-based prompt templates if requested; remember the match so the
-		// TUI can collapse the expanded body to a one-line card.
-		const templates = expandPromptTemplates ? [...this.#promptTemplates] : [];
-		const matchedPromptTemplate = resolvePromptTemplate(text, templates);
-		const templated = matchedPromptTemplate ? expandPromptTemplate(text, templates) : text;
+		const { expandedText: templated, commandCardName } = this.#expandFileCommand(text, expandPromptTemplates);
 		const expandedText = options?.synthetic ? templated : this.#modelMentions.expandMentions(templated);
-		// Name on the collapsed transcript card. A prompt template wins over a slash
-		// command: it is the later expansion when a command body itself is `/template`.
-		const commandCardName = matchedPromptTemplate?.name ?? matchedSlashCommand?.name;
 		// Raw typed line (with arguments) shown on the card so `/name abc` doesn't
 		// lose `abc` behind the collapsed one-line summary.
 		const commandCardInput = commandCardName ? typedText : undefined;
@@ -7496,6 +7481,19 @@ export class AgentSession {
 		}
 	}
 
+	/** Expand file commands before templates and retain the identity for command cards. */
+	#expandFileCommand(text: string, enabled = true): { expandedText: string; commandCardName?: string } {
+		if (!enabled) return { expandedText: text };
+		const matchedSlashCommand = resolveSlashCommand(text, this.#slashCommands);
+		const commandText = matchedSlashCommand ? expandSlashCommand(text, this.#slashCommands) : text;
+		const matchedPromptTemplate = resolvePromptTemplate(commandText, this.#promptTemplates);
+		return {
+			expandedText: matchedPromptTemplate ? expandPromptTemplate(commandText, this.#promptTemplates) : commandText,
+			// The later template expansion wins when a file command contains `/template`.
+			commandCardName: matchedPromptTemplate?.name ?? matchedSlashCommand?.name,
+		};
+	}
+
 	/**
 	 * Queue a steering message to interrupt the agent mid-run.
 	 */
@@ -7504,16 +7502,18 @@ export class AgentSession {
 			this.#throwIfExtensionCommand(text);
 		}
 
-		const expandedText = expandPromptTemplate(expandSlashCommand(text, this.#slashCommands), [
-			...this.#promptTemplates,
-		]);
+		const { expandedText, commandCardName } = this.#expandFileCommand(text);
 		// Stamp before image preprocessing so a queued image steer measures from
 		// the operator's submission, not after the vision-model description.
 		const submittedAt = Date.now();
-		await this.#queueUserMessage(expandedText, images, "steer", {
-			timestamp: submittedAt,
-			attribution: options?.attribution,
-		});
+		await this.#queueUserMessage(
+			expandedText,
+			images,
+			"steer",
+			{ timestamp: submittedAt, attribution: options?.attribution },
+			commandCardName,
+			commandCardName ? text : undefined,
+		);
 	}
 
 	/**
@@ -7528,18 +7528,19 @@ export class AgentSession {
 			this.#throwIfExtensionCommand(text);
 		}
 
-		const expandedText =
-			options?.expandPromptTemplates === false
-				? text
-				: expandPromptTemplate(expandSlashCommand(text, this.#slashCommands), [...this.#promptTemplates]);
+		const { expandedText, commandCardName } = this.#expandFileCommand(text, options?.expandPromptTemplates);
 		// Stamp before image preprocessing so a queued image follow-up measures
 		// from the operator's submission, not after the vision-model description.
 		const submittedAt = Date.now();
 		if (!options?.synthetic) {
-			await this.#queueUserMessage(expandedText, images, "followUp", {
-				timestamp: submittedAt,
-				attribution: options?.attribution,
-			});
+			await this.#queueUserMessage(
+				expandedText,
+				images,
+				"followUp",
+				{ timestamp: submittedAt, attribution: options?.attribution },
+				commandCardName,
+				commandCardName ? text : undefined,
+			);
 			return;
 		}
 		// Synthetic branch: agent-initiated hidden developer message. Bypass
