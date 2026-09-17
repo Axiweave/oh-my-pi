@@ -14,6 +14,24 @@
 - `ImageBudget.acquireId` now takes an optional content tag beside the placement key. A key whose bytes changed supersedes its old graphics id (purging the stale data from the terminal store) instead of keeping an id that `shouldTransmit` had already marked sent, which made the terminal re-draw the previous image.
 - Fixed shutdown rearming a destructive history reset while flushing a provider's pending rows.
 
+## [18.2.3] - 2026-09-17
+
+### Added
+
+- Editors support whitespace-delimited `^` mention autocomplete and expose registered atoms for host-defined chip rendering.
+
+### Changed
+
+- `fuzzyRank` accepts readonly candidate arrays without copying them.
+
+### Fixed
+
+- Masked inputs no longer expose their text in diagnostic previews.
+
+### Removed
+
+- Removed the internal `fastTailSplices` and `resetFastTailSplices` Markdown instrumentation exports.
+
 ## [18.2.1] - 2026-09-15
 
 ### Added

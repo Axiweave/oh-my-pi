@@ -246,6 +246,9 @@ import { supportsExternalThinking } from "../tools/think";
 import type { TodoPhase } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
+import type { AgentDefinition } from "../task/types";
+import type { ModelMention } from "./model-mention-syntax";
+import { ModelMentionRegistry } from "./model-mentions";
 import { parseCommandArgs } from "../utils/command-args";
 import type { EditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -711,6 +714,7 @@ export class AgentSession {
 	#implReviewReminderCount = 0;
 	#implReviewReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
+	readonly #modelMentions: ModelMentionRegistry;
 	#workPoolYieldItems: readonly WorkPoolYieldItem[] = [];
 	/** Item set matching the last successfully rebuilt provider prompt. The base
 	 *  prompt starts consistent with the empty set; every later value is a
@@ -1631,6 +1635,11 @@ export class AgentSession {
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 		};
 		this.#todo = new TodoTracker(todoHost);
+		this.#modelMentions = new ModelMentionRegistry({
+			sessionManager: this.sessionManager,
+			modelRegistry: this.#modelRegistry,
+			scopedModels: () => this.scopedModels.map(s => s.model),
+		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
 		const modelControlsHost: ModelControlsHost = {
@@ -2025,6 +2034,7 @@ export class AgentSession {
 		this.agent.providerSessionState = this.#providerSessionState;
 		this.#syncAgentSessionId();
 		this.#todo.syncFromBranch();
+		this.#modelMentions.syncFromBranch();
 		this.#goalRuntime = new GoalRuntime({
 			getState: () => this.#goalModeState,
 			setState: state => {
@@ -2203,7 +2213,10 @@ export class AgentSession {
 			resetPlanReference: () => {
 				this.#planReferenceSent = false;
 			},
-			syncTodoPhasesFromBranch: () => this.#todo.syncFromBranch(),
+			syncTodoPhasesFromBranch: () => {
+				this.#todo.syncFromBranch();
+				this.#modelMentions.syncFromBranch();
+			},
 			resetAdvisorRuntimes: (reason?: string) => this.#advisors.resetAllRuntimes(reason),
 			rebaseAfterCompaction: () => this.#stats.rebaseAfterCompaction(),
 			recordAnchoredHistoryRewrite: tokensRemoved => this.#stats.recordAnchoredHistoryRewrite(tokensRemoved),
@@ -6666,7 +6679,8 @@ export class AgentSession {
 		// TUI can collapse the expanded body to a one-line card.
 		const templates = expandPromptTemplates ? [...this.#promptTemplates] : [];
 		const matchedPromptTemplate = resolvePromptTemplate(text, templates);
-		const expandedText = matchedPromptTemplate ? expandPromptTemplate(text, templates) : text;
+		const templated = matchedPromptTemplate ? expandPromptTemplate(text, templates) : text;
+		const expandedText = options?.synthetic ? templated : this.#modelMentions.expandMentions(templated);
 		// Name on the collapsed transcript card. A prompt template wins over a slash
 		// command: it is the later expansion when a command body itself is `/template`.
 		const commandCardName = matchedPromptTemplate?.name ?? matchedSlashCommand?.name;
@@ -8262,6 +8276,21 @@ export class AgentSession {
 		return this.#tools.skillWarnings;
 	}
 
+	/** Session-local general-purpose agents pinned to user-tagged models. */
+	getSessionAgents(): AgentDefinition[] {
+		return this.#modelMentions.sessionAgents();
+	}
+
+	/** Registered model pseudonyms on the active branch. */
+	get modelMentions(): readonly ModelMention[] {
+		return this.#modelMentions.mentions;
+	}
+
+	/** Resolve a model selector within the session picker's scope. */
+	findMentionableModel(selector: string): Model | undefined {
+		return this.#modelMentions.findMentionable(selector);
+	}
+
 	getTodoPhases(): TodoPhase[] {
 		return this.#todo.phases;
 	}
@@ -9225,6 +9254,7 @@ export class AgentSession {
 		this.agent.replaceMessages(activeMessages ?? sessionContext.messages);
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
+		this.#modelMentions.syncFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
@@ -10051,6 +10081,7 @@ export class AgentSession {
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
+			this.#modelMentions.syncFromBranch();
 			if (switchingToDifferentSession) {
 				this.#closeAllProviderSessions("session switch");
 			} else if (didReloadConversationChange) {
@@ -10232,6 +10263,7 @@ export class AgentSession {
 				this.#emit({ type: "model_changed" });
 			}
 			this.#todo.syncFromBranch();
+			this.#modelMentions.syncFromBranch();
 			this.#advisors.resetAllRuntimes();
 			this.#advisors.reattachRecorderFeeds();
 			this.#reconnectToAgent();
@@ -10346,6 +10378,7 @@ export class AgentSession {
 			this.#clearSessionScopedToolState();
 			this.#rehydrateCheckpointRewindState();
 			this.#todo.syncFromBranch();
+			this.#modelMentions.syncFromBranch();
 			this.#freshProviderSessionId = undefined;
 			this.#clearInheritedProviderPromptCacheKey();
 			this.#syncAgentSessionId();
@@ -10484,6 +10517,7 @@ export class AgentSession {
 			});
 			this.sessionManager.appendMessage(sanitizeAssistantForReparentedHistory(assistantMessage));
 			this.#todo.syncFromBranch();
+			this.#modelMentions.syncFromBranch();
 			this.#freshProviderSessionId = undefined;
 			this.#syncAgentSessionId();
 			this.#memory.rekeyForCurrentSessionId();
@@ -10827,6 +10861,7 @@ export class AgentSession {
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
+		this.#modelMentions.syncFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		this.#branchSummaryAbortController = undefined;
