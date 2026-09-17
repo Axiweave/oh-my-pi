@@ -255,7 +255,11 @@ TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...
 
 - Extension commands are executed immediately even during streaming (not queued as text).
 - `steer(...)`/`followUp(...)` helper methods reject extension commands (`#throwIfExtensionCommand`) to avoid queuing command text for handlers that must run synchronously.
-- Compaction queue replay uses `isKnownSlashCommand(...)` to decide whether queued entries should be replayed via `session.prompt(...)` (for known slash commands) vs raw steer/follow-up methods.
+- `steer(...)` and `followUp(...)` expand file commands, then prompt templates, before queue insertion. `followUp(..., { expandPromptTemplates: false })` preserves literal text.
+- The TUI's `->`, `=>`, and `/queue` routes also load registered `/skill:<name>` commands through the skill-message path.
+- Queue shorthand does not defer built-in, extension, or TypeScript command handlers. Submit these commands directly.
+- `sendUserMessage(...)` and custom-message APIs preserve literal content. They do not run command expansion.
+- Compaction queue replay sends known slash commands through `session.prompt(...)`, preserving their queue mode and images. Other messages use the steering, follow-up, or skill-message path.
 
 ## 9) Error handling and failure surfaces
 

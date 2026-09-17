@@ -21,6 +21,9 @@
 
 ### Fixed
 
+- Fixed queued file commands such as `-> /speckit.converge` reaching the model as literal text. Steering and follow-up messages now expand them.
+- Fixed `->`, `=>`, and `/queue` messages skipping `/skill:<name>` instructions.
+- Fixed compaction replay rejecting queued commands while busy or dropping their image attachments.
 - Fixed growing transcript, Todo, and editor rows disappearing after history retirement, while keeping pinned input stable during typing.
 - Fixed command cards and completed tool output disappearing during assistant output after the Todo HUD or editor grows.
 - Fixed nested agent creation resetting the parent session's active model-profile roles.

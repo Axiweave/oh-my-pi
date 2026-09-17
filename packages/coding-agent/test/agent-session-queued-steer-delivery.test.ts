@@ -16,11 +16,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSessionConfig } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -64,7 +68,10 @@ describe("AgentSession queued steer delivery", () => {
 		removeSyncWithRetries(fixtureDir);
 	});
 
-	async function createSession(responses: MockResponse[]): Promise<SteerHarness> {
+	async function createSession(
+		responses: MockResponse[],
+		commands: Pick<AgentSessionConfig, "slashCommands" | "promptTemplates"> = {},
+	): Promise<SteerHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ responses });
 		const agent = new Agent({
@@ -75,7 +82,7 @@ describe("AgentSession queued steer delivery", () => {
 		const sessionManager = SessionManager.inMemory();
 		const settings = Settings.isolated({ "compaction.enabled": false });
 
-		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, ...commands });
 		return { session, sessionManager, mock };
 	}
 
@@ -220,6 +227,99 @@ describe("AgentSession queued steer delivery", () => {
 		const hostSteer = session.agent.popLastSteer();
 		if (hostSteer?.role !== "user") throw new Error("Expected queued host steer");
 		expect(hostSteer.attribution).toBe("agent");
+	});
+
+	// A queued file command must deliver its instructions, not its invocation.
+	it.each(["followUp", "steer"] as const)("expands file commands before %s delivery", async mode => {
+		const { session, mock } = await createSession([{ content: ["host answer"] }, { content: ["command answer"] }], {
+			slashCommands: [{ name: "speckit.converge", description: "", content: "/review $ARGUMENTS", source: "test" }],
+			promptTemplates: [
+				{ name: "review", description: "", content: "Review the remaining work: $ARGUMENTS", source: "test" },
+			],
+		});
+		let injected = false;
+		session.agent.setOnBeforeYield(async () => {
+			if (injected) return;
+			injected = true;
+			await session[mode]('/speckit.converge "two words"');
+		});
+
+		await session.prompt("hello");
+		await session.waitForIdle();
+
+		const message = mock.calls.at(-1)?.context.messages.findLast(message => message.role === "user");
+		expect(message?.content).toEqual([{ type: "text", text: "Review the remaining work: two words" }]);
+		expect(session.agent.hasQueuedMessages()).toBe(false);
+	});
+
+	it("keeps a queued command literal when expansion is disabled", async () => {
+		const { session, mock } = await createSession([{ content: ["host answer"] }, { content: ["literal answer"] }], {
+			slashCommands: [{ name: "literal", description: "", content: "Expanded body", source: "test" }],
+			promptTemplates: [{ name: "literal", description: "", content: "Template body", source: "test" }],
+		});
+		let injected = false;
+		session.agent.setOnBeforeYield(async () => {
+			if (injected) return;
+			injected = true;
+			await session.followUp("/literal", undefined, { expandPromptTemplates: false });
+		});
+
+		await session.prompt("hello");
+		await session.waitForIdle();
+
+		const message = mock.calls.at(-1)?.context.messages.findLast(message => message.role === "user");
+		expect(message?.content).toEqual([{ type: "text", text: "/literal" }]);
+	});
+
+	// Compaction replay must retain both command instructions and attachments while busy.
+	it.each(["mixed", "commands-only"] as const)("replays %s compaction commands without losing images", async kind => {
+		const { session, mock } = await createSession(
+			[{ content: ["host answer"] }, { content: ["queued answer"] }, { content: ["command answer"] }],
+			{
+				slashCommands: [
+					{ name: "speckit.converge", description: "", content: "Review $ARGUMENTS", source: "test" },
+				],
+			},
+		);
+		const image: ImageContent = {
+			type: "image",
+			mimeType: "image/png",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=",
+		};
+		const command: CompactionQueuedMessage = {
+			text: "/speckit.converge remaining work",
+			mode: kind === "mixed" ? "followUp" : "steer",
+			images: [image],
+		};
+		const errors: string[] = [];
+		const ctx = {
+			session,
+			skillCommands: new Map(),
+			compactionQueuedMessages:
+				kind === "mixed" ? [{ text: "queued plain prompt", mode: "followUp" }, command] : [command],
+			isKnownSlashCommand: (text: string) => text.startsWith("/speckit.converge"),
+			recordLocalSubmission: () => () => {},
+			withLocalSubmission: async (_text: string, fn: () => Promise<unknown>) => fn(),
+			updatePendingMessagesDisplay: () => {},
+			showError: (error: string) => errors.push(error),
+		} as unknown as InteractiveModeContext;
+		let injected = false;
+		session.agent.setOnBeforeYield(async () => {
+			if (injected) return;
+			injected = true;
+			await new UiHelpers(ctx).flushCompactionQueue();
+		});
+
+		await session.prompt("hello");
+		await session.waitForIdle();
+
+		expect(errors).toEqual([]);
+		const message = mock.calls.at(-1)?.context.messages.findLast(message => message.role === "user");
+		expect(message?.content).toEqual([
+			{ type: "text", text: "Review remaining work" },
+			expect.objectContaining({ type: "image" }),
+		]);
+		expect(ctx.compactionQueuedMessages).toEqual([]);
 	});
 
 	it("drains a steer stranded in the agent queue when the session settles", async () => {

@@ -260,9 +260,13 @@ Related APIs:
 
 - `sendUserMessage(content, { deliverAs?, attribution? })`
 - `steer(text, images?, { attribution? })`
-- `followUp(text, images?, { synthetic?, attribution? })`
+- `followUp(text, images?, { synthetic?, attribution?, expandPromptTemplates? })`
 - `sendCustomMessage({ customType, content, ... }, { deliverAs?, triggerTurn? })`
 - `abort()`
+
+`steer()` and `followUp()` expand file commands before prompt templates. They reject extension commands instead of executing their handlers.
+Set `expandPromptTemplates: false` on `followUp()` to preserve literal text.
+`sendUserMessage()` and custom-message APIs do not expand commands or templates.
 
 `deliverAs: "aside"` (both APIs) delivers at the next agent step boundary without interrupting the current tool batch, instead of steering (which skips remaining tools) or waiting for the run to finish. When the session is idle both start a turn instead (in plan mode the custom message is folded into context without a turn).
 

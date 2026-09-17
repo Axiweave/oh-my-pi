@@ -7490,7 +7490,9 @@ export class AgentSession {
 			this.#throwIfExtensionCommand(text);
 		}
 
-		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
+		const expandedText = expandPromptTemplate(expandSlashCommand(text, this.#slashCommands), [
+			...this.#promptTemplates,
+		]);
 		// Stamp before image preprocessing so a queued image steer measures from
 		// the operator's submission, not after the vision-model description.
 		const submittedAt = Date.now();
@@ -7513,7 +7515,9 @@ export class AgentSession {
 		}
 
 		const expandedText =
-			options?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
+			options?.expandPromptTemplates === false
+				? text
+				: expandPromptTemplate(expandSlashCommand(text, this.#slashCommands), [...this.#promptTemplates]);
 		// Stamp before image preprocessing so a queued image follow-up measures
 		// from the operator's submission, not after the vision-model description.
 		const submittedAt = Date.now();

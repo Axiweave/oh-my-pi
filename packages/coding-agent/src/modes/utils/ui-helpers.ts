@@ -1171,7 +1171,10 @@ export class UiHelpers {
 			return;
 		}
 		if (this.ctx.isKnownSlashCommand(message.text)) {
-			const forwarded = await this.ctx.session.prompt(message.text);
+			const forwarded = await this.ctx.session.prompt(message.text, {
+				streamingBehavior: message.mode,
+				images: message.images,
+			});
 			this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return;
 		}
@@ -1242,8 +1245,7 @@ export class UiHelpers {
 			}
 			if (firstPromptIndex === -1) {
 				for (const message of queuedMessages) {
-					const forwarded = await this.ctx.session.prompt(message.text);
-					this.#parkLoopOnLocalConsume(message.text, forwarded);
+					await this.#deliverQueuedMessage(message);
 				}
 				return;
 			}

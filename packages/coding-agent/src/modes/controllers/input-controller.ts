@@ -1607,7 +1607,7 @@ export class InputController {
 		const startImmediately = !this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount === 0;
 		let queuedCount = 0;
 		try {
-			if (startImmediately && this.ctx.onInputCallback) {
+			if (startImmediately && this.ctx.onInputCallback && !isKnownSkillCommand(this.ctx, messages[0] ?? "")) {
 				const first = messages[0] ?? "";
 				const submission = this.ctx.startPendingSubmission({
 					text: first,
@@ -1624,6 +1624,15 @@ export class InputController {
 				await this.ctx.withLocalSubmission(
 					message,
 					async () => {
+						if (
+							await invokeSkillCommandFromText(this.ctx, message, "followUp", {
+								propagateErrors: true,
+								queueOnly: !startImmediately || queuedCount > 0,
+								images: queuedImages,
+							})
+						) {
+							return;
+						}
 						if (startImmediately && queuedCount === 0) {
 							await this.ctx.session.prompt(message, {
 								images: queuedImages,

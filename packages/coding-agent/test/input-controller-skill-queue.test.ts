@@ -189,6 +189,31 @@ describe("InputController skill queue chip metadata", () => {
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([false, true])("loads a skill from queue shorthand while streaming=%s", async isStreaming => {
+		const { ctx, editor, promptCustomMessage, showError } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming,
+		});
+		Object.assign(ctx.session, { queuedMessageCount: 0, followUp: vi.fn(async () => {}) });
+		ctx.onInputCallback = vi.fn();
+		ctx.startPendingSubmission = input => ({ ...input, cancelled: false, started: false });
+		ctx.showStatus = vi.fn();
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+		editor.setText("-> /skill:test-skill check remaining work");
+
+		await editor.onSubmit?.(editor.getText());
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
+		const [message, options] = promptCustomMessage.mock.calls[0]!;
+		expect(message.content).toContain("Do the thing.");
+		expect(message.content).toContain("check remaining work");
+		expect(options?.streamingBehavior).toBe("followUp");
+		expect(options?.queueOnly ?? false).toBe(isStreaming);
+		expect(ctx.onInputCallback).not.toHaveBeenCalled();
+	});
+
 	it("queues known skill steers during compaction instead of dispatching immediately", async () => {
 		const { ctx, editor, promptCustomMessage, queueCompactionMessage } = createStubInputControllerContext({
 			skillCommands,
