@@ -143,6 +143,25 @@ describe("StatusLineComponent", () => {
 		expect(stripped).toContain("Prewalk");
 	});
 
+	it("renders the cyber mark in the default layout while the session is protected", () => {
+		// FR-020: the default preset carries the segment, so an operator with no
+		// custom layout sees the state without configuring anything.
+		const protectedLine = statusLines
+			.track(
+				new StatusLineComponent({
+					...makeSessionWithLastMessage(null),
+					cyberMode: true,
+				} as unknown as AgentSession),
+			)
+			.getTopBorder(200);
+		expect(Bun.stripANSI(protectedLine.content)).toContain("Cyber");
+
+		const unprotectedLine = statusLines
+			.track(new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession))
+			.getTopBorder(200);
+		expect(Bun.stripANSI(unprotectedLine.content)).not.toContain("Cyber");
+	});
+
 	it("renders the claude 3-line footer with model, git/cwd, and hints", () => {
 		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
 		statusLine.setComposerStyle({
@@ -161,6 +180,31 @@ describe("StatusLineComponent", () => {
 		expect(stripped[1]).toContain(path.basename(process.cwd()));
 		expect(stripped[2]).toContain("advisor running");
 	});
+
+	it("marks cyber mode on the claude footer's model line, and only then", () => {
+		// The footer has a fixed layout that never reads leftSegments, so the segment
+		// has to be placed by the footer itself (FR-020).
+		const renderFooter = (cyberMode: boolean) => {
+			const session = { ...makeSessionWithLastMessage(null), cyberMode };
+			const statusLine = new StatusLineComponent(session as unknown as AgentSession);
+			statusLine.setComposerStyle({
+				statusAttachment: "none",
+				bottomBar: "full",
+				bottomBarGap: false,
+				footerMode: "claude3",
+			});
+			return statusLine.render(200).map(line => Bun.stripANSI(line));
+		};
+
+		const marked = renderFooter(true);
+		expect(marked[0]).toContain("test-model");
+		expect(marked[0]).toContain("Cyber");
+
+		const plain = renderFooter(false);
+		expect(plain[0]).toContain("test-model");
+		expect(plain[0]).not.toContain("Cyber");
+	});
+
 	it("keeps the claude footer model on the theme model color", () => {
 		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
 		statusLine.setComposerStyle({

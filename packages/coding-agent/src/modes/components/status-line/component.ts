@@ -3072,9 +3072,13 @@ export class StatusLineComponent implements Component {
 		// It trails the model segment's thinking level, matching where it lands
 		// when `model_profile` follows `model` in a custom preset.
 		const profileSeg = renderSegment("model_profile", ctx);
+		const cyberSeg = renderSegment("cyber", ctx);
 		let line1Left = modelSeg.visible ? modelSeg.content : "";
 		if (profileSeg.visible && profileSeg.content) {
 			line1Left += theme.fg("statusLineSep", theme.sep.dot) + profileSeg.content;
+		}
+		if (cyberSeg.visible && cyberSeg.content) {
+			line1Left += theme.fg("statusLineSep", theme.sep.dot) + cyberSeg.content;
 		}
 		const ideSelection = renderSegment("ide_selection", ctx);
 		let line1 = line1Left;

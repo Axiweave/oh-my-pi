@@ -328,6 +328,21 @@ const modelProfileSegment: StatusLineSegment = {
 	},
 };
 
+/**
+ * Cyber mode indicator — session-scoped protection that constrains model
+ * selection to an operator-declared allowlist. Hidden when off, so it costs
+ * nothing for sessions that never enable it. Styled with `warning` rather
+ * than the muted tone `model_profile` uses, since an active allowlist is a
+ * deliberate restriction worth standing out.
+ */
+const cyberSegment: StatusLineSegment = {
+	id: "cyber",
+	render(ctx) {
+		if (!ctx.session.cyberMode) return { content: "", visible: false };
+		return { content: theme.fg("warning", withIcon(theme.icon.cyber, "Cyber")), visible: true };
+	},
+};
+
 function formatGoalBudget(current: number, budget?: number): string {
 	const used = formatNumber(current);
 	if (budget === undefined) return used;
@@ -994,6 +1009,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	status: statusSegment,
 	model: modelSegment,
 	model_profile: modelProfileSegment,
+	cyber: cyberSegment,
 	mode: modeSegment,
 	path: pathSegment,
 	git: gitSegment,

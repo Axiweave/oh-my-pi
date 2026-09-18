@@ -94,6 +94,7 @@ export type SymbolKey =
 	| "icon.tokens"
 	| "icon.context"
 	| "icon.cost"
+	| "icon.cyber"
 	| "icon.subscription"
 	| "icon.advisor"
 	| "icon.advisorClosed"
@@ -359,6 +360,7 @@ export type SlashCommandIconName =
 	| "host"
 	| "package"
 	| "fast"
+	| "cyber"
 	| "voice"
 	| "tools"
 	| "rule"
@@ -454,6 +456,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.tokens": "🪙",
 	"icon.context": "◫",
 	"icon.cost": "💲",
+	"icon.cyber": "⚔️",
 	"icon.subscription": "(sub)",
 	"icon.advisor": "👁",
 	"icon.advisorClosed": "🙈",
@@ -809,6 +812,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.context": "\ue70f",
 	// pick:  | alt: $ ¢
 	"icon.cost": "\uf155",
+	// pick: ⚔️ (crossed swords) | alt: 🛡
+	"icon.cyber": "⚔️",
 	// pick: 󰙺 (nf-md-currency_usd_off)
 	"icon.subscription": "\u{f067a}",
 	// pick:  (nf-cod-eye)
@@ -1187,6 +1192,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.tokens": "tok:",
 	"icon.context": "ctx:",
 	"icon.cost": "$",
+	"icon.cyber": "[C]",
 	"icon.subscription": "(sub)",
 	"icon.advisor": "(adv)",
 	"icon.advisorClosed": "(adv)",

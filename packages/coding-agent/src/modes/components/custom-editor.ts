@@ -46,6 +46,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.model.cycleBackward"
 	| "app.model.cycleProfileForward"
 	| "app.model.cycleProfileBackward"
+	| "app.model.toggleCyber"
 	| "app.model.select"
 	| "app.model.selectTemporary"
 	| "app.message.dequeue"
@@ -66,6 +67,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.model.cycleBackward": ["shift+ctrl+p"],
 	"app.model.cycleProfileForward": ["alt+shift+m"],
 	"app.model.cycleProfileBackward": [],
+	"app.model.toggleCyber": ["alt+shift+x"],
 	"app.model.select": ["alt+m"],
 	"app.model.selectTemporary": ["alt+p"],
 	"app.message.dequeue": ["alt+up", "shift+up"],
@@ -922,6 +924,7 @@ export class CustomEditor extends Editor {
 	onCycleModelBackward?: () => void;
 	onCycleModelProfileForward?: () => void;
 	onCycleModelProfileBackward?: () => void;
+	onToggleCyber?: () => void;
 	onSelectModel?: () => void;
 	onSuspend?: () => void;
 	onSelectModelTemporary?: () => void;
@@ -1293,6 +1296,12 @@ export class CustomEditor extends Editor {
 			// Intercept configured forward model-profile cycling
 			if (this.#matchesAction(canonical, "app.model.cycleProfileForward") && this.onCycleModelProfileForward) {
 				this.onCycleModelProfileForward();
+				return;
+			}
+
+			// Intercept the configured cyber-mode toggle
+			if (this.#matchesAction(canonical, "app.model.toggleCyber") && this.onToggleCyber) {
+				this.onToggleCyber();
 				return;
 			}
 

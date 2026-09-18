@@ -8,6 +8,7 @@ export const STATUS_LINE_PRESETS: Record<StatusLinePreset, PresetDef> = {
 			"vim",
 			"model",
 			"model_profile",
+			"cyber",
 			"mode",
 			"collab",
 			"path",
