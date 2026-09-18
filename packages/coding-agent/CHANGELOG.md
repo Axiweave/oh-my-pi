@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added `cyberModels` and `cyberMode` to constrain role selection, model switches, and recovery to an operator-defined allowlist. Startup and live notices identify substitutions. Session transitions restore and revalidate the recorded state.
+- Added `/cyber [on|off|status] [global|project]` and `app.model.toggleCyber` (`Alt+Shift+X`). Enable and status output list every allowed model. The scoped command forms persist the startup value.
+- Added the `cyber` status-line segment to the default and `claude3` layouts. Custom layouts can also select it.
 - Added `terminal.reportCwd` (default: `false`) so terminal hosts such as Ghostel can follow OMP directory changes through OSC 7.
 - Added `display.streamingScrollback` (default: `false`) to keep full Markdown replies scrollable during streaming, including unfinished paragraphs and open code fences.
 - The working row now shows the elapsed time of the current turn on its right edge (`42s`, `5m3s`, `1h1m30s`); toggle with `tui.workingTimer`, delay with `tui.workingTimerMinSeconds`, hidden when the `pi` status brand already shows a turn timer.
@@ -21,6 +24,17 @@
 
 ### Fixed
 
+- Fixed cyber protection bypasses in background model selection and recovery. Background candidates, retained callbacks, and dispatch now check installed protection, so a session that shares another session's protection stays constrained.
+- Fixed missing cyber startup warnings in text, JSON, RPC, and ACP modes. Diagnostics now use stderr without changing protocol output.
+- Fixed duplicate and stale cyber startup warnings when ACP loads, resumes, or forks a saved session. Diagnostics now describe the requested transcript.
+- Fixed cyber primary fallback and blocked launches when the available model catalog shrinks.
+- Failed session switches now restore cyber protection and notice history without publishing notices from the failed switch.
+- Resumed cyber substitutions now reach startup warnings. Forks and side-answer branches revalidate protection. Same-transcript reloads no longer repeat role notices.
+- Context promotion, vision-model selection, and the sharpshooter extraction selector now honor installed cyber protection instead of moving work onto an excluded model. Subagent settings snapshots keep the parent's configured role chains, so releasing protection in a child restores them.
+- Commit-message generation under isolation now stays inside the installed cyber allowlist. Its candidate walk skipped the membership check, so a diff summary could be requested from an excluded model.
+- Enhanced speech rewriting now stays inside the installed cyber allowlist. Its `@tiny` alias falls through to the static smol priority chain when no role is configured, so the rewrite could be requested from an excluded model; it now falls back to mechanical cleanup instead.
+- The advisor now starts on a cyber-capable model. Its `@advisor` alias falls through to the static slow priority chain when the `advisor` and `slow` roles are unset, so a protected session could run its advisor on an excluded model; the role now lands on the protected target.
+- Cyber mode now names roles whose built-in fallback chain it substitutes or empties. The advisor's protected target is reported through the role notice, including when the advisor starts from configuration, and the speech rewrite's unavailable `tiny` role is reported per transcript instead of degrading silently.
 - Fixed queued file commands such as `-> /speckit.converge` reaching the model as literal text. Steering and follow-up messages now expand them.
 - Queued file commands and prompt templates now show the same compact command cards as composer input. Queue labels and restored drafts retain the original command and arguments.
 - Fixed `->`, `=>`, and `/queue` messages skipping `/skill:<name>` instructions.

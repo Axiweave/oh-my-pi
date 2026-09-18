@@ -377,6 +377,22 @@ enabledModels:
 
 See [Models](./models.md) for the `models.yml` schema and custom-provider definitions.
 
+### Cyber mode
+
+`cyberModels` declares the models your upstream providers will not block for security work, and `cyberMode` turns the protection on for the first session of a process. While it is on, every role resolves inside the list, every model switch outside it is refused, and the `cyber` status-line segment marks the state. Enabling, the filtering rules, and the lifecycle are documented in [Cyber mode](./cyber-mode.md).
+
+```yaml
+cyberModels:
+  - anthropic/claude-sonnet-4-5
+  - "@slow"
+cyberMode: true
+```
+
+| Key           | Type    | Default | Notes                                                                                                                                                                     |
+| ------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cyberModels` | array   | `[]`    | Ordered allowlist of cyber-capable models. Entries are model selectors (`provider/model-id`) or role aliases (`@role`), and globs expand as they do in `enabledModels`. The first entry that resolves is the model a chain with no cyber-capable member falls back to. |
+| `cyberMode`   | boolean | `false` | Startup value for cyber mode. The mode is also toggled in-session with `/cyber` or `Alt+Shift+X`, and `/cyber on global\|project` writes this key.                        |
+
 ### Advisor
 
 The advisor is a second model that reviews each completed turn and can inject advice into the primary session. Assign a model with `modelRoles.advisor`, then enable it with `advisor.enabled`, `/advisor on`, or by launching with the `--advisor` flag.
