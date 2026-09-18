@@ -16,7 +16,7 @@ target/
 /result-*
 
 # Environment
-.env
+.env*
 
 # Editors
 .vscode/

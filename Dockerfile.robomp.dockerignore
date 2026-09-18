@@ -83,7 +83,7 @@ pi-*.html
 
 # Secrets. Should never be in the image regardless. Depth-agnostic: a bare
 # `.env` misses `python/robomp/.env`, which sits next to the copied src tree.
-**/.env
+**/.env*
 
 # Robomp-only excludes. Natives + wheel + python + bun + rustup all come
 # from PI_BASE; the web-builder stage only needs root manifests + the

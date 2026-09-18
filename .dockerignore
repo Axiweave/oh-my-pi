@@ -79,4 +79,4 @@ pi-*.html
 
 # Secrets. Should never be in an image regardless. Depth-agnostic: a bare
 # `.env` misses nested ones such as `python/robomp/.env`.
-**/.env
+**/.env*
