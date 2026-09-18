@@ -3,6 +3,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { completeSimple, Effort, type Model, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue, resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -159,8 +160,15 @@ export async function resolveSharpshooterModel(
 			settings,
 			matchPreferences: getModelMatchPreferences(settings),
 		});
-		if (resolved.model) return resolved.model;
-		logger.debug("Sharpshooter extraction model selector did not resolve", { selector });
+		// This selector is raw configuration, not a role read, so cyber mode's
+		// role filtering never sees it: an excluded model named here must be
+		// refused rather than handed a background completion.
+		if (resolved.model && cyberAllowsModel(settings, resolved.model)) return resolved.model;
+		if (resolved.model) {
+			logger.debug("Sharpshooter extraction model selector is excluded by cyber mode", { selector });
+		} else {
+			logger.debug("Sharpshooter extraction model selector did not resolve", { selector });
+		}
 	}
 
 	const fallback = resolveRoleSelection(["smol"], settings, modelRegistry.getAvailable())?.model;

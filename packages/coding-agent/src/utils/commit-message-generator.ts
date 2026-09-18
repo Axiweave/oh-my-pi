@@ -8,6 +8,7 @@ import { completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
@@ -51,6 +52,12 @@ function getSmolModelCandidates(
 	const candidates: Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }> = [];
 	const addCandidate = (model?: Model<Api>, thinkingLevel?: ThinkingLevel): void => {
 		if (!model) return;
+		// Cyber mode: this generator runs on live session settings (the isolated
+		// commit path passes the session's own settings), so the priority scan
+		// and the catalog walk MUST NOT hand the completion to a model the
+		// operator's allowlist excludes. Excluded entries are skipped, not
+		// terminal: the walk keeps hunting for an allowed one.
+		if (!cyberAllowsModel(settings, model)) return;
 		if (candidates.some(c => c.model.provider === model.provider && c.model.id === model.id)) return;
 		candidates.push({ model, thinkingLevel });
 	};

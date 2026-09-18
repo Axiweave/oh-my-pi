@@ -22,6 +22,7 @@ import type { postmortem } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "../advisor";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import type { CyberEnableRefusal, CyberRoleChange } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
@@ -436,6 +437,18 @@ export interface ModelProfileResult {
 	model: Model | undefined;
 	/** Role that supplied {@link model}. */
 	role: string | undefined;
+}
+
+/** Result from AgentSession.setCyberMode(). */
+export interface CyberModeResult {
+	/** State the session is in after the operation. */
+	enabled: boolean;
+	/** Concrete models the protection allows, empty while cyber mode is off. */
+	models: readonly string[];
+	/** Roles whose landed model the protection changed, each named once. */
+	changes: CyberRoleChange[];
+	/** Why an enable was refused, when it was; the state is unchanged in that case. */
+	refusal?: CyberEnableRefusal;
 }
 
 /** A configured role resolved to a concrete model. */

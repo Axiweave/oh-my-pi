@@ -63,6 +63,7 @@ import {
 import { bucketRules } from "./capability/rule-buckets";
 import type { EffectiveExtensionRoots } from "./capability/types";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
+import { installStartupCyberMode, substituteLaunchModel } from "./config/cyber-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
@@ -1416,6 +1417,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
 	}
+	// Install the configured cyber protection before the first role is resolved and
+	// before the launch model is picked below (FR-003, FR-010). The registry settled
+	// its catalogue in the constructor, so the allowlist resolves against the same
+	// models this session can run on. An install that finds no usable allowlist
+	// leaves the overlay off, and `validateCyberMode` reports why.
+	const cyberStartup = installStartupCyberMode(settings, modelRegistry.getAvailable());
 	// Kick off workspace tree discovery early. The native workspace scan returns
 	// both the rendered-tree input and the AGENTS.md directory-context index, so
 	// startup does not perform a second recursive filesystem search. Subagents
@@ -1638,6 +1645,26 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			model = settingsDefaultModel;
 		});
 	}
+
+	// A launch model the allowlist excludes substitutes rather than aborting the
+	// launch (FR-010), and a resumed session whose persisted model the allowlist has
+	// since dropped lands inside it the same way (FR-024). Applied before the
+	// model-dependent setup below, so the thinking level, the host preconnect, and
+	// the tool dialect all belong to the model the session starts on. Applied once
+	// more after deferred resolution, which can select a model later.
+	const applyCyberLaunchModel = (candidate: Model | undefined): Model | undefined => {
+		if (!candidate) return undefined;
+		const substitution = substituteLaunchModel(
+			candidate,
+			sessionManager.getLastModelChangeRole() ?? "default",
+			settings,
+			allowedModels,
+		);
+		if (!substitution) return candidate;
+		modelFallbackMessage = substitution.message;
+		return substitution.model;
+	};
+	model = applyCyberLaunchModel(model);
 
 	const taskDepth = options.taskDepth ?? 0;
 
@@ -3675,6 +3702,26 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// toggles; per-turn coordinator close never touches it.
 		const speculativeToolExecution = createSpeculativeToolExecutionConfig(settings, toolSession, extensionRunner);
 
+		// Deferred resolution above (extension-reclaimed models, model patterns, a
+		// cache-cold discovery retry) can select a model after the check near the top,
+		// so the final model is substituted here too, right before the agent and the
+		// session are built from it (FR-010). A substitution moves the session to a
+		// different model, so the level is re-derived for it: the deferred candidate's
+		// `thinking.defaultLevel` and capabilities do not describe the model the
+		// session actually starts on.
+		const substitutedModel = applyCyberLaunchModel(model);
+		if (substitutedModel !== model) {
+			model = substitutedModel;
+			thinkingLevel = pickInitialThinkingLevel(model);
+			autoThinking = thinkingLevel === AUTO_THINKING;
+			effectiveThinkingLevel = concreteThinkingLevel(thinkingLevel);
+			effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+				autoThinking
+					? resolveProvisionalAutoLevel(model)
+					: resolveThinkingLevelForModel(model, effectiveThinkingLevel),
+			);
+		}
+
 		agent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -3784,7 +3831,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		} else {
 			// Save initial model, thinking level, and service tier for new sessions so they can be restored on resume.
 			if (model) {
-				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
+				// The cyber state rides the first model entry, so a resume restores the
+				// protection the session started under instead of re-reading config.
+				sessionManager.appendModelChange(
+					`${model.provider}/${model.id}`,
+					undefined,
+					false,
+					undefined,
+					cyberStartup === "on",
+				);
 			}
 			if (!autoThinking) {
 				// Do not write the `auto` selector before the first turn resolves; auto
@@ -4057,6 +4112,22 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			titleSystemPrompt: options.titleSystemPrompt,
 		});
 		hasSession = true;
+		// A session resumed with the protection recorded on can restore a model the
+		// allowlist has since dropped. The constructor installs the filter but cannot
+		// await a switch, so the re-point lands here, before anything reads the model
+		// (FR-024). A no-op for an unprotected session or one already inside.
+		const startupCyberWarnings = session.configWarnings;
+		const unsubscribeStartupCyber = session.subscribe(event => {
+			if (event.type === "notice" && event.source === "cyber" && event.level === "warning") {
+				startupCyberWarnings.push(event.message);
+				session.startupCyberWarnings.add(event.message);
+			}
+		});
+		try {
+			await session.repointCyberMode();
+		} finally {
+			unsubscribeStartupCyber();
+		}
 		// Backfill the resumed advisor spend without blocking startup: the scan
 		// runs after the session is live, so `--resume` no longer scales with the
 		// advisor transcript size (issue #9553).

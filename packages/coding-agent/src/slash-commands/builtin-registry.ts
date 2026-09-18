@@ -5,6 +5,8 @@ import {
 	buildArgumentCompletions,
 	buildDirectoryArgumentCompletions,
 	buildMcpArgumentCompletions,
+	buildCyberArgumentCompletions,
+	buildCyberInlineHint,
 	buildModelProfileArgumentCompletions,
 	buildModelProfileInlineHint,
 	buildModelSelectorCompletions,
@@ -81,6 +83,9 @@ function materializeTuiBuiltinSlashCommand(
 				? buildMcpArgumentCompletions(cmd.subcommands, runtime)
 				: buildArgumentCompletions(cmd.subcommands);
 		materialized.getInlineHint = buildSubcommandInlineHint(cmd.subcommands);
+	} else if (cmd.name === "cyber") {
+		materialized.getArgumentCompletions = buildCyberArgumentCompletions();
+		materialized.getInlineHint = buildCyberInlineHint();
 	} else if (cmd.name === "model-profile" && runtime) {
 		materialized.getArgumentCompletions = buildModelProfileArgumentCompletions(runtime);
 		materialized.getInlineHint = buildModelProfileInlineHint();

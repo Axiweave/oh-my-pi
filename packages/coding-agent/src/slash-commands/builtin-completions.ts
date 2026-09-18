@@ -368,6 +368,49 @@ export function buildModelProfileArgumentCompletions(
 	};
 }
 
+const CYBER_VERBS = [
+	{ name: "on", description: "Restrict every role to the cyber-capable models" },
+	{ name: "off", description: "Restore the configured role resolution" },
+	{ name: "status", description: "Show the state and the models in effect" },
+] as const;
+
+const CYBER_SCOPES = [
+	{ name: "global", description: "Also save cyberMode in ~/.omp/agent/config.yml" },
+	{ name: "project", description: "Also save cyberMode in ./.omp/config.yml" },
+] as const;
+
+/** Build getArgumentCompletions for /cyber: the verb, then a save scope after `on`. */
+export function buildCyberArgumentCompletions(): (prefix: string) => AutocompleteItem[] | null {
+	return (argumentPrefix: string) => {
+		const trimmed = argumentPrefix.trimStart();
+		const spaceIndex = trimmed.indexOf(" ");
+		if (spaceIndex === -1) {
+			const lower = trimmed.toLowerCase();
+			const matches = CYBER_VERBS.filter(verb => verb.name.startsWith(lower)).map(verb => ({
+				value: verb.name,
+				label: verb.name,
+				description: verb.description,
+			}));
+			return matches.length > 0 ? matches : null;
+		}
+		// Only enabling has a persisted form, so a scope completes after `on` alone.
+		if (trimmed.slice(0, spaceIndex) !== "on") return null;
+		const scopePrefix = trimmed.slice(spaceIndex + 1).toLowerCase();
+		if (scopePrefix.includes(" ")) return null;
+		const matches = CYBER_SCOPES.filter(scope => scope.name.startsWith(scopePrefix)).map(scope => ({
+			value: `on ${scope.name}`,
+			label: scope.name,
+			description: scope.description,
+		}));
+		return matches.length > 0 ? matches : null;
+	};
+}
+
+/** Ghost hint for /cyber: the full usage while the argument text is empty. */
+export function buildCyberInlineHint(): (argumentText: string) => string | null {
+	return argumentText => (argumentText.trim().length === 0 ? "[on|off|status] [global|project]" : null);
+}
+
 /** Ghost hint for /model-profile: full usage when empty, scope suffix while the name is typed. */
 export function buildModelProfileInlineHint(): (argumentText: string) => string | null {
 	return (argumentText: string) => {

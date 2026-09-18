@@ -2,7 +2,9 @@
  * Built-in model roles and role metadata helpers.
  */
 
+import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
+import { validateCyberMode } from "./cyber-mode";
 import type { Settings } from "./settings";
 
 /** Canonical prefix for a configured model role selector. */
@@ -149,4 +151,25 @@ export function validateModelProfiles(settings: Settings, warn: (message: string
 			}
 		}
 	}
+}
+
+/**
+ * Report every model-role configuration mistake at startup, in one pass: the
+ * structural `modelProfiles` check above and the `cyberModels` protection check
+ * (T010). Callers hand the resolved catalogue to the same entry point, so a
+ * session constructor wires one warning channel rather than one per validator.
+ *
+ * `availableModels` is optional on purpose: a host that cannot enumerate its
+ * catalogue (a partial test double, a not-yet refreshed registry) has nothing to
+ * resolve the allowlist against, and an empty catalogue would report every entry
+ * as unresolved. Skipping the check says nothing about the list's quality.
+ */
+export function validateModelRoleConfiguration(
+	settings: Settings,
+	availableModels: Model<Api>[] | undefined,
+	warn: (message: string) => void,
+): void {
+	validateModelProfiles(settings, warn);
+	if (!availableModels) return;
+	validateCyberMode(settings, availableModels, warn);
 }

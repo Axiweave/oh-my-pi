@@ -30,6 +30,7 @@ import type { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
+import { installStartupCyberMode } from "./config/cyber-mode";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	DEFAULT_PREWALK_TARGET,
@@ -431,6 +432,8 @@ export async function submitInteractiveInput(
 interface AcpSessionHandle {
 	session: AgentSession;
 	setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
+	/** Runs after ACP registration succeeds. */
+	onReady?: () => void;
 }
 
 type AcpSessionFactory = (cwd: string, options?: { interactivePrompts?: boolean }) => Promise<AcpSessionHandle>;
@@ -444,6 +447,8 @@ export interface AcpSessionFactoryOptions {
 	parsedArgs: Pick<Args, "apiKey" | "trustedExtensions" | "tools">;
 	rawArgs: string[];
 	createSession: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
+	/** Receives startup diagnostics and later cyber warning notices. */
+	reportWarning?: (message: string) => void;
 }
 
 async function loadTrustedSessionExtensions(
@@ -464,6 +469,36 @@ async function loadTrustedSessionExtensions(
 		}
 	}
 	return loadExtensions(paths, cwd, eventBus);
+}
+
+/** Defer ACP diagnostics until adoption succeeds. Drop warnings about the temporary transcript. */
+function createAcpReadyReporter(
+	session: AgentSession,
+	result: Pick<CreateAgentSessionResult, "modelFallbackMessage">,
+	reportWarning: (message: string) => void,
+): () => void {
+	const originalSessionId = session.sessionId;
+	const pendingAdoptionWarnings = new Set<string>();
+	let flushed = false;
+	session.subscribe(event => {
+		if (event.type !== "notice" || event.source !== "cyber" || event.level !== "warning") return;
+		if (flushed) reportWarning(event.message);
+		else pendingAdoptionWarnings.add(event.message);
+	});
+	return () => {
+		if (flushed) return;
+		flushed = true;
+		const sessionIdChanged = session.sessionId !== originalSessionId;
+		const toFlush = new Set<string>();
+		for (const warning of session.configWarnings) {
+			if (sessionIdChanged && session.startupCyberWarnings.has(warning)) continue;
+			toFlush.add(warning);
+		}
+		if (result.modelFallbackMessage && !sessionIdChanged) toFlush.add(result.modelFallbackMessage);
+		for (const warning of pendingAdoptionWarnings) toFlush.add(warning);
+		pendingAdoptionWarnings.clear();
+		for (const warning of toFlush) reportWarning(warning);
+	};
 }
 
 /**
@@ -498,7 +533,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 				`Trusted extension failed to load: ${trustedExtensions.errors.map(item => item.error).join("; ")}`,
 			);
 		}
-		const { session: nextSession, setToolUIContext } = await args.createSession({
+		const result = await args.createSession({
 			...args.baseOptions,
 			cwd,
 			sessionManager: nextSessionManager,
@@ -515,6 +550,9 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 			eventBus,
 			preloadedExtensions: trustedExtensions,
 		});
+		const { session: nextSession, setToolUIContext } = result;
+		// Subscribe before ACP adopts a saved transcript.
+		const onReady = args.reportWarning ? createAcpReadyReporter(nextSession, result, args.reportWarning) : undefined;
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
 			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
 		}
@@ -539,7 +577,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 				throw error;
 			}
 		}
-		return { session: nextSession, setToolUIContext };
+		return { session: nextSession, setToolUIContext, onReady };
 	};
 }
 
@@ -1742,6 +1780,15 @@ export async function runRootCommand(
 			"modelRegistry:init",
 			() => new ModelRegistry(authStorage, undefined, { settings: settingsInstance }),
 		);
+		// Install the configured cyber protection as soon as a catalogue exists, so
+		// everything below resolves against the allowlist: the role overrides that
+		// follow, prewalk and plan targets, and the launch model inside
+		// `createAgentSession` (FR-003, FR-010). Accepted boundary: the CLI argument
+		// handling above already read `modelRoles` (around :1274, :1322, and :1399)
+		// before this registry exists, so those reads stay unfiltered. They cannot
+		// change which model the session runs, because the startup model is resolved
+		// later, through these filtered settings.
+		installStartupCyberMode(settingsInstance, modelRegistry.getAvailable());
 		if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 			Bun.env.PI_NO_PTY = "1";
 		}
@@ -2073,8 +2120,16 @@ export async function runRootCommand(
 		}
 
 		const createAgentSessionImpl = deps.createAgentSession ?? createAgentSession;
+		const reportStderrWarning = (message: string) => process.stderr.write(`${chalk.yellow(message)}\n`);
 		const createSession = async (options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
 			const result = await logger.time("createAgentSession", createAgentSessionImpl, options);
+			if (!isInteractive && mode !== "acp") {
+				// ACP reports after adoption. Other headless modes report at creation.
+				// Keep diagnostics off stdout, which carries responses or protocol frames.
+				const warnings = new Set(result.session.configWarnings);
+				if (result.modelFallbackMessage) warnings.add(result.modelFallbackMessage);
+				for (const warning of warnings) reportStderrWarning(warning);
+			}
 			// Kick off background model discovery only after createAgentSession finishes its parallel
 			// discovery arms; running these concurrently contends for the event loop and stretches
 			// every parallel arm by ~30ms.
@@ -2092,6 +2147,7 @@ export async function runRootCommand(
 				parsedArgs,
 				rawArgs,
 				createSession,
+				reportWarning: reportStderrWarning,
 			});
 			// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
 			const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
@@ -2258,9 +2314,7 @@ export async function runRootCommand(
 				if (modelRegistryError) {
 					process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
 				}
-				if (modelFallbackMessage) {
-					process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
-				} else {
+				if (!modelFallbackMessage) {
 					process.stderr.write(`${chalk.red("No models available.")}\n`);
 				}
 				process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);

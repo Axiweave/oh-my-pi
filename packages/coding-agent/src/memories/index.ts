@@ -15,6 +15,7 @@ import {
 	prompt,
 } from "@oh-my-pi/pi-utils";
 
+import { cyberAllowsModel, resolveCyberTarget } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -415,6 +416,7 @@ async function runPhase1(options: MemoryStartupOptions): Promise<void> {
 				sessionId: session.sessionId,
 				modelMaxTokens: computeModelTokenBudget(phase1Model, config),
 				config,
+				settings: session.settings,
 				metadata: session.agent?.metadataForProvider(phase1Model.provider),
 			});
 			if (!isMemoryStartupActive(options)) return;
@@ -576,6 +578,7 @@ async function runPhase2(options: MemoryStartupOptions): Promise<void> {
 				model: phase2Model,
 				apiKey: modelRegistry.resolver(phase2Model, session.sessionId),
 				sessionId: session.sessionId,
+				settings: session.settings,
 				metadata: session.agent?.metadataForProvider(phase2Model.provider),
 			});
 			if (!isMemoryStartupActive(options)) return;
@@ -754,6 +757,7 @@ async function runStage1Job(options: {
 	sessionId: string;
 	modelMaxTokens: number;
 	config: MemoryRuntimeConfig;
+	settings: Settings;
 	metadata?: Record<string, unknown>;
 }): Promise<
 	| {
@@ -764,7 +768,7 @@ async function runStage1Job(options: {
 	| { kind: "no_output" }
 	| { kind: "failed"; reason: string }
 > {
-	const { claim, model, apiKey, modelMaxTokens, config } = options;
+	const { claim, model, apiKey, modelMaxTokens, config, settings } = options;
 	try {
 		const rolloutRaw = await Bun.file(claim.rolloutPath).text();
 		const persisted = extractPersistableMessages(rolloutRaw);
@@ -778,6 +782,10 @@ async function runStage1Job(options: {
 			thread_id: claim.threadId,
 			response_items_json: truncatedItems,
 		});
+
+		if (!cyberAllowsModel(settings, model)) {
+			return { kind: "failed", reason: "Cyber mode excludes the stage-one memory model." };
+		}
 
 		const response = await retryTransientCompletion(
 			() =>
@@ -902,6 +910,7 @@ async function runConsolidationModel(options: {
 	model: Model;
 	apiKey: ApiKey;
 	sessionId: string;
+	settings: Settings;
 	metadata?: Record<string, unknown>;
 }): Promise<{
 	memoryMd: string;
@@ -914,13 +923,17 @@ async function runConsolidationModel(options: {
 		examples: ConsolidationSkillFileSchema[];
 	}>;
 }> {
-	const { memoryRoot, model, apiKey } = options;
+	const { memoryRoot, model, apiKey, settings } = options;
 	const rawMemories = await Bun.file(path.join(memoryRoot, "raw_memories.md")).text();
 	const rolloutSummaries = await readRolloutSummaries(memoryRoot);
 	const input = prompt.render(consolidationTemplate, {
 		raw_memories: truncateByApproxTokens(rawMemories, 20_000),
 		rollout_summaries: truncateByApproxTokens(rolloutSummaries, 12_000),
 	});
+
+	if (!cyberAllowsModel(settings, model)) {
+		throw new Error("Cyber mode excludes the phase-two memory model.");
+	}
 
 	const response = await retryTransientCompletion(
 		() =>
@@ -1255,15 +1268,28 @@ async function resolveMemoryModel(options: {
 	fallbackRole: string;
 }): Promise<Model | undefined> {
 	const { modelRegistry, session, fallbackRole } = options;
+	const catalog = modelRegistry.getAll();
 	const requestedModel = session.settings.getModelRole(fallbackRole) || session.settings.getModelRole("default");
 	if (requestedModel) {
-		const resolved = resolveModelRoleValue(requestedModel, modelRegistry.getAll(), {
+		const resolved = resolveModelRoleValue(requestedModel, catalog, {
 			settings: session.settings,
 			matchPreferences: getModelMatchPreferences(session.settings),
 		});
+		// No membership check here: `getModelRole` returns the cyber-filtered role
+		// view, so `requestedModel` is already an allowlisted identity, and the
+		// dispatch seams below refuse an excluded model regardless.
 		if (resolved.model) return resolved.model;
 	}
-	return session.model ?? modelRegistry.getAll()[0];
+	const allowlist = session.settings.getCyberAllowlist();
+	if (!allowlist) return session.model ?? catalog[0];
+	if (session.model && cyberAllowsModel(session.settings, session.model)) return session.model;
+	// Current is unset or excluded: land on the role's own protected target
+	// (role chain -> default role chain -> primary), else any remaining
+	// allowed catalog member when that target itself is unreachable.
+	return (
+		resolveCyberTarget(session.settings, fallbackRole, catalog, allowlist) ??
+		catalog.find(candidate => cyberAllowsModel(session.settings, candidate))
+	);
 }
 
 function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {

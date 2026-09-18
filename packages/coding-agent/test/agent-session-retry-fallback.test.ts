@@ -29,11 +29,11 @@ import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensi
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	type ServingModel,
 	validateRetryFallbackChains,
 } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -362,6 +362,8 @@ describe("AgentSession retry fallback", () => {
 		expect(new Set(requestedContexts).size).toBe(1);
 		expect(session.model?.provider).toBe(secondFallback.provider);
 		expect(session.model?.id).toBe(secondFallback.id);
+		// Recovery records an explicit off state, not an absent field.
+		expect(session.sessionManager.getBranch().findLast(entry => entry.type === "model_change")?.cyber).toBe(false);
 		expect(retryStartEvents.map(event => event.delayMs)).toEqual([0, 0]);
 		expect(fallbackAppliedEvents).toEqual([
 			{
@@ -386,6 +388,471 @@ describe("AgentSession retry fallback", () => {
 				role: "default",
 			},
 		]);
+	});
+
+	it("skips fallback chain entries cyber mode excludes, and recovers on the entry it covers", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const excludedFirst = getBundledModel("openai", "gpt-4o-mini");
+		const excludedSecond = getBundledModel("openai", "gpt-4o");
+		const allowedFallback = getBundledModel("anthropic", "claude-haiku-4-5");
+		if (!primaryModel || !excludedFirst || !excludedSecond || !allowedFallback) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				if (model.provider === primaryModel.provider && model.id === primaryModel.id) {
+					mock.push({ throw: "overloaded_error: provider returned error 503" });
+				} else if (model.provider === allowedFallback.provider && model.id === allowedFallback.id) {
+					mock.push({ content: ["Recovered inside the allowlist"] });
+				} else {
+					throw new Error(`Requested a model cyber mode excludes: ${model.provider}/${model.id}`);
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+
+		// The chain is ordered excluded, excluded, allowed: the retry must walk past
+		// the first two and recover on the third, so protection never costs the
+		// session its fallback.
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			cyberMode: true,
+			cyberModels: [
+				`${primaryModel.provider}/${primaryModel.id}`,
+				`${allowedFallback.provider}/${allowedFallback.id}`,
+			],
+			"retry.fallbackChains": {
+				default: [
+					`${excludedFirst.provider}/${excludedFirst.id}`,
+					`${excludedSecond.provider}/${excludedSecond.id}`,
+					`${allowedFallback.provider}/${allowedFallback.id}`,
+				],
+			},
+		} as Partial<Record<SettingPath, unknown>>);
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") fallbackAppliedEvents.push(event);
+		});
+
+		expect(session.cyberMode).toBe(true);
+
+		await session.prompt("Recover without leaving the allowlist");
+		await session.waitForIdle();
+
+		const assistant = agent.state.messages.findLast(
+			(message): message is AssistantMessage => message.role === "assistant",
+		);
+		expect(assistant?.stopReason).toBe("stop");
+		expect(JSON.stringify(assistant?.content)).toContain("Recovered inside the allowlist");
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${allowedFallback.provider}/${allowedFallback.id}`,
+		]);
+		expect(session.model?.id).toBe(allowedFallback.id);
+		expect(fallbackAppliedEvents.map(event => event.to)).toEqual([
+			`${allowedFallback.provider}/${allowedFallback.id}`,
+		]);
+	});
+
+	it("skips usage-fallback entries cyber mode excludes, and recovers on the entry it covers", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const excludedModel = getBundledModel("openai", "gpt-4o-mini");
+		const allowedFallback = getBundledModel("anthropic", "claude-haiku-4-5");
+		if (!primaryModel || !excludedModel || !allowedFallback) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const requestedModels: string[] = [];
+		const mock = createMockModel({ responses: [{ content: ["Recovered inside the allowlist"] }] });
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+
+		// The chain is ordered excluded, allowed, and the chain head is depleted, so
+		// the usage walk is the path that has to move the session. Selecting the
+		// excluded entry and stopping there would leave the session on a depleted
+		// model that the protection cannot replace.
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.modelFallback": true,
+			"retry.usageAwareFallback": true,
+			cyberMode: true,
+			cyberModels: [
+				`${primaryModel.provider}/${primaryModel.id}`,
+				`${allowedFallback.provider}/${allowedFallback.id}`,
+			],
+			"retry.fallbackChains": {
+				default: [
+					`${excludedModel.provider}/${excludedModel.id}`,
+					`${allowedFallback.provider}/${allowedFallback.id}`,
+				],
+			},
+		} as Partial<Record<SettingPath, unknown>>);
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		// Only the chain head is out of usage. The allowlisted fallback would be
+		// skipped too if the mock keyed on the provider, because it shares the head's.
+		vi.spyOn(modelRegistry.authStorage, "getModelUsageHealth").mockImplementation(async (_provider, options) =>
+			options?.modelId === primaryModel.id
+				? { state: "depleted", accounts: [{ credentialId: 1, credentialType: "oauth", state: "depleted" }] }
+				: { state: "healthy", accounts: [] },
+		);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		expect(session.cyberMode).toBe(true);
+
+		await session.prompt("Move off the depleted model without leaving the allowlist");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([`${allowedFallback.provider}/${allowedFallback.id}`]);
+		expect(session.model?.id).toBe(allowedFallback.id);
+	});
+
+	it("keeps the session inside the allowlist when no fallback entry is covered", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const excludedFirst = getBundledModel("openai", "gpt-4o-mini");
+		const excludedSecond = getBundledModel("openai", "gpt-4o");
+		if (!primaryModel || !excludedFirst || !excludedSecond) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const requestedModels: string[] = [];
+		const primarySelector = `${primaryModel.provider}/${primaryModel.id}`;
+		const mock = createMockModel();
+		let primaryAttempts = 0;
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				if (model.provider === primaryModel.provider && model.id === primaryModel.id) {
+					primaryAttempts += 1;
+					if (primaryAttempts === 1) {
+						mock.push({ throw: "overloaded_error: provider returned error 503" });
+					} else {
+						mock.push({ content: ["Recovered on the same model"] });
+					}
+				} else {
+					throw new Error(`Requested a model cyber mode excludes: ${model.provider}/${model.id}`);
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+
+		// Every chain entry is excluded, so the walk finds nothing it may take. The
+		// requirement is that this costs the session nothing: it keeps the model it
+		// is on and the retry still completes, rather than landing outside the list
+		// or aborting the turn over the protection.
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			cyberMode: true,
+			cyberModels: [primarySelector],
+			"retry.fallbackChains": {
+				default: [
+					`${excludedFirst.provider}/${excludedFirst.id}`,
+					`${excludedSecond.provider}/${excludedSecond.id}`,
+				],
+			},
+		} as Partial<Record<SettingPath, unknown>>);
+		settings.setModelRole("default", primarySelector);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		expect(session.cyberMode).toBe(true);
+
+		await session.prompt("Retry without leaving the allowlist");
+		await session.waitForIdle();
+
+		// The same model twice: the walk took neither excluded entry, and the retry
+		// stayed where the protection put the session.
+		expect(requestedModels).toEqual([primarySelector, primarySelector]);
+		expect(session.model?.id).toBe(primaryModel.id);
+		const assistant = agent.state.messages.findLast(
+			(message): message is AssistantMessage => message.role === "assistant",
+		);
+		expect(assistant?.stopReason).toBe("stop");
+	});
+
+	it("never lands outside the allowlist for any fallback chain composition", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const allowedFallback = getBundledModel("anthropic", "claude-haiku-4-5");
+		const excludedFirst = getBundledModel("openai", "gpt-4o-mini");
+		const excludedSecond = getBundledModel("openai", "gpt-4o");
+		if (!primaryModel || !allowedFallback || !excludedFirst || !excludedSecond) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const selectorOf = (model: { provider: string; id: string }): string => `${model.provider}/${model.id}`;
+		const primarySelector = selectorOf(primaryModel);
+		const allowedSelector = selectorOf(allowedFallback);
+		const alphabet = [allowedSelector, selectorOf(excludedFirst), selectorOf(excludedSecond)];
+		const allowlist = new Set([primarySelector, allowedSelector]);
+
+		// Exhaustive rather than sampled: every permutation of every non-empty
+		// subset of a three-entry alphabet, plus the empty chain. That covers the
+		// boundaries by construction — empty, single allowed, single excluded, and
+		// all excluded — and each case is enumerated, so a failure reproduces
+		// exactly and names the chain it came from.
+		const permutationsOf = (items: string[]): string[][] =>
+			items.length <= 1
+				? [items]
+				: items.flatMap((item, index) =>
+						permutationsOf([...items.slice(0, index), ...items.slice(index + 1)]).map(rest => [item, ...rest]),
+					);
+		const cases: string[][] = [[]];
+		for (let mask = 1; mask < 1 << alphabet.length; mask++) {
+			const subset = alphabet.filter((_, index) => (mask & (1 << index)) !== 0);
+			for (const order of permutationsOf(subset)) cases.push(order);
+		}
+
+		for (const chain of cases) {
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			let primaryAttempts = 0;
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					const requested = `${model.provider}/${model.id}`;
+					requestedModels.push(requested);
+					if (requested === primarySelector && primaryAttempts === 0) {
+						primaryAttempts += 1;
+						mock.push({ throw: "overloaded_error: provider returned error 503" });
+					} else {
+						mock.push({ content: [`ok:${requested}`] });
+					}
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				cyberMode: true,
+				cyberModels: [...allowlist],
+				"retry.fallbackChains": { default: chain },
+			} as Partial<Record<SettingPath, unknown>>);
+			settings.setModelRole("default", primarySelector);
+
+			const caseSession = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+
+			const snapshot: { landedOn: string; stopReason: AssistantMessage["stopReason"] | undefined } = {
+				landedOn: "",
+				stopReason: undefined,
+			};
+			try {
+				await caseSession.prompt("Retry inside the allowlist");
+				await caseSession.waitForIdle();
+
+				snapshot.landedOn = `${caseSession.model?.provider}/${caseSession.model?.id}`;
+				snapshot.stopReason = agent.state.messages.findLast(
+					(message): message is AssistantMessage => message.role === "assistant",
+				)?.stopReason;
+			} finally {
+				// The file's afterEach disposes only the shared `session`, so this
+				// per-case session must release itself even when the turn throws.
+				await caseSession.dispose();
+			}
+			const { landedOn, stopReason } = snapshot;
+
+			const outside = requestedModels.filter(model => !allowlist.has(model));
+			if (outside.length > 0) {
+				throw new Error(
+					`chain ${chain.join("|") || "(empty)"} requested ${outside.join("|")}, which the allowlist excludes`,
+				);
+			}
+			// The walk keeps the configured order, so the first covered entry is the
+			// one it must land on, and the primary is where it must stay without one.
+			const covered = chain.find(entry => allowlist.has(entry));
+			if (landedOn !== (covered ?? primarySelector)) {
+				throw new Error(
+					`chain ${chain.join("|") || "(empty)"} landed on ${landedOn}, expected ${covered ?? primarySelector}`,
+				);
+			}
+			if (stopReason !== "stop") {
+				throw new Error(`chain ${chain.join("|") || "(empty)"} did not finish the turn: ${stopReason}`);
+			}
+		}
+	});
+
+	describe("recovery model-change entries record the live cyber indicator (T047)", () => {
+		it("records true on a Fireworks Fast degrade while cyber mode is on", async () => {
+			const fastModel = getBundledModel("fireworks", "kimi-k2.6-fast");
+			if (!fastModel) throw new Error("Expected the bundled Fireworks Fast model to exist");
+			const baseId = fastModel.id.replace(/-fast$/, "");
+
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: fastModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					mock.push(
+						model.id === fastModel.id
+							? { throw: "rate limit exceeded retry-after-ms=200" }
+							: { content: ["the base model did the work"] },
+					);
+					return mock.stream(model, context, options);
+				},
+			});
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				cyberMode: true,
+				cyberModels: [`${fastModel.provider}/${fastModel.id}`, `fireworks/${baseId}`],
+			} as Partial<Record<SettingPath, unknown>>);
+			settings.setModelRole("default", `${fastModel.provider}/${fastModel.id}`);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+			expect(session.cyberMode).toBe(true);
+
+			await session.prompt("Degrade off Fast and answer on the base model");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual([`${fastModel.provider}/${fastModel.id}`, `fireworks/${baseId}`]);
+			expect(session.model?.id).toBe(baseId);
+			expect(session.sessionManager.getBranch().findLast(entry => entry.type === "model_change")?.cyber).toBe(true);
+		});
+
+		for (const disableSibling of [false, true]) {
+			it(`records and resumes primary restoration with cyber ${disableSibling ? "disabled by a sibling" : "still enabled"}`, async () => {
+				using tempDir = TempDir.createSync("@omp-cyber-recovery-");
+				const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+				const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+				if (!primaryModel || !fallbackModel) {
+					throw new Error("Expected bundled test models to exist");
+				}
+
+				const requestedModels: string[] = [];
+				const agent = createFallbackAgent(primaryModel, requestedModels, { retryAfterMs: 200 });
+
+				const settings = Settings.isolated({
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 5,
+					cyberMode: true,
+					cyberModels: [
+						`${primaryModel.provider}/${primaryModel.id}`,
+						`${fallbackModel.provider}/${fallbackModel.id}`,
+					],
+					"retry.fallbackChains": {
+						default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+					},
+					"retry.fallbackRevertPolicy": "cooldown-expiry",
+				} as Partial<Record<SettingPath, unknown>>);
+				settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+				const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+				session = new AgentSession({
+					agent,
+					sessionManager,
+					settings,
+					modelRegistry,
+				});
+				try {
+					expect(session.cyberMode).toBe(true);
+
+					let now = Date.now();
+					vi.spyOn(Date, "now").mockImplementation(() => now);
+
+					// The candidate swap records the state before any sibling transition.
+					await session.prompt("First prompt triggers fallback");
+					await session.waitForIdle();
+					expect(session.model?.id).toBe(fallbackModel.id);
+					expect(sessionManager.getBranch().findLast(entry => entry.type === "model_change")?.cyber).toBe(true);
+
+					// A sibling clears shared protection without writing to this transcript.
+					if (disableSibling) {
+						const sibling = new AgentSession({
+							agent: createFallbackAgent(primaryModel, []),
+							sessionManager: SessionManager.inMemory(),
+							settings,
+							modelRegistry,
+						});
+						try {
+							await sibling.setCyberMode(false);
+						} finally {
+							await sibling.dispose();
+						}
+						expect(settings.getCyberAllowlist()).toBeUndefined();
+					}
+					expect(session.cyberMode).toBe(!disableSibling);
+
+					// Primary restoration records the live state after cooldown.
+					now += 240;
+					await session.prompt("Second prompt reverts to primary after cooldown");
+					await session.waitForIdle();
+					expect(session.model?.id).toBe(primaryModel.id);
+					expect(sessionManager.getBranch().findLast(entry => entry.type === "model_change")?.cyber).toBe(
+						!disableSibling,
+					);
+					// Reload the persisted transcript to prove the recorded state survives resume.
+					await session.dispose();
+					const sessionFile = sessionManager.getSessionFile();
+					if (!sessionFile) throw new Error("Expected the recovery session to have persisted a file");
+					const resumedManager = await SessionManager.open(sessionFile, tempDir.path());
+					session = new AgentSession({
+						agent: createFallbackAgent(primaryModel, []),
+						sessionManager: resumedManager,
+						settings,
+						modelRegistry,
+					});
+					expect(resumedManager.getLastCyberMode()).toBe(!disableSibling);
+					expect(session.cyberMode).toBe(!disableSibling);
+				} finally {
+					await session?.dispose();
+					session = undefined;
+				}
+			});
+		}
 	});
 
 	it("re-syncs the edit-mode system prompt after a retry-fallback model swap", async () => {
@@ -2316,6 +2783,514 @@ describe("AgentSession retry fallback", () => {
 		expect(session.getAdvisorAgent()?.state.model).toMatchObject({
 			provider: advisorPrimary.provider,
 			id: advisorPrimary.id,
+		});
+	});
+
+	describe("advisor selection and recovery honor cyber mode (T057)", () => {
+		/**
+		 * Wait for the advisor to finish whatever recovery the turn triggered.
+		 *
+		 * Cyber-mode recovery can take a different number of hops pre-fix than
+		 * post-fix, so a fixed count cannot be awaited blindly. `settledAt`
+		 * names the count the caller expects to reach, which is the only
+		 * condition that cannot race: the poll waits for it, and the caller's
+		 * assertion reports a clean mismatch when it never arrives.
+		 *
+		 * AdvisorRuntime's own exhausted-fallback retry sleeps a hardcoded
+		 * 1000ms (runtime.ts's `retryDelayMs` default, independent of
+		 * `retry.baseDelayMs`), so the budget clears that comfortably.
+		 */
+		async function waitForAdvisorSettle(
+			target: AgentSession,
+			requestedModels: readonly unknown[],
+			settledAt: number,
+		): Promise<void> {
+			await target.waitForIdle();
+			for (let i = 0; i < 50 && requestedModels.length < settledAt; i++) {
+				await scheduler.wait(100);
+				await target.waitForIdle();
+			}
+		}
+
+		it.each(["literal", "role alias", "thinking-level suffix"])(
+			"falls back to the protected advisor role when an explicit override uses %s to name an excluded model",
+			async kind => {
+				const mainModel = getBundledModel("openai", "gpt-4o-mini")!;
+				const excludedModel = getBundledModel("openai", "gpt-4o")!;
+				const allowedModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+				const excludedSelector = `${excludedModel.provider}/${excludedModel.id}`;
+				const allowedSelector = `${allowedModel.provider}/${allowedModel.id}`;
+				const override =
+					kind === "role alias"
+						? "@blocked"
+						: kind === "thinking-level suffix"
+							? `${excludedSelector}:high`
+							: excludedSelector;
+
+				const mainMock = createMockModel({ responses: [{ content: ["Primary complete"] }] });
+				const advisorMock = createMockModel({ responses: [{ content: ["Advisor reviewed"] }] });
+				const requestedAdvisorModels: string[] = [];
+
+				const settings = Settings.isolated({
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 5,
+					cyberMode: true,
+					cyberModels: [allowedSelector],
+					"advisor.syncBacklog": "1",
+				} as Partial<Record<SettingPath, unknown>>);
+				settings.setModelRole("advisor", allowedSelector);
+				if (kind === "role alias") settings.setModelRole("blocked", excludedSelector);
+				vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([mainModel, excludedModel, allowedModel]);
+
+				session = new AgentSession({
+					agent: new Agent({
+						getApiKey: model => `${model.provider}-test-key`,
+						initialState: { model: mainModel, systemPrompt: ["Test"], tools: [], messages: [] },
+						streamFn: mainMock.stream,
+					}),
+					sessionManager: SessionManager.inMemory(),
+					settings,
+					modelRegistry,
+					advisorTools: [],
+					advisorConfigs: [{ name: "explicit-override-test", model: override }],
+					advisorStreamFn: (model, context, options) => {
+						const selector = `${model.provider}/${model.id}`;
+						requestedAdvisorModels.push(selector);
+						if (selector !== allowedSelector) throw new Error(`Unexpected advisor model requested: ${selector}`);
+						return advisorMock.stream(model, context, options);
+					},
+				});
+
+				session.setAdvisorEnabled(true);
+				expect(session.getAdvisorAgent()?.state.model).toMatchObject({
+					provider: allowedModel.provider,
+					id: allowedModel.id,
+				});
+
+				await session.prompt("Complete one primary turn");
+				await session.waitForIdle();
+
+				expect(requestedAdvisorModels).toEqual([allowedSelector]);
+			},
+		);
+
+		it("skips excluded advisor retry-fallback candidates and recovers on the entry the allowlist covers", async () => {
+			const mainModel = getBundledModel("openai", "gpt-4o-mini")!;
+			const advisorPrimary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const excludedFirst = getBundledModel("openai", "gpt-4o")!;
+			const excludedSecond = getBundledModel("google", "gemini-2.5-flash")!;
+			const allowedFallback = getBundledModel("anthropic", "claude-haiku-4-5")!;
+
+			const advisorPrimarySelector = `${advisorPrimary.provider}/${advisorPrimary.id}`;
+			const excludedFirstSelector = `${excludedFirst.provider}/${excludedFirst.id}`;
+			const excludedSecondSelector = `${excludedSecond.provider}/${excludedSecond.id}`;
+			const allowedSelector = `${allowedFallback.provider}/${allowedFallback.id}`;
+
+			const mainMock = createMockModel({ responses: [{ content: ["Primary complete"] }] });
+			const advisorMock = createMockModel();
+			const requestedAdvisorModels: string[] = [];
+			const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+			const fallbackSucceeded = Promise.withResolvers<void>();
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				cyberMode: true,
+				cyberModels: [advisorPrimarySelector, allowedSelector],
+				"retry.fallbackChains": { advisor: [excludedFirstSelector, excludedSecondSelector, allowedSelector] },
+				"advisor.syncBacklog": "1",
+			} as Partial<Record<SettingPath, unknown>>);
+			settings.setModelRole("advisor", advisorPrimarySelector);
+			vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([
+				mainModel,
+				advisorPrimary,
+				excludedFirst,
+				excludedSecond,
+				allowedFallback,
+			]);
+
+			session = new AgentSession({
+				agent: new Agent({
+					getApiKey: model => `${model.provider}-test-key`,
+					initialState: { model: mainModel, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: mainMock.stream,
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				advisorTools: [],
+				advisorConfigs: [{ name: "excluded-before-allowed-test" }],
+				advisorStreamFn: (model, context, options) => {
+					const selector = `${model.provider}/${model.id}`;
+					requestedAdvisorModels.push(selector);
+					if (selector === advisorPrimarySelector) {
+						advisorMock.push({ throw: "overloaded_error: provider returned error 503" });
+					} else if (selector === allowedSelector) {
+						advisorMock.push({ content: ["Advisor recovered"] });
+					} else {
+						throw new Error(`Unexpected advisor model requested: ${selector}`);
+					}
+					return advisorMock.stream(model, context, options);
+				},
+			});
+			session.subscribe(event => {
+				if (event.type === "retry_fallback_applied") fallbackAppliedEvents.push(event);
+				if (event.type === "retry_fallback_succeeded") fallbackSucceeded.resolve();
+			});
+
+			session.setAdvisorEnabled(true);
+			await session.prompt("Complete one primary turn");
+			await session.waitForIdle();
+			await fallbackSucceeded.promise;
+
+			expect(requestedAdvisorModels).toEqual([advisorPrimarySelector, allowedSelector]);
+			expect(session.getAdvisorAgent()?.state.model).toMatchObject({
+				provider: allowedFallback.provider,
+				id: allowedFallback.id,
+			});
+			expect(fallbackAppliedEvents).toEqual([
+				{
+					type: "retry_fallback_applied",
+					from: `${advisorPrimarySelector}:medium`,
+					to: allowedSelector,
+					role: "advisor",
+				},
+			]);
+		});
+
+		it("keeps an advisor on its current model when every retry-fallback candidate is excluded", async () => {
+			const mainModel = getBundledModel("openai", "gpt-4o-mini")!;
+			const advisorPrimary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const excludedFirst = getBundledModel("openai", "gpt-4o")!;
+			const excludedSecond = getBundledModel("google", "gemini-2.5-flash")!;
+
+			const advisorPrimarySelector = `${advisorPrimary.provider}/${advisorPrimary.id}`;
+			const excludedFirstSelector = `${excludedFirst.provider}/${excludedFirst.id}`;
+			const excludedSecondSelector = `${excludedSecond.provider}/${excludedSecond.id}`;
+
+			const mainMock = createMockModel({ responses: [{ content: ["Primary complete"] }] });
+			const advisorMock = createMockModel();
+			const requestedAdvisorModels: string[] = [];
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				cyberMode: true,
+				cyberModels: [advisorPrimarySelector],
+				"retry.fallbackChains": { advisor: [excludedFirstSelector, excludedSecondSelector] },
+				"advisor.syncBacklog": "1",
+			} as Partial<Record<SettingPath, unknown>>);
+			settings.setModelRole("advisor", advisorPrimarySelector);
+			vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([
+				mainModel,
+				advisorPrimary,
+				excludedFirst,
+				excludedSecond,
+			]);
+
+			session = new AgentSession({
+				agent: new Agent({
+					getApiKey: model => `${model.provider}-test-key`,
+					initialState: { model: mainModel, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: mainMock.stream,
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				advisorTools: [],
+				advisorConfigs: [{ name: "exhausted-chain-test" }],
+				advisorStreamFn: (model, context, options) => {
+					const selector = `${model.provider}/${model.id}`;
+					requestedAdvisorModels.push(selector);
+					if (selector !== advisorPrimarySelector)
+						throw new Error(`Unexpected advisor model requested: ${selector}`);
+					advisorMock.push(
+						requestedAdvisorModels.length === 1
+							? { throw: "overloaded_error: provider returned error 503" }
+							: { content: ["Advisor recovered on retry"] },
+					);
+					return advisorMock.stream(model, context, options);
+				},
+			});
+
+			session.setAdvisorEnabled(true);
+			await session.prompt("Complete one primary turn");
+			await waitForAdvisorSettle(session, requestedAdvisorModels, 2);
+
+			expect(requestedAdvisorModels).toEqual([advisorPrimarySelector, advisorPrimarySelector]);
+			expect(session.getAdvisorAgent()?.state.model).toMatchObject({
+				provider: advisorPrimary.provider,
+				id: advisorPrimary.id,
+			});
+		});
+
+		it("declines to restore an advisor's original primary once shared protection later excludes it", async () => {
+			const mainModel = getBundledModel("openai", "gpt-4o-mini")!;
+			const originalPrimary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const fallback = getBundledModel("anthropic", "claude-haiku-4-5")!;
+			const primarySelector = `${originalPrimary.provider}/${originalPrimary.id}`;
+			const fallbackSelector = `${fallback.provider}/${fallback.id}`;
+
+			const mainMock = createMockModel({
+				responses: [{ content: ["Primary complete"] }, { content: ["Primary complete again"] }],
+			});
+			const advisorMock = createMockModel();
+			const requestedAdvisorModels: string[] = [];
+			const recovered = Promise.withResolvers<void>();
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				cyberMode: false,
+				cyberModels: [fallbackSelector],
+				"retry.fallbackChains": { advisor: [fallbackSelector] },
+				"retry.fallbackRevertPolicy": "cooldown-expiry",
+				"advisor.syncBacklog": "1",
+			} as Partial<Record<SettingPath, unknown>>);
+			settings.setModelRole("advisor", primarySelector);
+			vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([mainModel, originalPrimary, fallback]);
+
+			session = new AgentSession({
+				agent: new Agent({
+					getApiKey: model => `${model.provider}-test-key`,
+					initialState: { model: mainModel, systemPrompt: [], tools: [] },
+					streamFn: mainMock.stream,
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				advisorTools: [],
+				advisorConfigs: [{ name: "restore-decline-test" }],
+				advisorStreamFn: (model, context, options) => {
+					const selector = `${model.provider}/${model.id}`;
+					requestedAdvisorModels.push(selector);
+					advisorMock.push(
+						requestedAdvisorModels.length === 1
+							? { throw: "rate limit exceeded retry-after-ms=1000" }
+							: { content: ["Advisor reviewed"] },
+					);
+					return advisorMock.stream(model, context, options);
+				},
+			});
+			session.subscribe(event => {
+				if (event.type === "retry_fallback_succeeded") recovered.resolve();
+			});
+
+			expect(session.cyberMode).toBe(false);
+			session.setAdvisorEnabled(true);
+			await session.prompt("cross into the fallback while the primary is still allowed");
+			await recovered.promise;
+			expect(requestedAdvisorModels).toEqual([primarySelector, fallbackSelector]);
+			expect(session.getAdvisorAgent()?.state.model.id).toBe(fallback.id);
+
+			const sibling = new AgentSession({
+				agent: new Agent({
+					getApiKey: () => "test-key",
+					initialState: { model: mainModel, systemPrompt: [], tools: [] },
+					streamFn: createMockModel().stream,
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+			try {
+				await sibling.setCyberMode(true);
+				expect(session.cyberMode).toBe(false);
+
+				vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000);
+				await session.prompt("review after the primary cooldown would normally expire");
+				await session.waitForIdle();
+
+				expect(requestedAdvisorModels).toEqual([primarySelector, fallbackSelector, fallbackSelector]);
+				expect(session.getAdvisorAgent()?.state.model.id).toBe(fallback.id);
+			} finally {
+				await sibling.dispose();
+			}
+		});
+
+		it("keeps an advisor's retry-fallback walk inside a sibling's shared protection while its own indicator is off", async () => {
+			const mainModel = getBundledModel("openai", "gpt-4o-mini")!;
+			const advisorPrimary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const allowedFallback = getBundledModel("anthropic", "claude-haiku-4-5")!;
+			const excluded = getBundledModel("openai", "gpt-4o")!;
+
+			const advisorPrimarySelector = `${advisorPrimary.provider}/${advisorPrimary.id}`;
+			const allowedSelector = `${allowedFallback.provider}/${allowedFallback.id}`;
+			const excludedSelector = `${excluded.provider}/${excluded.id}`;
+
+			const mainMock = createMockModel({ responses: [{ content: ["Primary complete"] }] });
+			const advisorMock = createMockModel();
+			const requestedAdvisorModels: string[] = [];
+			const fallbackSucceeded = Promise.withResolvers<void>();
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				cyberMode: false,
+				cyberModels: [advisorPrimarySelector, allowedSelector],
+				"retry.fallbackChains": { advisor: [excludedSelector, allowedSelector] },
+				"advisor.syncBacklog": "1",
+			} as Partial<Record<SettingPath, unknown>>);
+			settings.setModelRole("advisor", advisorPrimarySelector);
+			vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([
+				mainModel,
+				advisorPrimary,
+				allowedFallback,
+				excluded,
+			]);
+			vi.spyOn(modelRegistry.authStorage, "markUsageLimitReached").mockResolvedValue({ switched: false });
+
+			session = new AgentSession({
+				agent: new Agent({
+					getApiKey: model => `${model.provider}-test-key`,
+					initialState: { model: mainModel, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: mainMock.stream,
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				advisorTools: [],
+				advisorConfigs: [{ name: "shared-protection-test" }],
+				advisorStreamFn: (model, context, options) => {
+					const selector = `${model.provider}/${model.id}`;
+					requestedAdvisorModels.push(selector);
+					if (selector === advisorPrimarySelector) {
+						advisorMock.push({ throw: "overloaded_error: provider returned error 503" });
+					} else if (selector === allowedSelector) {
+						advisorMock.push({ content: ["Advisor recovered"] });
+					} else {
+						throw new Error(`Unexpected advisor model requested: ${selector}`);
+					}
+					return advisorMock.stream(model, context, options);
+				},
+			});
+			session.subscribe(event => {
+				if (event.type === "retry_fallback_succeeded") fallbackSucceeded.resolve();
+			});
+
+			const sibling = new AgentSession({
+				agent: new Agent({
+					getApiKey: () => "test-key",
+					initialState: { model: mainModel, systemPrompt: [], tools: [] },
+					streamFn: createMockModel().stream,
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+			try {
+				await sibling.setCyberMode(true);
+				expect(session.cyberMode).toBe(false);
+
+				session.setAdvisorEnabled(true);
+				await session.prompt("Complete one primary turn");
+				await session.waitForIdle();
+				await fallbackSucceeded.promise;
+
+				expect(requestedAdvisorModels).toEqual([advisorPrimarySelector, allowedSelector]);
+				expect(session.getAdvisorAgent()?.state.model).toMatchObject({
+					provider: allowedFallback.provider,
+					id: allowedFallback.id,
+				});
+				expect(session.cyberMode).toBe(false);
+			} finally {
+				await sibling.dispose();
+			}
+		});
+
+		it("skips an excluded candidate in the second chain reached by a transitive advisor fallback hop", async () => {
+			const mainModel = getBundledModel("openai", "gpt-4o-mini")!;
+			const advisorPrimary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const firstFallback = getBundledModel("anthropic", "claude-haiku-4-5")!;
+			const excluded = getBundledModel("openai", "gpt-4o")!;
+			const secondFallback = getBundledModel("google", "gemini-2.5-flash")!;
+
+			const advisorPrimarySelector = `${advisorPrimary.provider}/${advisorPrimary.id}`;
+			const firstFallbackSelector = `${firstFallback.provider}/${firstFallback.id}`;
+			const excludedSelector = `${excluded.provider}/${excluded.id}`;
+			const secondFallbackSelector = `${secondFallback.provider}/${secondFallback.id}`;
+
+			const mainMock = createMockModel({ responses: [{ content: ["Primary complete"] }] });
+			const advisorMock = createMockModel();
+			const requestedAdvisorModels: string[] = [];
+			const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				cyberMode: true,
+				cyberModels: [advisorPrimarySelector, firstFallbackSelector, secondFallbackSelector],
+				"retry.fallbackChains": {
+					advisor: [firstFallbackSelector],
+					[firstFallbackSelector]: [excludedSelector, secondFallbackSelector],
+				},
+				"advisor.syncBacklog": "1",
+			} as Partial<Record<SettingPath, unknown>>);
+			settings.setModelRole("advisor", advisorPrimarySelector);
+			vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([
+				mainModel,
+				advisorPrimary,
+				firstFallback,
+				excluded,
+				secondFallback,
+			]);
+			vi.spyOn(modelRegistry.authStorage, "markUsageLimitReached").mockResolvedValue({ switched: false });
+
+			session = new AgentSession({
+				agent: new Agent({
+					getApiKey: model => `${model.provider}-test-key`,
+					initialState: { model: mainModel, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: mainMock.stream,
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				advisorTools: [],
+				advisorConfigs: [{ name: "transitive-chain-test" }],
+				advisorStreamFn: (model, context, options) => {
+					const selector = `${model.provider}/${model.id}`;
+					requestedAdvisorModels.push(selector);
+					if (selector === advisorPrimarySelector || selector === firstFallbackSelector) {
+						advisorMock.push({ throw: "overloaded_error: provider returned error 503" });
+					} else if (selector === secondFallbackSelector) {
+						advisorMock.push({ content: ["Advisor recovered on the second chain"] });
+					} else {
+						throw new Error(`Unexpected advisor model requested: ${selector}`);
+					}
+					return advisorMock.stream(model, context, options);
+				},
+			});
+			session.subscribe(event => {
+				if (event.type === "retry_fallback_applied") fallbackAppliedEvents.push(event);
+			});
+
+			session.setAdvisorEnabled(true);
+			await session.prompt("Complete one primary turn");
+			await waitForAdvisorSettle(session, requestedAdvisorModels, 3);
+
+			expect(requestedAdvisorModels).toEqual([
+				advisorPrimarySelector,
+				firstFallbackSelector,
+				secondFallbackSelector,
+			]);
+			expect(session.getAdvisorAgent()?.state.model).toMatchObject({
+				provider: secondFallback.provider,
+				id: secondFallback.id,
+			});
+			expect(fallbackAppliedEvents).toEqual([
+				{
+					type: "retry_fallback_applied",
+					from: `${advisorPrimarySelector}:medium`,
+					to: firstFallbackSelector,
+					role: "advisor",
+				},
+				{
+					type: "retry_fallback_applied",
+					from: `${firstFallbackSelector}:medium`,
+					to: secondFallbackSelector,
+					role: firstFallbackSelector,
+				},
+			]);
 		});
 	});
 
@@ -4757,6 +5732,7 @@ describe("AgentSession retry fallback", () => {
 			thinkingLevel: undefined,
 			isFallback: false,
 		});
+		expect(session.sessionManager.getBranch().findLast(entry => entry.type === "model_change")?.cyber).toBe(false);
 	});
 
 	it("keeps credit with the fallback when a restored primary fails without serving", async () => {
@@ -4888,6 +5864,7 @@ describe("AgentSession retry fallback", () => {
 			thinkingLevel: undefined,
 			isFallback: false,
 		});
+		expect(session.sessionManager.getBranch().findLast(entry => entry.type === "model_change")?.cyber).toBe(false);
 	});
 
 	it("re-checks context before a cooldown-expiry revert onto a smaller-window model in the auto-continue path", async () => {

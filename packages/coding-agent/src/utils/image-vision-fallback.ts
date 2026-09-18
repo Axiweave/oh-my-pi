@@ -22,6 +22,7 @@ import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import type { Api, completeSimple, ImageContent, Model, TextContent } from "@oh-my-pi/pi-ai";
 import { logger, prompt, toError } from "@oh-my-pi/pi-utils";
 import { extractTextContent } from "../commit/utils";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import { expandRoleAlias, getModelMatchPreferences, resolveModelFromString } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -109,13 +110,15 @@ function resolveVisionModel(deps: DescribeAttachedImagesDeps): Model<Api> | unde
 		if (!pattern) return undefined;
 		const expanded = expandRoleAlias(pattern, deps.settings);
 		const model = resolveModelFromString(expanded, available, preferences);
-		return model && sendsImageInputOnWire(model) ? model : undefined;
+		// An excluded candidate counts as unresolved, so the next pattern and the
+		// catalog scan below get their chance.
+		return model && sendsImageInputOnWire(model) && cyberAllowsModel(deps.settings, model) ? model : undefined;
 	};
 	return (
 		resolvePattern("@vision") ??
 		resolvePattern("@default") ??
 		resolvePattern(deps.activeModelString) ??
-		available.find(model => sendsImageInputOnWire(model))
+		available.find(model => sendsImageInputOnWire(model) && cyberAllowsModel(deps.settings, model))
 	);
 }
 

@@ -103,9 +103,10 @@ import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } fro
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
+import { cyberAllowsModel, type CyberRoleChange, planCyberChanges } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
-import type { ResolvedModelRoleValue } from "../config/model-resolver";
-import { validateModelProfiles } from "../config/model-roles";
+import { getModelMatchPreferences, type ResolvedModelRoleValue } from "../config/model-resolver";
+import { validateModelRoleConfiguration } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate, resolvePromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
@@ -266,6 +267,7 @@ import type {
 	AsyncJobSnapshot,
 	CommandMetadataChangedListener,
 	ContextUsageBreakdown,
+	CyberModeResult,
 	DroppedPrompt,
 	FollowUpOptions,
 	FreshSessionResult,
@@ -644,6 +646,13 @@ export class AgentSession {
 	#powerAssertion: PowerAssertion | undefined;
 
 	readonly configWarnings: string[] = [];
+	/** Startup warnings about this initial transcript, not reusable configuration diagnostics. */
+	readonly startupCyberWarnings = new Set<string>();
+
+	/** `{role, landed}` pairs already reported for cyber mode, so a session stays quiet (FR-012). */
+	readonly #reportedCyberChanges = new Set<string>();
+	/** Cyber notices become visible only after a session switch commits. */
+	#pendingCyberNotices?: Extract<AgentSessionEvent, { type: "notice" }>[];
 
 	readonly #models: ModelControls;
 	readonly #tools: SessionTools;
@@ -664,6 +673,7 @@ export class AgentSession {
 	#unsubscribeCodeMode?: () => void;
 	#unsubscribeEvalPreludeSettings?: () => void;
 	#unsubscribeIdleCloseSetting?: () => void;
+	#unsubscribeCyberRoles?: () => void;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
@@ -1642,6 +1652,7 @@ export class AgentSession {
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
+		let restoringInitialModels = true;
 		const modelControlsHost: ModelControlsHost = {
 			agent: this.agent,
 			settings: this.settings,
@@ -1659,7 +1670,13 @@ export class AgentSession {
 			magicKeywordEnabled: keyword => this.#magicKeywordEnabled(keyword),
 			emit: event => this.#emit(event),
 			emitSessionEvent: event => this.#emitSessionEvent(event),
-			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+			emitNotice: (level, message, source) => {
+				// Constructor warnings use the startup handoff before notice listeners exist.
+				if (restoringInitialModels && level === "warning") {
+					this.configWarnings.push(message);
+					if (source === "cyber") this.startupCyberWarnings.add(message);
+				} else this.emitNotice(level, message, source);
+			},
 		};
 		this.#models = new ModelControls(modelControlsHost, {
 			scopedModels: config.scopedModels,
@@ -1667,10 +1684,21 @@ export class AgentSession {
 			thinkingLevelCeiling: config.thinkingLevelCeiling,
 			serviceTierByFamily: config.serviceTierByFamily,
 		});
-		validateModelProfiles(this.settings, message => {
+		restoringInitialModels = false;
+		// A host that cannot enumerate its catalogue (a partial test double, a not-yet
+		// refreshed registry) has nothing to resolve the allowlist against, and an
+		// empty catalogue would report every entry as unresolved.
+		validateModelRoleConfiguration(this.settings, this.#modelRegistry.getAvailable?.(), message => {
 			logger.warn(message);
 			this.configWarnings.push(message);
 		});
+
+		// Startup has no notice listeners yet. Use the existing warning handoff.
+		const startupCyberMessage = this.#formatCyberChangeNotice(this.#planCyberReport());
+		if (startupCyberMessage) {
+			this.configWarnings.push(startupCyberMessage);
+			this.startupCyberWarnings.add(startupCyberMessage);
+		}
 
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
@@ -1706,6 +1734,8 @@ export class AgentSession {
 			persistedAssistantEntryId: message => (message as PersistedAssistantMessage)[kPersistedSessionEntryId],
 			sessionMessageAlreadyPersisted: message => this.#sessionMessageAlreadyPersisted(message),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
+			cyberAllowsModel: model => cyberAllowsModel(this.settings, model),
+			cyberModeEnabled: () => this.cyberMode,
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
 			syncAfterModelChange: previousEditMode => this.#tools.syncAfterModelChange(previousEditMode),
 			resetCurrentResponsesProviderSession: reason => this.#resetCurrentResponsesProviderSession(reason),
@@ -2104,6 +2134,7 @@ export class AgentSession {
 			clientBridge: () => this.#clientBridge,
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+			reportCyberRoleChange: change => this.#reportCyberChanges([change]),
 			sendCustomMessage: (message, options) => this.sendCustomMessage(message, options),
 			extractQueuedAdvisorCards: () => this.#extractQueuedAdvisorCards(),
 			dropPendingAdvisorCards: () => {
@@ -2303,6 +2334,18 @@ export class AgentSession {
 			if (typeof value === "number" && value > 0) {
 				armIdleCloseForOwner(ownerId, value * 1000);
 			}
+		});
+		// Roles the operator (or a sibling session, or a live profile switch)
+		// edits while this session's own protection is already on: replan and
+		// report, the same way a startup or an explicit toggle does (FR-010,
+		// FR-011). Also watch modelProviderOrder: an ambiguous raw role (the same
+		// model id offered by two providers) can re-resolve to a different
+		// concrete identity purely from a reorder, with no modelRoles edit at all
+		// (FR-006, FR-017). `#reportCyberChanges` dedups, so a re-derivation that
+		// lands unchanged reports nothing.
+		this.#unsubscribeCyberRoles = this.settings.onEffectiveChange(path => {
+			if (path !== "modelRoles" && path !== "modelProviderOrder") return;
+			this.#reportCyberChanges(this.#planCyberReport());
 		});
 		this.#unsubscribeCodeMode = onCodeModeChanged(() => {
 			void this.#tools.reconcileCodeMode().catch(error => {
@@ -2709,6 +2752,10 @@ export class AgentSession {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
+		if (event.type === "notice" && event.source === "cyber" && this.#pendingCyberNotices) {
+			this.#pendingCyberNotices.push(event);
+			return;
+		}
 		// Copy array before iteration to avoid mutation during iteration.
 		const listeners = [...this.#eventListeners];
 		for (const l of listeners) {
@@ -2753,6 +2800,18 @@ export class AgentSession {
 	 * react to (e.g. background queue flush failures).
 	 */
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void {
+		// While no listener is attached — the modes subscribe only after the
+		// session exists, and the SDK startup capture subscribes after it — a
+		// warning emitted as an event reaches no one. Hand it to the startup
+		// channels every mode flushes instead, the same way the constructor-time
+		// role report and the `ModelControls` constructor warnings do. A startup
+		// warning the operator never sees is a startup warning that does not exist
+		// (FR-011).
+		if (level === "warning" && this.#eventListeners.length === 0) {
+			this.configWarnings.push(message);
+			if (source === "cyber") this.startupCyberWarnings.add(message);
+			return;
+		}
 		this.#emit({ type: "notice", level, message, source });
 	}
 
@@ -5187,6 +5246,10 @@ export class AgentSession {
 		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
 		this.#movedFromEmptySessionFile = undefined;
 		this.#closeAllProviderSessions("dispose");
+		// Release this session's claim on any shared configuration state: a session
+		// that no longer exists must not keep filtering the roles of the sessions
+		// that share its settings. Idempotent, and only this session's claim goes.
+		this.#models.releaseCyberOwner();
 		this.#maintenance.cancelSpeculation();
 		this.setHindsightSessionState(undefined);
 		hindsightState?.dispose();
@@ -5214,6 +5277,10 @@ export class AgentSession {
 		if (this.#unsubscribeIdleCloseSetting) {
 			this.#unsubscribeIdleCloseSetting();
 			this.#unsubscribeIdleCloseSetting = undefined;
+		}
+		if (this.#unsubscribeCyberRoles) {
+			this.#unsubscribeCyberRoles();
+			this.#unsubscribeCyberRoles = undefined;
 		}
 		this.#eventListeners = [];
 		this.#runStateListeners.clear();
@@ -8745,9 +8812,25 @@ export class AgentSession {
 			this.#queuedMessageDrainBlocked = false;
 			this.#usagePreflightReadyForNextModelCall = false;
 
-			// The new transcript starts empty, so record the model and profile it
-			// inherits: resume reads both from `model_change`, and the profile has no
-			// assistant-message fallback (the model does, but only after a turn).
+			// The new transcript starts empty, so record the model, profile, and cyber
+			// state it inherits: resume reads all three from `model_change`, and the
+			// profile has no assistant-message fallback (the model does, but only after
+			// a turn).
+
+			// Cyber protection is revalidated here rather than copied, because the
+			// declaration this state depends on can have changed since it was set: an
+			// emptied or now-unresolvable `cyberModels` must degrade to off with a
+			// warning rather than pin a claim the configuration no longer supports
+			// (FR-025, FR-026), and a changed-but-still-valid list must re-point the
+			// active model before it is read below. FR-030 stays intact either way,
+			// because `restoreCyberMode` only ever drops this session's own claim. A
+			// fresh transcript also starts its own dedup set (FR-012), so a
+			// substitution already reported on the outgoing transcript is reported
+			// again here.
+			this.#reportedCyberChanges.clear();
+			this.#models.restoreCyberMode(this.cyberMode);
+			await this.#models.repointCyberModel();
+			this.#reportCyberChanges(this.#planCyberReport());
 			const model = this.model;
 			if (model) {
 				this.sessionManager.appendModelChange(
@@ -8755,6 +8838,7 @@ export class AgentSession {
 					lastModelChangeRole,
 					false,
 					this.#models.activeModelProfile,
+					this.cyberMode,
 				);
 			}
 			this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
@@ -8868,6 +8952,9 @@ export class AgentSession {
 			this.#advisors.reattachRecorderFeeds();
 			advisorRecordersDetached = false;
 			await this.#memory.resetContextForNewTranscript();
+			this.#reportedCyberChanges.clear();
+			await this.#models.restoreCyberBranch();
+			this.#reportCyberChanges(this.#planCyberReport());
 
 			// Emit session_switch event with reason "fork" to hooks
 			if (this.#extensionRunner) {
@@ -8960,6 +9047,94 @@ export class AgentSession {
 	/** Cycles through the configured `modelProfiles` bundles. */
 	cycleModelProfile(direction?: "forward" | "backward", role?: string): Promise<ModelProfileResult | undefined> {
 		return this.#models.cycleModelProfile(direction, role);
+	}
+
+	/** Whether this session has cyber mode on (FR-019). */
+	get cyberMode(): boolean {
+		return this.#models.cyberMode;
+	}
+
+	/**
+	 * Switches cyber mode for this session and reports what it changed.
+	 *
+	 * The mechanics live in `ModelControls`; the report belongs here, because a
+	 * warning notice is a session-level event and its dedup set is per session
+	 * (FR-011, FR-012). A refusal returns the reason for the caller to report, and
+	 * leaves the state unchanged (FR-016).
+	 */
+	async setCyberMode(enabled: boolean): Promise<CyberModeResult> {
+		const result = await this.#models.setCyberMode(enabled);
+		this.#reportCyberChanges(result.changes);
+		return result;
+	}
+
+	/**
+	 * Move a session back inside the allowlist when its persisted model was
+	 * dropped from `cyberModels` since the protection was recorded (FR-024).
+	 *
+	 * The model-controls constructor installs the filter but cannot await a model
+	 * switch, so startup calls this once the session is live, before anything
+	 * reads the model. A no-op when the session is unprotected or already inside.
+	 */
+	async repointCyberMode(): Promise<void> {
+		await this.#models.repointCyberModel();
+	}
+
+	/**
+	 * Report a role that cyber protection left without a model, for a surface that
+	 * only sees its resolution fail and falls back to its non-model path
+	 * (FR-011). Deduped per transcript on the role and the excluded model, the
+	 * same pair FR-012 keys the role report on, so a fresh transcript reports it
+	 * again the way a substitution is reported again.
+	 */
+	reportCyberRoleWithoutModel(role: string, excludedSelector: string): void {
+		const key = `${role}\u0000${excludedSelector}`;
+		if (this.#reportedCyberChanges.has(key)) return;
+		this.#reportedCyberChanges.add(key);
+		this.emitNotice(
+			"warning",
+			`Cyber mode left no model for the "${role}" role (${excludedSelector} is not cyber-capable); its callers use their non-model path.`,
+			"cyber",
+		);
+	}
+
+	/** Plan from raw roles, including protection owned by another session. */
+	#planCyberReport(): CyberRoleChange[] {
+		const allowlist = this.settings.getCyberAllowlist();
+		if (!allowlist) return [];
+		return planCyberChanges(this.settings.getRawModelRoles(), allowlist, getModelMatchPreferences(this.settings));
+	}
+
+	/**
+	 * Dedup `changes` against every pair already reported on this transcript
+	 * (FR-012), and format the survivors into one notice line, or `undefined`
+	 * when nothing is new.
+	 */
+	#formatCyberChangeNotice(changes: CyberRoleChange[]): string | undefined {
+		const fresh: string[] = [];
+		for (const change of changes) {
+			const key = `${change.role}\u0000${change.landed}`;
+			if (this.#reportedCyberChanges.has(key)) continue;
+			this.#reportedCyberChanges.add(key);
+			fresh.push(
+				change.reason === "substituted"
+					? `${change.role} → ${change.landed} (substituted: no cyber-capable entry)`
+					: `${change.role} → ${change.landed}`,
+			);
+		}
+		return fresh.length > 0 ? `Cyber mode changed ${fresh.length} role(s): ${fresh.join(", ")}` : undefined;
+	}
+
+	/**
+	 * Warn about every role cyber mode moved, naming the model each landed on
+	 * (FR-011), and distinguish a filtered chain from a substitution.
+	 *
+	 * A `{role, landed}` pair is reported once per session, so a role that keeps
+	 * landing on the same substituted model does not repeat the warning (FR-012).
+	 */
+	#reportCyberChanges(changes: CyberRoleChange[]): void {
+		const message = this.#formatCyberChangeNotice(changes);
+		if (message) this.emitNotice("warning", message, "cyber");
 	}
 
 	/** Lists available models after applying the configured enabled-model filter. */
@@ -10000,6 +10175,9 @@ export class AgentSession {
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#memory.promotionSnapshot;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
 		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
+		const previousCyberMode = this.cyberMode;
+		const previousCyberAllowlist = this.settings.getCyberAllowlist();
+		const previousCyberReports = new Set(this.#reportedCyberChanges);
 
 		// Snapshot the full checkpoint runtime state: the success path calls
 		// #rehydrateCheckpointRewindState(), which clears and rebuilds all four
@@ -10029,6 +10207,8 @@ export class AgentSession {
 		this.#usagePreflightReadyModel = undefined;
 
 		let cwdChangeTarget: string | undefined;
+		const cyberNotices: Extract<AgentSessionEvent, { type: "notice" }>[] = [];
+		this.#pendingCyberNotices = cyberNotices;
 		try {
 			if (switchingToDifferentSession) {
 				// Stop and settle in-flight advisors while the old-session feeds can
@@ -10090,8 +10270,14 @@ export class AgentSession {
 			}
 
 			// Before the model restore: the incoming session's bundle (or none)
-			// replaces the outgoing session's role layer wholesale.
+			// replaces the outgoing session's role layer wholesale. A different
+			// session file is a different transcript, so this also starts a fresh
+			// dedup set (FR-012).
+			if (switchingToDifferentSession) this.#reportedCyberChanges.clear();
 			this.#models.restoreModelProfile(this.sessionManager.getLastModelProfile(), { force: true });
+			// Cyber state rides the same entry, and installing it here means the
+			// restore below resolves through filtered roles.
+			this.#models.restoreCyberMode(this.sessionManager.getLastCyberMode());
 
 			// Restore model if saved
 			const targetModelStrings = getRestorableSessionModels(
@@ -10124,6 +10310,11 @@ export class AgentSession {
 					}
 				}
 			}
+
+			// A resumed session can reinstate a model the allowlist has since
+			// dropped, so re-point it through the ordinary switch path (FR-024).
+			await this.#models.repointCyberModel();
+			this.#reportCyberChanges(this.#planCyberReport());
 
 			const model = this.model;
 			if (model) {
@@ -10212,11 +10403,17 @@ export class AgentSession {
 			if (previousSessionState.sessionId !== this.sessionManager.getSessionId()) {
 				this.#notifySessionChangeCallbacks();
 			}
+			this.#pendingCyberNotices = undefined;
+			for (const notice of cyberNotices) this.#emit(notice);
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			this.#models.restoreCyberMode(previousCyberMode, previousCyberAllowlist);
+			this.#reportedCyberChanges.clear();
+			for (const report of previousCyberReports) this.#reportedCyberChanges.add(report);
+			this.#pendingCyberNotices = undefined;
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId, false);
 			this.#memory.rekeyForCurrentSessionId();
@@ -10386,6 +10583,15 @@ export class AgentSession {
 			this.#memory.rekeyForCurrentSessionId();
 			await this.#memory.resetContextForNewTranscript();
 
+			// Cyber state rides the transcript like the model profile does, and
+			// belongs here for the same reason: install it before the branch's
+			// history becomes the active one, and before `#reconcileModeAfterBranch`
+			// or a later turn resolves any role. Branching creates a new session
+			// file, so this also starts a fresh dedup set (FR-012).
+			this.#reportedCyberChanges.clear();
+			await this.#models.restoreCyberBranch();
+			this.#reportCyberChanges(this.#planCyberReport());
+
 			// Reload messages from entries (works for both file and in-memory mode)
 			const sessionContext = this.buildDisplaySessionContext();
 
@@ -10523,6 +10729,9 @@ export class AgentSession {
 			this.#syncAgentSessionId();
 			this.#memory.rekeyForCurrentSessionId();
 			await this.#memory.resetContextForNewTranscript();
+			this.#reportedCyberChanges.clear();
+			await this.#models.restoreCyberBranch();
+			this.#reportCyberChanges(this.#planCyberReport());
 
 			const sessionContext = this.buildDisplaySessionContext();
 
@@ -10854,6 +11063,10 @@ export class AgentSession {
 		} finally {
 			this.#bash.finishSessionTransition(bashTransition, branchTransitioned);
 		}
+
+		// Restore the destination state, but keep notice deduplication for this transcript.
+		await this.#models.restoreCyberBranch();
+		this.#reportCyberChanges(this.#planCyberReport());
 
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext();

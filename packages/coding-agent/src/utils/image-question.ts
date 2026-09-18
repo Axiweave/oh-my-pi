@@ -3,6 +3,7 @@ import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { type Api, type AssistantMessage, completeSimple, type Model, type Usage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { extractTextContent } from "../commit/utils";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import {
 	expandRoleAlias,
 	extractExplicitThinkingSelector,
@@ -44,7 +45,10 @@ export function resolveImageQuestionModel(session: ToolSession): ResolvedImageQu
 	const resolvePattern = (pattern: string | undefined): Model<Api> | undefined => {
 		if (!pattern) return undefined;
 		const expanded = expandRoleAlias(pattern, session.settings);
-		return resolveModelFromString(expanded, availableModels, matchPreferences);
+		const resolved = resolveModelFromString(expanded, availableModels, matchPreferences);
+		// An excluded candidate is skipped rather than used, so the next pattern
+		// and the catalog scans below get their chance.
+		return resolved && cyberAllowsModel(session.settings, resolved) ? resolved : undefined;
 	};
 
 	const activeModelPattern = session.getActiveModelString?.() ?? session.getModelString?.();
@@ -61,9 +65,14 @@ export function resolveImageQuestionModel(session: ToolSession): ResolvedImageQu
 
 	const activeProvider = resolvePattern(activeModelPattern)?.provider;
 	model ??= availableModels.find(
-		candidate => candidate.provider === activeProvider && sendsImageInputOnWire(candidate),
+		candidate =>
+			candidate.provider === activeProvider &&
+			sendsImageInputOnWire(candidate) &&
+			cyberAllowsModel(session.settings, candidate),
 	);
-	model ??= availableModels.find(candidate => sendsImageInputOnWire(candidate));
+	model ??= availableModels.find(
+		candidate => sendsImageInputOnWire(candidate) && cyberAllowsModel(session.settings, candidate),
+	);
 	if (!model) {
 		const textOnly = resolvePattern("@vision") ?? resolvePattern("@default") ?? resolvePattern(activeModelPattern);
 		if (!textOnly) throw new ToolError("Unable to resolve a model for image questions.");

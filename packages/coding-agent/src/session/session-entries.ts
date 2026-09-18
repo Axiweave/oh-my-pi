@@ -114,6 +114,12 @@ export interface ModelChangeEntry extends SessionEntryBase {
 	 * that has one names the session's active bundle.
 	 */
 	profile?: string;
+	/**
+	 * Cyber mode state in effect at this transition. Every model change records
+	 * it, unlike `profile`: a turn recorded after a disable must not read as
+	 * still protected, and the most recent entry always names the truth.
+	 */
+	cyber?: boolean;
 }
 
 export interface ServiceTierChangeEntry extends SessionEntryBase {

@@ -238,6 +238,8 @@ export class EventController {
 						registry: session.modelRegistry,
 						sessionId: session.sessionId,
 						metadataResolver: provider => session.agent.metadataForProvider(provider),
+						reportCyberRoleWithoutModel: (role, excludedSelector) =>
+							session.reportCyberRoleWithoutModel(role, excludedSelector),
 					})
 				: null,
 		);

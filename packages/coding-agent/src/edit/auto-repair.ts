@@ -291,6 +291,9 @@ export async function attemptEditAutoRepair(options: {
 	if (!session.settings.get("edit.autoRepair.enabled")) return undefined;
 	const registry = session.modelRegistry;
 	if (!registry) return undefined;
+	// `resolveRoleSelection` reads the cyber-filtered role view, so an installed
+	// allowlist already confines this model to an allowed identity and no extra
+	// membership check is needed before the credential lookup below.
 	const model = resolveRoleSelection(["smol"], session.settings, registry.getAvailable())?.model;
 	if (!model) return undefined;
 	const sessionId = session.getSessionId?.() ?? undefined;

@@ -2785,8 +2785,15 @@ export class SessionManager {
 	 * @param role Optional role (default: "default")
 	 * @param resolvedModelIsFallback Whether this transition selected a retry-fallback model
 	 * @param profile `modelProfiles` bundle this transition installed, if any
+	 * @param cyber Cyber mode state in effect, which every call site records
 	 */
-	appendModelChange(model: string, role?: string, resolvedModelIsFallback = false, profile?: string): string {
+	appendModelChange(
+		model: string,
+		role?: string,
+		resolvedModelIsFallback = false,
+		profile?: string,
+		cyber?: boolean,
+	): string {
 		const entry: ModelChangeEntry = {
 			type: "model_change",
 			...this.#freshEntryFields(),
@@ -2794,6 +2801,7 @@ export class SessionManager {
 			role,
 			resolvedModelIsFallback,
 			profile,
+			cyber,
 		};
 		this.#recordEntry(entry);
 		return entry.id;
@@ -3003,6 +3011,20 @@ export class SessionManager {
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type === "model_change" && entry.profile) return entry.profile;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Cyber mode state this branch last recorded, or undefined when no model
+	 * change carried it. A session predating the feature records nothing, and
+	 * callers treat that as off.
+	 */
+	getLastCyberMode(): boolean | undefined {
+		const branch = this.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (entry.type === "model_change" && entry.cyber !== undefined) return entry.cyber;
 		}
 		return undefined;
 	}

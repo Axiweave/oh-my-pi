@@ -9,6 +9,7 @@ import {
 	type SlashCommand,
 } from "@oh-my-pi/pi-tui";
 import { isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import { cyberRefusalMessage, cyberStateLine } from "../../config/cyber-mode";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { resolveLocalRoot } from "../../internal-urls";
 import { AskDialogComponent } from "../../modes/components/ask-dialog";
@@ -597,6 +598,8 @@ export class InputController {
 			this.ctx.keybindings.getKeys("app.model.cycleProfileBackward"),
 		);
 		this.ctx.editor.onCycleModelProfileBackward = () => this.cycleModelProfile("backward");
+		this.ctx.editor.setActionKeys("app.model.toggleCyber", this.ctx.keybindings.getKeys("app.model.toggleCyber"));
+		this.ctx.editor.onToggleCyber = () => void this.toggleCyberMode();
 		this.ctx.editor.setActionKeys(
 			"app.model.selectTemporary",
 			this.ctx.keybindings.getKeys("app.model.selectTemporary"),
@@ -2415,6 +2418,29 @@ export class InputController {
 					profiles.indexOf(result.profile),
 				),
 			);
+		} catch (error) {
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	/**
+	 * Toggle cyber mode for the main session, reporting the state the session
+	 * landed in. A refusal keeps the state and names its reason (FR-016).
+	 */
+	async toggleCyberMode(): Promise<void> {
+		if (this.ctx.focusedAgentId) {
+			this.ctx.showStatus("Model/thinking apply to the main session — press ←← to return first");
+			return;
+		}
+		try {
+			const result = await this.ctx.session.setCyberMode(!this.ctx.session.cyberMode);
+			if (result.refusal) {
+				this.ctx.showStatus(cyberRefusalMessage(result.refusal));
+				return;
+			}
+			this.ctx.statusLine.invalidate();
+			this.ctx.updateEditorBorderColor();
+			this.ctx.showStatus(cyberStateLine(result, this.ctx.session.model));
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}

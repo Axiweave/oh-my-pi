@@ -976,6 +976,12 @@ export function createSubagentSettings(
 	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
 		snapshot[key] = baseSettings.get(key);
 	}
+	// `modelRoles` is snapshotted from the raw configuration, not the cyber-filtered
+	// merged view `get` returns: the child installs the parent's allowlist below, so
+	// it re-derives the same filtered view, and releasing protection in the child
+	// restores the configured chains instead of the parent's already-filtered ones
+	// (FR-028).
+	snapshot["modelRoles"] = baseSettings.getRawModelRoles();
 	// Resolve the subagent's per-family tiers from `tier.subagent` ("inherit" =
 	// match the parent's live tiers when a live session supplied them, else the
 	// subagent's own configured tier.* settings). The result is stamped back onto
@@ -985,7 +991,7 @@ export function createSubagentSettings(
 	snapshot["tier.openai"] = subagentTiers.openai ?? "none";
 	snapshot["tier.anthropic"] = subagentTiers.anthropic ?? "none";
 	snapshot["tier.google"] = subagentTiers.google ?? "none";
-	return Settings.isolated(
+	const childSettings = Settings.isolated(
 		{
 			...snapshot,
 			// Async jobs and bash/eval auto-backgrounding are inherited from the parent:
@@ -1005,6 +1011,9 @@ export function createSubagentSettings(
 		},
 		{ storage: baseSettings.getStorage() },
 	);
+	const inheritedCyberAllowlist = baseSettings.getCyberAllowlist();
+	if (inheritedCyberAllowlist) childSettings.applyCyberRoles("parent", inheritedCyberAllowlist);
+	return childSettings;
 }
 
 export type AbortReason = "signal" | "shutdown" | "terminate" | "timeout" | "budget";

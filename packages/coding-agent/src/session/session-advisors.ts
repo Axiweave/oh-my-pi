@@ -67,6 +67,7 @@ import {
 	resolveAdvisorDeliveryChannel,
 	slugifyAdvisorName,
 } from "../advisor";
+import { type CyberRoleChange, cyberAllowsModel, resolveCyberTarget } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
@@ -368,6 +369,12 @@ export interface SessionAdvisorsHost {
 	clientBridge(): ClientBridge | undefined;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
+	/**
+	 * Report a role change cyber mode made at a surface that resolves outside
+	 * the configured role map, so the session's per-transcript dedup covers it
+	 * alongside the changes `planCyberChanges` names (FR-011, FR-012).
+	 */
+	reportCyberRoleChange(change: CyberRoleChange): void;
 	sendCustomMessage(message: CustomMessagePayload, options?: AdvisorMessageDeliveryOptions): Promise<boolean>;
 	extractQueuedAdvisorCards(): CustomMessage[];
 	dropPendingAdvisorCards(): void;
@@ -878,9 +885,7 @@ export class SessionAdvisors {
 			let thinkingLevel: ThinkingLevel | undefined;
 			if (config.model) {
 				const resolved = resolveModelOverride([config.model], this.#host.modelRegistry, this.#host.settings);
-				model = resolved.model;
-				thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
-				if (!model) {
+				if (!resolved.model) {
 					this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
 					if (emitWarnings) {
 						this.#host.emitNotice(
@@ -891,8 +896,18 @@ export class SessionAdvisors {
 					}
 					continue;
 				}
-			} else {
-				const sel = resolveAdvisorRoleSelection(this.#host.settings, this.#host.modelRegistry.getAvailable());
+				// Cyber mode covers an explicit override too: an excluded model
+				// falls through to the advisor role chain below instead of
+				// running the disallowed identity, the same way a role lookup
+				// is already filtered by the installed allowlist.
+				if (cyberAllowsModel(this.#host.settings, resolved.model)) {
+					model = resolved.model;
+					thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
+				}
+			}
+			if (!model) {
+				const availableModels = this.#host.modelRegistry.getAvailable();
+				const sel = resolveAdvisorRoleSelection(this.#host.settings, availableModels);
 				if (!sel) {
 					this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
 					if (emitWarnings) {
@@ -902,7 +917,42 @@ export class SessionAdvisors {
 					}
 					continue;
 				}
-				model = sel.model;
+				// Cyber mode covers this path too. `@advisor` falls through to the
+				// role's static priority chain when `advisor`/`slow` are unset, and
+				// the filter rewrites configured role values only, so the resolved
+				// model can sit outside the allowlist. The role lands on its
+				// protected target instead (FR-007), the same one a configured
+				// chain resolves to; when nothing is left to run on, this advisor
+				// reports no model rather than streaming from an excluded identity.
+				if (cyberAllowsModel(this.#host.settings, sel.model)) {
+					model = sel.model;
+				} else {
+					const allowlist = this.#host.settings.getCyberAllowlist();
+					model = allowlist
+						? resolveCyberTarget(this.#host.settings, "advisor", availableModels, allowlist)
+						: undefined;
+					if (!model) {
+						this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
+						if (emitWarnings) {
+							this.#host.emitNotice(
+								"warning",
+								`Advisor "${config.name}": ${formatModelString(sel.model)} is not cyber-capable, and no cyber-capable model is available in the current selection.`,
+								"advisor",
+							);
+						}
+						continue;
+					}
+					// The substitution is a role change the operator asked to hear
+					// about (FR-011): `planCyberChanges` sees configured role values
+					// only, and this chain is the built-in default, so the report goes
+					// through the session's deduped cyber channel instead. A role the
+					// toggle already named for this model stays silent (FR-012).
+					this.#host.reportCyberRoleChange({
+						role: "advisor",
+						landed: formatModelString(model),
+						reason: "substituted",
+					});
+				}
 				thinkingLevel = concreteThinkingLevel(sel.thinkingLevel);
 			}
 			// Clamp the effort against the resolved model. Historically we defaulted
@@ -1539,7 +1589,15 @@ export class SessionAdvisors {
 		);
 		const primaryModel =
 			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
-		if (!primaryModel || !this.#canReplayAdvisorHistory(advisor, primaryModel)) return;
+		// Cyber mode covers this restore too: the original primary was captured
+		// before protection could exclude it, so re-checking here keeps a
+		// later-installed or narrowed allowlist from being bypassed on revert.
+		if (
+			!primaryModel ||
+			!cyberAllowsModel(this.#host.settings, primaryModel) ||
+			!this.#canReplayAdvisorHistory(advisor, primaryModel)
+		)
+			return;
 		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, advisor.providerSessionId, { signal });
 		if (!apiKey) return;
 		signal.throwIfAborted();
@@ -1681,6 +1739,11 @@ export class SessionAdvisors {
 				const resolved = resolveModelOverride([selector.raw], this.#host.modelRegistry, this.#host.settings);
 				const candidate = resolved.model ?? this.#host.modelRegistry.find(selector.provider, selector.id);
 				if (!candidate || modelsAreEqual(candidate, currentModel)) continue;
+				// Cyber mode covers this walk too. The swap refuses an excluded
+				// candidate, so selecting one here would abandon the retry
+				// fallback entirely and leave the advisor on the failing model:
+				// skip it and move on to the next entry the protection covers.
+				if (!cyberAllowsModel(this.#host.settings, candidate)) continue;
 				if (!this.#canReplayAdvisorHistory(advisor, candidate)) continue;
 				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisor.providerSessionId, { signal });
 				if (!apiKey) continue;

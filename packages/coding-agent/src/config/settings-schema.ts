@@ -244,6 +244,7 @@ export const STATUS_LINE_SEGMENT_IDS = [
 	"status",
 	"model",
 	"model_profile",
+	"cyber",
 	"mode",
 	"path",
 	"git",
@@ -730,6 +731,21 @@ export const SETTINGS_SCHEMA = {
 	modelProviderOrder: { type: "array", default: EMPTY_STRING_ARRAY },
 
 	cycleOrder: { type: "array", default: DEFAULT_CYCLE_ORDER },
+
+	/**
+	 * Ordered list of model selectors that upstream providers will not block for
+	 * security work. Order is significant: the first entry that resolves to an
+	 * available model is the primary cyber model, used when a role chain holds no
+	 * allowlisted entry.
+	 */
+	cyberModels: { type: "array", default: EMPTY_STRING_ARRAY },
+
+	/**
+	 * Startup value for cyber mode, read by the first session of a process. A
+	 * resumed session, `/new`, and a delete transition follow the recorded session
+	 * state instead, exactly as `modelProfile` does.
+	 */
+	cyberMode: { type: "boolean", default: false },
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Appearance

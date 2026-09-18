@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { Api, AssistantMessage, completeSimple, Model } from "@oh-my-pi/pi-ai";
 import type { ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	type DescribeAttachedImagesDeps,
@@ -61,6 +62,7 @@ function makeDeps(
 	available: Model<Api>[],
 	completeImpl: typeof completeSimple,
 	apiKey: string | undefined = "test-key",
+	settings = Settings.isolated(),
 ): DescribeAttachedImagesDeps {
 	return {
 		activeModel: textModel,
@@ -69,7 +71,7 @@ function makeDeps(
 			getApiKey: async () => apiKey,
 			resolver: () => async () => apiKey,
 		} as unknown as DescribeAttachedImagesDeps["modelRegistry"],
-		settings: Settings.isolated(),
+		settings,
 		localProtocolOptions: { getArtifactsDir: () => artifactsDir, getSessionId: () => "test-session" },
 		activeModelString: `${textModel.provider}/${textModel.id}`,
 		completeImpl,
@@ -169,6 +171,23 @@ describe("describeAttachedImagesForTextModel", () => {
 			[{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
 			makeDeps(testDir, [stripped], stub.fn),
 		);
+		expect(stub.calls).toHaveLength(0);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0]!.text).toContain("No vision-capable model");
+	});
+
+	it("treats an excluded vision model as unavailable under cyber mode", async () => {
+		const excludedVision: Model<Api> = { ...visionModel, id: "excluded-vl" };
+		const settings = Settings.isolated({ cyberModels: [`${textModel.provider}/${textModel.id}`] });
+		const allowlist = resolveCyberAllowlist(settings, [textModel, excludedVision]);
+		if (!allowlist) throw new Error("Expected the declared allowlist to resolve");
+		settings.applyCyberRoles("test-owner", allowlist);
+		const stub = makeCompleteStub("should not be used");
+		const blocks = await describeAttachedImagesForTextModel(
+			[{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+			makeDeps(testDir, [textModel, excludedVision], stub.fn, "test-key", settings),
+		);
+
 		expect(stub.calls).toHaveLength(0);
 		expect(blocks).toHaveLength(1);
 		expect(blocks[0]!.text).toContain("No vision-capable model");

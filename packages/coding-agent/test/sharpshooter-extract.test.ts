@@ -6,12 +6,14 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import {
 	buildSharpshooterEnvelope,
 	maybeStartSharpshooterExtraction,
+	resolveSharpshooterModel,
 } from "@oh-my-pi/pi-coding-agent/sharpshooter/extract";
 import { listSharpshooterDeltas } from "@oh-my-pi/pi-coding-agent/sharpshooter/queue";
 
@@ -242,5 +244,31 @@ describe("maybeStartSharpshooterExtraction", () => {
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("resolveSharpshooterModel honors cyber mode", () => {
+	it("refuses an excluded explicit selector and lands on the allowed smol role", async () => {
+		const excluded = getBundledModel("anthropic", "claude-haiku-4-5");
+		const allowed = getBundledModel("openai", "gpt-5-mini");
+		if (!excluded || !allowed) throw new Error("Expected bundled models");
+
+		const settings = Settings.isolated({
+			"sharpshooter.model": `${excluded.provider}/${excluded.id}`,
+			cyberModels: [`${allowed.provider}/${allowed.id}`],
+		});
+		settings.setModelRole("smol", `${allowed.provider}/${allowed.id}`);
+		const allowlist = resolveCyberAllowlist(settings, [excluded, allowed]);
+		if (!allowlist) throw new Error("Expected the declared allowlist to resolve");
+		settings.applyCyberRoles("test-owner", allowlist);
+
+		const modelRegistry = {
+			getAll: () => [excluded, allowed],
+			getAvailable: () => [excluded, allowed],
+		} as unknown as ModelRegistry;
+
+		const model = await resolveSharpshooterModel(settings, modelRegistry);
+
+		expect(model?.id).toBe(allowed.id);
 	});
 });

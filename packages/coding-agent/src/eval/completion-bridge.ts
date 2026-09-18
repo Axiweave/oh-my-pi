@@ -19,6 +19,7 @@ import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-ca
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
 
+import { cyberAllowsModel } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	expandRoleAlias,
@@ -204,7 +205,9 @@ function appendFallbackCandidates(
 		const identity = candidateIdentity(candidate, reasoning);
 		if (seen.has(identity)) continue;
 		seen.add(identity);
-		out.push({ selector: entry.raw, model: candidate, ...reasoning });
+		if (!deps.settings || cyberAllowsModel(deps.settings, candidate)) {
+			out.push({ selector: entry.raw, model: candidate, ...reasoning });
+		}
 		appendFallbackCandidates(deps, entry.raw, candidate, reasoning, undefined, seen, expanded, out);
 	}
 }
@@ -224,7 +227,7 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 		if (!pattern) return undefined;
 		const selector = expandRoleAlias(pattern, session.settings);
 		const model = resolveModelFromString(selector, available, matchPreferences);
-		return model ? { model, selector } : undefined;
+		return model && cyberAllowsModel(session.settings, model) ? { model, selector } : undefined;
 	};
 	const primary =
 		tier === "default"
@@ -317,6 +320,12 @@ async function executeCompletion(
 			if (!apiKey) {
 				lastError = new ToolError(
 					`completion() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another tier.`,
+				);
+				continue;
+			}
+			if (!cyberAllowsModel(session.settings, model)) {
+				lastError = new ToolError(
+					`completion() cannot use ${formatModelString(model)}: excluded by cyber mode protection.`,
 				);
 				continue;
 			}

@@ -11,6 +11,9 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import * as ai from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
@@ -26,6 +29,7 @@ import {
 	setMnemopiSessionState,
 } from "@oh-my-pi/pi-coding-agent/mnemopi/state";
 import type { AgentSessionEventListener } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { ONLINE_MEMORY_MODEL_KEY } from "@oh-my-pi/pi-coding-agent/tiny/models";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { MemoryEditTool } from "@oh-my-pi/pi-coding-agent/tools/memory-edit";
 import { MemoryRecallTool } from "@oh-my-pi/pi-coding-agent/tools/memory-recall";
@@ -719,6 +723,94 @@ describe("Mnemopi backend lifecycle", () => {
 		expect(memory.get(retainId)).not.toBeNull();
 		memory.remember("a fresh note after start", { source: "coding-agent-transcript", scope: "bank" });
 		expect(memory.get(retainId)).not.toBeNull();
+	});
+
+	it("keeps retained online memory callbacks inside live cyber protection", async () => {
+		const haiku = getBundledModel("anthropic", "claude-haiku-4-5");
+		const sonnet = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!haiku || !sonnet) throw new Error("Expected bundled Anthropic models");
+		const settings = Settings.isolated({
+			"memory.backend": "mnemopi",
+			"mnemopi.noEmbeddings": true,
+			"mnemopi.llmMode": "smol",
+			"mnemopi.scoping": "global",
+			"mnemopi.bank": "default",
+			"mnemopi.dbPath": makeMnemopiConfig().dbPath,
+			"providers.memoryModel": ONLINE_MEMORY_MODEL_KEY,
+			modelRoles: { tiny: `anthropic/${sonnet.id}`, smol: `anthropic/${sonnet.id}` },
+			cyberModels: [`anthropic/${haiku.id}`],
+		});
+		let available = [haiku, sonnet];
+		const authGate: { pending?: Promise<string> } = {};
+		const registry = {
+			getAvailable: () => available,
+			getApiKey: async () => (await authGate.pending) ?? "test-key",
+			getApiKeyForProvider: async () => undefined,
+			resolver: () => async () => "test-key",
+		};
+		const session = {
+			sessionId: TEST_SESSION_ID,
+			settings,
+			modelRegistry: registry,
+			sessionManager: { getEntries: () => [], getCwd: () => "/tmp" },
+			emitNotice: () => {},
+			getHindsightSessionState: () => undefined,
+			subscribe: () => () => {},
+		} as never;
+		const attempts: string[] = [];
+		vi.spyOn(ai, "completeSimple").mockImplementation(async model => {
+			attempts.push(model.id);
+			return {
+				role: "assistant",
+				content: [{ type: "text", text: "memory reply" }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+		});
+		await mnemopiBackend.start({
+			session,
+			settings,
+			modelRegistry: registry as never,
+			agentDir: path.dirname(tempDbPath!),
+			taskDepth: 0,
+		});
+		registeredMnemopiState = getMnemopiSessionState(session);
+		const complete = registeredMnemopiState?.config.providerOptions.llm;
+		if (typeof complete !== "function") throw new Error("Expected online memory completion");
+		const allowlist = resolveCyberAllowlist(settings, available)!;
+
+		// Invariant: a retained callback follows each protection transition, not its startup model.
+		for (const enabled of [false, true, false, true]) {
+			if (enabled) settings.applyCyberRoles("parent", allowlist);
+			else settings.clearCyberRoles("parent");
+			await complete("Summarize memory.");
+			expect(attempts.at(-1), `protection=${enabled}`).toBe(enabled ? haiku.id : sonnet.id);
+		}
+		expect(attempts).toEqual([sonnet.id, haiku.id, sonnet.id, haiku.id]);
+
+		settings.clearCyberRoles("parent");
+		const credentialGate = Promise.withResolvers<string>();
+		authGate.pending = credentialGate.promise;
+		const inFlight = complete("Summarize memory after credentials.");
+		settings.applyCyberRoles("parent", allowlist);
+		credentialGate.resolve("test-key");
+		expect(await inFlight).toBeNull();
+		expect(attempts).toEqual([sonnet.id, haiku.id, sonnet.id, haiku.id]);
+
+		available = [];
+		expect(await complete("No available model.")).toBeNull();
+		expect(attempts).toEqual([sonnet.id, haiku.id, sonnet.id, haiku.id]);
 	});
 
 	it("does not re-store retained turns during consolidation or after resume", async () => {

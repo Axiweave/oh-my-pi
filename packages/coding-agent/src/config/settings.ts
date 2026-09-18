@@ -44,7 +44,9 @@ import { applyHyperlinkSetting } from "../tui/hyperlink";
 import { replaceFileAtomically } from "../utils/atomic-file";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { isSearchProviderId, SEARCH_PROVIDER_ORDER } from "../web/search/types";
+import { filterCyberChain, type ResolvedCyberAllowlist } from "./cyber-mode";
 import { stringifyYamlConfig } from "./config-file";
+import { getModelMatchPreferences, type ModelRoleLookup } from "./model-resolver";
 import { validateAgentServiceTierOverrides } from "./service-tier";
 import {
 	type BashInterceptorRule,
@@ -558,6 +560,8 @@ export class Settings {
 	#modifiedProjectModelRoles = new Set<string>();
 	/** Project-layer modelProfile pending persist to .omp/config.yml. */
 	#modifiedProjectModelProfile = false;
+	/** Whether `cyberMode` changed in the project layer and awaits a save. */
+	#modifiedProjectCyberMode = false;
 	/** Individual global model roles modified during this session (for partial save) */
 	#modifiedGlobalModelRoles = new Set<string>();
 	/** On-disk generations and prior values observed before each pending global mutation. */
@@ -585,6 +589,29 @@ export class Settings {
 
 	/** Startup profile name, valid only until the next runtime role-layer write. */
 	#startupModelProfileName?: string;
+
+	/**
+	 * Cyber protection installed on this configuration state, with every owner
+	 * claiming it. Installing is always allowed, so sharing settings can only add
+	 * protection. An implicit clear removes one owner and is a no-op for a caller
+	 * that did not install it (FR-029, FR-030).
+	 */
+	#cyber?: { allowlist: ResolvedCyberAllowlist; owners: string[] };
+
+	/**
+	 * Filtered role value per raw role value, valid for the installed allowlist.
+	 * Cleared whenever the allowlist is installed or removed, which is the only
+	 * thing that can change an answer here.
+	 */
+	#cyberRoleMemo = new Map<string, string>();
+
+	/**
+	 * Raw merged `modelRoles`, captured each rebuild before the cyber filter
+	 * overwrites `#merged`. What `getRawModelRoles()` reads, so a reporting call
+	 * made while a filter is installed still sees the configured chain instead of
+	 * the model it already landed on.
+	 */
+	#preCyberModelRoles: unknown;
 
 	/** Legacy `lastChangelogVersion` captured from config.yml during migration (now a marker file). */
 	#legacyLastChangelogVersion?: string;
@@ -857,7 +884,11 @@ export class Settings {
 		if (this.#modified.size > 0 || this.#modifiedGlobalModelRoles.size > 0) {
 			await this.#saveNow();
 		}
-		if (this.#modifiedProjectModelRoles.size > 0 || this.#modifiedProjectModelProfile) {
+		if (
+			this.#modifiedProjectModelRoles.size > 0 ||
+			this.#modifiedProjectModelProfile ||
+			this.#modifiedProjectCyberMode
+		) {
 			await this.#saveProjectNow();
 		}
 	}
@@ -1337,6 +1368,17 @@ export class Settings {
 		this.#updateRuntimeModelRoleOverride(role, undefined);
 	}
 
+	/** Persist `cyberMode: enabled` in <cwd>/.omp/config.yml (project layer). */
+	setProjectCyberMode(enabled: boolean): void {
+		const prev = this.get("cyberMode");
+		setByPath(this.#project, ["cyberMode"], enabled);
+		this.#modifiedProjectCyberMode = true;
+		this.#persistedMutationGeneration++;
+		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged("cyberMode", this.get("cyberMode"), prev);
+		this.#queueProjectSave();
+	}
+
 	/** Persist `modelProfile: name` in <cwd>/.omp/config.yml (project layer). */
 	setProjectModelProfile(name: string): void {
 		const prev = this.get("modelProfile");
@@ -1405,6 +1447,31 @@ export class Settings {
 	 */
 	getModelRoles(): ReadOnlyDict<string> {
 		const roles: unknown = this.get("modelRoles");
+		if (!isRecord(roles)) return {};
+
+		const normalized: Record<string, string> = {};
+		for (const role in roles) {
+			if (!Object.hasOwn(roles, role)) continue;
+			const modelId = modelRoleValueFromUnknown(roles[role]);
+			if (modelId !== undefined) {
+				normalized[role] = modelId;
+			}
+		}
+		return normalized;
+	}
+
+	/**
+	 * All model roles as configured, before cyber mode's per-merge filter.
+	 *
+	 * `getModelRoles()` reads the merged view, which is the map cyber mode
+	 * overwrites in place once a filter is installed (`#applyCyberRolesToMerged`).
+	 * Planning what changed needs the value on the other side of that filter,
+	 * captured from the same merge rather than recomputed, so a call made while a
+	 * filter is already installed still sees the configured chain instead of the
+	 * model it already landed on.
+	 */
+	getRawModelRoles(): ReadOnlyDict<string> {
+		const roles: unknown = this.#preCyberModelRoles;
 		if (!isRecord(roles)) return {};
 
 		const normalized: Record<string, string> = {};
@@ -1500,6 +1567,58 @@ export class Settings {
 		this.applyModelProfileRoles(roles, { under: true });
 		this.#startupModelProfileName = name;
 		return name;
+	}
+
+	/**
+	 * Install cyber protection on this configuration state, owned by `owner`.
+	 *
+	 * Installing is always allowed, so a caller that switches protection on
+	 * protects every session sharing these settings. The owners list persists
+	 * across installs, so two sessions sharing settings both hold a claim and
+	 * neither can drop the other's protection (FR-029, FR-030).
+	 */
+	applyCyberRoles(owner: string, allowlist: ResolvedCyberAllowlist): void {
+		const prev = this.get("modelRoles");
+		const owners = this.#cyber?.owners ?? [];
+		if (!owners.includes(owner)) owners.push(owner);
+		this.#cyber = { allowlist, owners };
+		this.#rebuildMerged();
+		const next = this.get("modelRoles");
+		if (!Bun.deepEquals(next, prev)) this.#fireEffectiveSettingChanged("modelRoles", next, prev);
+	}
+
+	/**
+	 * Remove cyber protection.
+	 *
+	 * An explicit operator switch-off always clears, because that is the
+	 * operator's stated intent. An implicit clear, such as a session adopting a
+	 * recorded off state, removes only an owner it recorded and is otherwise a
+	 * no-op, so a nested session cannot drop its parent's protection (FR-030).
+	 */
+	clearCyberRoles(owner: string, options?: { operator?: boolean }): void {
+		const cyber = this.#cyber;
+		if (!cyber) return;
+		if (!options?.operator) {
+			const index = cyber.owners.indexOf(owner);
+			if (index === -1) return;
+			cyber.owners.splice(index, 1);
+			if (cyber.owners.length > 0) return;
+		}
+		const prev = this.get("modelRoles");
+		this.#cyber = undefined;
+		this.#rebuildMerged();
+		const next = this.get("modelRoles");
+		if (!Bun.deepEquals(next, prev)) this.#fireEffectiveSettingChanged("modelRoles", next, prev);
+	}
+
+	/**
+	 * The cyber protection installed on this configuration state, whoever
+	 * installed it, or `undefined` when none is installed. The model-switch guard
+	 * reads this, so a config-driven install constrains switches the same way a
+	 * session-driven one does.
+	 */
+	getCyberAllowlist(): ResolvedCyberAllowlist | undefined {
+		return this.#cyber?.allowlist;
 	}
 
 	/**
@@ -3152,7 +3271,9 @@ export class Settings {
 		if (
 			this.#savesCancelled ||
 			!this.#persist ||
-			(this.#modifiedProjectModelRoles.size === 0 && !this.#modifiedProjectModelProfile)
+			(this.#modifiedProjectModelRoles.size === 0 &&
+				!this.#modifiedProjectModelProfile &&
+				!this.#modifiedProjectCyberMode)
 		)
 			return;
 
@@ -3161,6 +3282,8 @@ export class Settings {
 		this.#modifiedProjectModelRoles.clear();
 		const modifiedModelProfile = this.#modifiedProjectModelProfile;
 		this.#modifiedProjectModelProfile = false;
+		const modifiedCyberMode = this.#modifiedProjectCyberMode;
+		this.#modifiedProjectCyberMode = false;
 
 		try {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
@@ -3178,6 +3301,9 @@ export class Settings {
 				if (modifiedModelProfile) {
 					setByPath(projectSettings, ["modelProfile"], getByPath(this.#project, ["modelProfile"]));
 				}
+				if (modifiedCyberMode) {
+					setByPath(projectSettings, ["cyberMode"], getByPath(this.#project, ["cyberMode"]));
+				}
 
 				await this.#writeYamlAtomically(writePath, projectSettings);
 				this.#projectFileSettings = structuredClone(projectSettings);
@@ -3189,6 +3315,7 @@ export class Settings {
 				this.#modifiedProjectModelRoles.add(role);
 			}
 			if (modifiedModelProfile) this.#modifiedProjectModelProfile = true;
+			if (modifiedCyberMode) this.#modifiedProjectCyberMode = true;
 			throw error;
 		}
 
@@ -3229,10 +3356,64 @@ export class Settings {
 		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#projectSettingsForMerge());
 		this.#merged = this.#deepMerge(this.#merged, this.#configOverlay);
 		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
+		this.#preCyberModelRoles = getByPath(this.#merged, ["modelRoles"]);
+		// Clear before filtering too: getModelMatchPreferences() below reads
+		// modelProviderOrder through #resolvedCache, and a stale cache entry left
+		// over from the previous merge would filter against yesterday's provider
+		// order instead of this merge's (FR-017).
+		this.#resolvedCache.clear();
+		this.#applyCyberRolesToMerged();
 		this.#resolvedCache.clear();
 		this.#groupCache.clear();
 		this.#editVariantCache = undefined;
 		this.#warnUnknownStatusLineSegments();
+	}
+
+	/**
+	 * Filter the merged role view against the installed allowlist.
+	 *
+	 * Derived per merge rather than stored: `applyModelProfileRoles` replaces the
+	 * runtime role layer wholesale, so a frozen filtered map would mask the roles
+	 * an incoming profile names and leave roles the profile newly introduces
+	 * unfiltered. Every path that replaces that layer re-merges, so deriving here
+	 * cannot go stale. Filtering writes to `#merged` only — saves read the raw
+	 * `#global` and `#project` layers, so it never reaches `config.yml`.
+	 *
+	 * Aliases expand against the raw merged map rather than the filtered one, so
+	 * a chain naming another role is filtered after expansion (FR-015) and cannot
+	 * re-enter this method.
+	 */
+	#applyCyberRolesToMerged(): void {
+		const cyber = this.#cyber;
+		if (!cyber) return;
+		// Derive per merge. A memo entry keyed by a raw chain is only valid for the
+		// role layer it was derived from: `@alias` resolves through that layer, so a
+		// profile switch that repoints the alias under the same spelling would
+		// otherwise reuse the previous layer's result. The memo still collapses the
+		// repeated lookups one merge performs.
+		this.#cyberRoleMemo.clear();
+		const roles = getByPath(this.#merged, ["modelRoles"]);
+		if (!isRecord(roles)) return;
+
+		// Fresh every merge, never the allowlist's install-time snapshot: an
+		// operator can reorder modelProviderOrder or record model usage at
+		// runtime, and a frozen preference would keep resolving today's chain
+		// against yesterday's order (FR-017).
+		const matchPreferences = getModelMatchPreferences(this);
+		const lookup: ModelRoleLookup = { getModelRole: role => modelRoleValueFromUnknown(roles[role]) };
+		const filtered: Record<string, string> = {};
+		for (const role in roles) {
+			if (!Object.hasOwn(roles, role)) continue;
+			const raw = modelRoleValueFromUnknown(roles[role]);
+			if (raw === undefined) continue;
+			let next = this.#cyberRoleMemo.get(raw);
+			if (next === undefined) {
+				next = filterCyberChain(raw, cyber.allowlist, lookup, matchPreferences);
+				this.#cyberRoleMemo.set(raw, next);
+			}
+			filtered[role] = next;
+		}
+		setByPath(this.#merged, ["modelRoles"], filtered);
 	}
 
 	#fireAllHooks(): void {

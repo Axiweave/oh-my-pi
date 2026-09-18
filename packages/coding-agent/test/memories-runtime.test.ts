@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as ai from "@oh-my-pi/pi-ai";
-import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { Effort, type AssistantMessage, type Model } from "@oh-my-pi/pi-ai";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	buildMemoryToolDeveloperInstructions,
@@ -299,7 +300,14 @@ describe("memories runtime", () => {
 						}),
 					},
 				],
-				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+				usage: {
+					input: 1,
+					output: 1,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 2,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
 			} as any)
 			.mockResolvedValueOnce({
 				stopReason: "end_turn",
@@ -427,6 +435,355 @@ describe("memories runtime", () => {
 		expect((await fs.readFile(path.join(memoryRoot, "raw_memories.md"), "utf8")).trim()).toBe(
 			"# Raw Memories\n\nNo raw memories yet.",
 		);
+	});
+});
+
+/**
+ * `resolveMemoryModel`'s current/catalog fallback bypassed cyber protection:
+ * an excluded `session.model` or an excluded `getAll()[0]` could reach a real
+ * provider request. These regressions pin the confinement at both the
+ * selection boundary (`resolveMemoryModel`) and the actual request boundary
+ * (`runStage1Job` / `runConsolidationModel`), where async work between the
+ * two can let protection land after a model was already picked.
+ */
+describe("memories runtime cyber confinement", () => {
+	let savedXdgData: string | undefined;
+	let savedXdgState: string | undefined;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		vi.restoreAllMocks();
+		savedXdgData = process.env.XDG_DATA_HOME;
+		savedXdgState = process.env.XDG_STATE_HOME;
+		process.env.XDG_DATA_HOME = "/nonexistent-xdg-data";
+		process.env.XDG_STATE_HOME = "/nonexistent-xdg-state";
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		restoreEnvValue("XDG_DATA_HOME", savedXdgData);
+		restoreEnvValue("XDG_STATE_HOME", savedXdgState);
+	});
+
+	const catalogOf = (...ids: string[]): Model[] => ids.map(id => createModel(id));
+
+	/** Installs a shared allowlist directly on `settings`, the way a config-owned
+	 * or sibling-session install works (`Settings.applyCyberRoles`), without a
+	 * full interactive session's own cyber toggle. */
+	function installAllowlist(settings: Settings, catalog: Model[], owner = "test-owner") {
+		const allowlist = resolveCyberAllowlist(settings, catalog);
+		if (!allowlist) throw new Error("expected the declared allowlist to resolve");
+		settings.applyCyberRoles(owner, allowlist);
+		return allowlist;
+	}
+
+	function stage1Response(threadId: string): AssistantMessage {
+		return {
+			role: "assistant",
+			api: "openai",
+			provider: "openai",
+			model: "mock-model",
+			timestamp: 0,
+			stopReason: "stop",
+			content: [
+				{
+					type: "text",
+					text: JSON.stringify({
+						rollout_summary: `Summary ${threadId}`,
+						rollout_slug: threadId,
+						raw_memory: `Raw ${threadId}`,
+					}),
+				},
+			],
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+	}
+
+	function phase2Response(): AssistantMessage {
+		return {
+			role: "assistant",
+			api: "openai",
+			provider: "openai",
+			model: "mock-model",
+			timestamp: 0,
+			stopReason: "stop",
+			content: [
+				{
+					type: "text",
+					text: JSON.stringify({ memory_md: "# Memory\n\nBody", memory_summary: "Summary", skills: [] }),
+				},
+			],
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+	}
+
+	async function writeRollout(fx: SessionFixture, threadId: string): Promise<void> {
+		const rolloutPath = path.join(fx.sessionDir, `${threadId}.jsonl`);
+		const rows = [
+			{ type: "session", id: threadId, cwd: fx.agentDir },
+			{ type: "message", message: { role: "user", content: "summarize this rollout" } },
+		];
+		await fs.writeFile(rolloutPath, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+	}
+
+	/** Seeds one global-consolidation watermark from a thread whose stage1 output
+	 * is already fresh, so phase1 finds nothing to claim and only phase2 has
+	 * work — isolating phase2's own model resolution from phase1's. */
+	async function seedPhase2Work(fx: SessionFixture, threadId: string): Promise<void> {
+		const db = memoryStorage.openMemoryDb(getAgentDbPath(fx.agentDir));
+		memoryStorage.upsertThreads(db, [
+			{ id: threadId, updatedAt: 100, rolloutPath: "/tmp/unused.jsonl", cwd: fx.agentDir, sourceKind: "cli" },
+		]);
+		db.prepare(
+			"INSERT INTO stage1_outputs (thread_id, source_updated_at, raw_memory, rollout_summary, rollout_slug, generated_at) VALUES (?, ?, ?, ?, ?, ?)",
+		).run(threadId, 100, `Raw ${threadId}`, `Summary ${threadId}`, threadId, 100);
+		memoryStorage.enqueueGlobalWatermark(db, 100, fx.agentDir, { forceDirtyWhenNotAdvanced: true });
+		memoryStorage.closeMemoryDb(db);
+	}
+
+	function modelIdentity(model: unknown): string {
+		const m = model as Model;
+		return `${m.provider}/${m.id}`;
+	}
+
+	function startPipeline(fx: SessionFixture): void {
+		startMemoryStartupTask({
+			session: fx.session,
+			settings: fx.settings,
+			modelRegistry: fx.modelRegistry,
+			agentDir: fx.agentDir,
+			taskDepth: 0,
+		});
+	}
+
+	test("phase1/phase2 land on the declared primary over an earlier allowed catalog entry when the current model is excluded", async () => {
+		const fx = await createFixture({ cyberModels: ["openai/model-c", "openai/model-b"] });
+		const [modelA, modelB, modelC] = catalogOf("model-a", "model-b", "model-c");
+		const catalog = [modelA, modelB, modelC];
+		fx.session.model = modelA; // current — excluded, as if the session's own model predates the install
+		fx.modelRegistry.getAll = vi.fn(() => catalog);
+		const allowlist = installAllowlist(fx.settings, catalog);
+		// model-b is also allowed and sits earlier in catalog order, but the
+		// declared primary (model-c) must win: resolveCyberTarget's role/
+		// default-role/primary cascade, not an arbitrary catalog scan.
+		expect(allowlist.primary).toBe("openai/model-c");
+
+		await writeRollout(fx, "thread-a");
+		const completeSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(stage1Response("thread-a"))
+			.mockResolvedValueOnce(phase2Response());
+
+		startPipeline(fx);
+
+		await settle(fx.whenSettled, "own-off/shared protection primary fallback");
+		expect(completeSpy.mock.calls.length).toBeGreaterThan(0);
+		for (const call of completeSpy.mock.calls) {
+			expect(modelIdentity(call[0])).toBe("openai/model-c");
+		}
+	});
+
+	test("phase1/phase2 keep the current model when no role is configured and protection already allows it", async () => {
+		const fx = await createFixture({ cyberModels: ["openai/model-a", "openai/model-b"] });
+		const [modelA, modelB, modelC] = catalogOf("model-a", "model-b", "model-c");
+		const catalog = [modelA, modelB, modelC];
+		fx.session.model = modelB; // current — allowed, but neither the primary nor catalog[0]
+		fx.modelRegistry.getAll = vi.fn(() => catalog);
+		const allowlist = installAllowlist(fx.settings, catalog);
+		expect(allowlist.primary).toBe("openai/model-a");
+
+		await writeRollout(fx, "thread-b");
+		const completeSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(stage1Response("thread-b"))
+			.mockResolvedValueOnce(phase2Response());
+
+		startPipeline(fx);
+
+		await settle(fx.whenSettled, "current preserved over catalog scan and primary");
+		expect(completeSpy.mock.calls.length).toBeGreaterThan(0);
+		for (const call of completeSpy.mock.calls) {
+			expect(modelIdentity(call[0])).toBe("openai/model-b");
+		}
+	});
+
+	test("a role configured to an excluded model never reaches memory; the protected target does", async () => {
+		const fx = await createFixture({ cyberModels: ["openai/model-b"] });
+		const [modelA, modelB] = catalogOf("model-a", "model-b");
+		const catalog = [modelA, modelB];
+		// Both roles memory resolves name the excluded model. Cyber mode filters
+		// the role view these stages read, so the excluded model must never be
+		// selected, and the stage must still land on an allowed model.
+		fx.settings.setModelRole("smol", "openai/model-a");
+		fx.settings.setModelRole("default", "openai/model-a");
+		fx.session.model = modelA; // current — excluded
+		fx.modelRegistry.getAll = vi.fn(() => catalog);
+		installAllowlist(fx.settings, catalog);
+
+		await writeRollout(fx, "thread-role-excluded");
+		const completeSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(stage1Response("thread-role-excluded"))
+			.mockResolvedValueOnce(phase2Response());
+
+		startPipeline(fx);
+
+		await settle(fx.whenSettled, "roles configured to an excluded model");
+		expect(completeSpy.mock.calls.length).toBeGreaterThan(0);
+		for (const call of completeSpy.mock.calls) {
+			expect(modelIdentity(call[0])).toBe("openai/model-b");
+		}
+	});
+
+	test("a reduced catalog still finds its allowed survivor instead of failing when the primary is unavailable", async () => {
+		const fx = await createFixture({ cyberModels: ["openai/model-b", "openai/model-c"] });
+		const [modelA, modelB, modelC] = catalogOf("model-a", "model-b", "model-c");
+		const allowlist = installAllowlist(fx.settings, [modelA, modelB, modelC]);
+		expect(allowlist.primary).toBe("openai/model-b");
+		fx.session.model = modelA; // current — excluded
+		fx.modelRegistry.getAll = vi.fn(() => [modelA, modelC]); // reduced: model-b (the primary) is unavailable
+
+		await writeRollout(fx, "thread-c");
+		const completeSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(stage1Response("thread-c"))
+			.mockResolvedValueOnce(phase2Response());
+
+		startPipeline(fx);
+
+		await settle(fx.whenSettled, "reduced catalog survivor fallback");
+		expect(completeSpy.mock.calls.length).toBeGreaterThan(0);
+		for (const call of completeSpy.mock.calls) {
+			expect(modelIdentity(call[0])).toBe("openai/model-c");
+		}
+	});
+
+	test("selection returns no model, and no request is sent, when protection excludes every reachable candidate", async () => {
+		const fx = await createFixture({ cyberModels: ["openai/model-b"] });
+		const [modelA, modelB, modelC] = catalogOf("model-a", "model-b", "model-c");
+		installAllowlist(fx.settings, [modelA, modelB, modelC]); // primary=model-b
+		fx.session.model = modelA; // current — excluded
+		fx.modelRegistry.getAll = vi.fn(() => [modelA]); // reduced: the primary (model-b) is unreachable too
+
+		// Claimable work exists — a mis-selected model would actually dispatch,
+		// so "never called" is proof of exhaustion, not an absence of work.
+		await writeRollout(fx, "thread-exhausted");
+		const completeSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockRejectedValue(new Error("completeSimple must not be called for an excluded model"));
+
+		startPipeline(fx);
+
+		await settle(fx.whenSettled, "exhausted selection graceful skip");
+		expect(completeSpy).not.toHaveBeenCalled();
+	});
+
+	test("unprotected runs preserve the original current-then-catalog fallback order", async () => {
+		for (const useCurrent of [true, false]) {
+			const fx = await createFixture();
+			const [modelA, modelB, modelC] = catalogOf("model-a", "model-b", "model-c");
+			fx.session.model = useCurrent ? modelA : undefined;
+			fx.modelRegistry.getAll = vi.fn(() => [modelA, modelB, modelC]);
+			// No cyberModels declared and installAllowlist is never called:
+			// settings.getCyberAllowlist() stays undefined for this whole case.
+
+			const threadId = `thread-unprotected-${useCurrent}`;
+			await writeRollout(fx, threadId);
+			const completeSpy = vi
+				.spyOn(ai, "completeSimple")
+				.mockResolvedValueOnce(stage1Response(threadId))
+				.mockResolvedValueOnce(phase2Response());
+
+			startPipeline(fx);
+
+			await settle(fx.whenSettled, `unprotected ordering, useCurrent=${useCurrent}`);
+			expect(completeSpy.mock.calls.length).toBeGreaterThan(0);
+			for (const call of completeSpy.mock.calls) {
+				expect(modelIdentity(call[0])).toBe("openai/model-a");
+			}
+			vi.restoreAllMocks();
+		}
+	});
+
+	test("phase1 refuses the request when protection installs after selection but before the stage1 dispatch", async () => {
+		const fx = await createFixture({ cyberModels: ["openai/model-b"] });
+		const [modelA, modelB] = catalogOf("model-a", "model-b");
+		fx.session.model = modelA; // current — allowed at selection time, since protection is not installed yet
+		fx.modelRegistry.getAll = vi.fn(() => [modelA, modelB]);
+		fx.modelRegistry.getApiKey = vi.fn(async () => {
+			// The async gap between selection (resolveMemoryModel) and the actual
+			// request: protection lands here, after phase1 already picked model-a.
+			installAllowlist(fx.settings, [modelA, modelB], "race-owner");
+			return "test-api-key";
+		});
+
+		await writeRollout(fx, "thread-race");
+		const completeSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockRejectedValue(new Error("completeSimple must not be called for an excluded model"));
+
+		startPipeline(fx);
+
+		await settle(fx.whenSettled, "stage1 request-boundary race");
+		expect(completeSpy).not.toHaveBeenCalled();
+	});
+
+	test("phase2 consolidation skips an excluded current model for an allowed catalog entry", async () => {
+		const fx = await createFixture({ cyberModels: ["openai/model-b"] });
+		const [modelA, modelB] = catalogOf("model-a", "model-b");
+		fx.session.model = modelA; // current — excluded
+		fx.modelRegistry.getAll = vi.fn(() => [modelA, modelB]);
+		installAllowlist(fx.settings, [modelA, modelB]);
+
+		await seedPhase2Work(fx, "thread-p2"); // phase1 finds no claimable thread; only phase2 has work
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValueOnce(phase2Response());
+
+		startPipeline(fx);
+
+		await settle(fx.whenSettled, "phase2-only catalog fallback");
+		expect(completeSpy).toHaveBeenCalledTimes(1);
+		expect(modelIdentity(completeSpy.mock.calls[0]![0])).toBe("openai/model-b");
+	});
+
+	test("phase2 refuses the request when protection installs after selection but before the consolidation dispatch", async () => {
+		const fx = await createFixture({ cyberModels: ["openai/model-b"] });
+		const [modelA, modelB] = catalogOf("model-a", "model-b");
+		fx.session.model = modelA; // current — allowed at selection time, since protection is not installed yet
+		fx.modelRegistry.getAll = vi.fn(() => [modelA, modelB]);
+		let getApiKeyCalls = 0;
+		fx.modelRegistry.getApiKey = vi.fn(async () => {
+			getApiKeyCalls += 1;
+			// Call 1 is phase1's unconditional pre-claim resolution (it finds no
+			// claimable thread below and never dispatches). Call 2 is phase2's,
+			// made right after phase2 already picked model-a: install protection
+			// here, in the gap between phase2's selection and its dispatch.
+			if (getApiKeyCalls === 2) installAllowlist(fx.settings, [modelA, modelB], "race-owner-2");
+			return "test-api-key";
+		});
+
+		await seedPhase2Work(fx, "thread-p2-race");
+		const completeSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockRejectedValue(new Error("completeSimple must not be called for an excluded model"));
+
+		startPipeline(fx);
+
+		await settle(fx.whenSettled, "phase2 request-boundary race");
+		expect(completeSpy).not.toHaveBeenCalled();
 	});
 });
 

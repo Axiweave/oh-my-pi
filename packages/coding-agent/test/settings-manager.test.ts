@@ -386,6 +386,30 @@ describe("Settings", () => {
 			expect(await Bun.file(backupPath).text()).toBe(corrupted);
 		});
 
+		it("persists a project-scope cyberMode write and keeps the project file's other keys", async () => {
+			await writeSettings({});
+			const projectConfigPath = path.join(projectDir, ".omp", "config.yml");
+			await Bun.write(
+				projectConfigPath,
+				YAML.stringify({ modelRoles: { default: "keep/default" }, custom: { keep: true } }, null, 2),
+			);
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			settings.setProjectCyberMode(true);
+			await settings.flush();
+
+			const saved = YAML.parse(await Bun.file(projectConfigPath).text()) as Record<string, unknown>;
+			expect(saved).toEqual({
+				modelRoles: { default: "keep/default" },
+				custom: { keep: true },
+				cyberMode: true,
+			});
+
+			// A fresh load of the same project reads the write back as the startup value.
+			const reloaded = await Settings.init({ cwd: projectDir, agentDir });
+			expect(reloaded.get("cyberMode")).toBe(true);
+		});
+
 		it("preserves a symlinked main config while atomically updating its target", async () => {
 			const managedConfigPath = tempDir.join("managed-config.yml");
 			await Bun.write(managedConfigPath, YAML.stringify({ setupVersion: 1 }, null, 2));

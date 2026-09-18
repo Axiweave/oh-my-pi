@@ -13,9 +13,18 @@ import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
 import { classifyDifficulty } from "../auto-thinking/classifier";
+import {
+	cyberAllowsModel,
+	cyberRefusalMessage,
+	planCyberChanges,
+	prepareCyberMode,
+	resolveCyberTarget,
+	type ResolvedCyberAllowlist,
+} from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	filterAvailableModelsByEnabledPatterns,
+	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
 	type ResolvedModelRoleValue,
@@ -37,6 +46,7 @@ import {
 import type { EditMode } from "../utils/edit-mode";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type {
+	CyberModeResult,
 	ModelCycleResult,
 	ModelProfileResult,
 	ResolvedRoleModel,
@@ -80,6 +90,16 @@ export class ModelControls {
 	#serviceTierByFamily: ServiceTierByFamily;
 	/** Name of the `modelProfiles` bundle currently installed, if any. */
 	#activeModelProfile: string | undefined;
+	/** Whether this session itself switched cyber mode on. */
+	#cyberMode = false;
+	/**
+	 * Owner this session object records on the shared configuration state.
+	 *
+	 * Fixed at construction: the transcript id changes when the session switches,
+	 * and an owner that changes with it would leave protection this session
+	 * installed unreleasable, and let an unrelated transcript's id claim it.
+	 */
+	readonly #cyberOwner: string;
 
 	constructor(
 		host: ModelControlsHost,
@@ -91,6 +111,7 @@ export class ModelControls {
 		},
 	) {
 		this.#host = host;
+		this.#cyberOwner = host.sessionId();
 		this.#scopedModels = options.scopedModels ?? [];
 		this.#serviceTierByFamily = options.serviceTierByFamily ?? {};
 		this.#thinkingLevelCeiling = options.thinkingLevelCeiling;
@@ -113,6 +134,10 @@ export class ModelControls {
 		// A resumed session carries its profile on the last tagged `model_change`;
 		// reinstall the role layer before any surface resolves a role.
 		this.restoreModelProfile(host.sessionManager.getLastModelProfile());
+		// Cyber state rides the same entry. Restoring it here installs the filter
+		// before any role is resolved, so a resumed protection is in force from the
+		// first lookup.
+		this.restoreCyberMode(host.sessionManager.getLastCyberMode());
 	}
 
 	get #model(): Model | undefined {
@@ -234,6 +259,7 @@ export class ModelControls {
 			profile?: string;
 		},
 	): Promise<{ switched: boolean }> {
+		this.#assertCyberAllows(model);
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
@@ -249,6 +275,7 @@ export class ModelControls {
 			role,
 			false,
 			options?.profile,
+			this.cyberMode,
 		);
 		if (options?.persist) {
 			this.#host.settings.setModelRole(
@@ -284,6 +311,7 @@ export class ModelControls {
 		thinkingLevel?: ConfiguredThinkingLevel,
 		options?: { ephemeral?: boolean },
 	): Promise<void> {
+		this.#assertCyberAllows(model);
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
@@ -297,6 +325,9 @@ export class ModelControls {
 		this.#host.sessionManager.appendModelChange(
 			`${targetModel.provider}/${targetModel.id}`,
 			options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
+			false,
+			undefined,
+			this.cyberMode,
 		);
 		this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 
@@ -513,6 +544,188 @@ export class ModelControls {
 	}
 
 	/**
+	 * Whether this session has cyber mode on.
+	 *
+	 * The state in effect, not merely the session's own claim: when another
+	 * session sharing this configuration state clears the protection with an
+	 * explicit switch-off, this session stops reporting a protection that is no
+	 * longer installed. Reporting less than the configuration enforces is the
+	 * accepted direction the other way round (FR-019).
+	 */
+	get cyberMode(): boolean {
+		return this.#cyberMode && this.#host.settings.getCyberAllowlist() !== undefined;
+	}
+
+	/**
+	 * Switch cyber mode on or off for this session (FR-005).
+	 *
+	 * Enabling is fail-closed: an allowlist in which nothing resolves refuses the
+	 * switch, names the reason, and leaves the state off, rather than reporting
+	 * protection the session does not have (FR-016). When the active model is
+	 * outside the allowlist it is re-pointed through the ordinary switch path, so
+	 * the move is recorded and reported like any other (FR-008).
+	 *
+	 * Disabling clears protection with operator intent and leaves the active model
+	 * in place: it is a model the operator allowed, and a mode toggle should not
+	 * also be a model switch (FR-028).
+	 */
+	async setCyberMode(enabled: boolean): Promise<CyberModeResult> {
+		if (!enabled) {
+			this.#cyberMode = false;
+			this.#host.settings.clearCyberRoles(this.#cyberOwner, { operator: true });
+			this.#recordCyberState();
+			return { enabled: false, models: [], changes: [] };
+		}
+
+		const availableModels = this.#host.modelRegistry.getAvailable();
+		const prepared = prepareCyberMode(this.#host.settings, availableModels);
+		if (!prepared.ok) return { enabled: false, models: [], changes: [], refusal: prepared.refusal };
+
+		// Plan against the configured view, which is what the roles land on today.
+		const changes = planCyberChanges(
+			this.#host.settings.getRawModelRoles(),
+			prepared.allowlist,
+			getModelMatchPreferences(this.#host.settings),
+		);
+		this.#host.settings.applyCyberRoles(this.#cyberOwner, prepared.allowlist);
+		this.#cyberMode = true;
+
+		// The re-point writes the state beside the model it moved to; a session whose
+		// active model is already allowed needs the explicit record instead, or a
+		// resume would read the previous entry's state and lose the toggle.
+		const repointed = await this.repointCyberModel();
+		if (!repointed) this.#recordCyberState();
+
+		return { enabled: true, models: [...prepared.allowlist.keys], changes };
+	}
+
+	/**
+	 * Move the session onto the allowlist when its active model is outside it.
+	 *
+	 * Enabling calls this (FR-008) and so does the restore path, which reinstates a
+	 * persisted model directly and can therefore land on a model the allowlist has
+	 * since dropped (FR-024). The move follows the active role's filtered chain,
+	 * then the `default` role's, then the primary cyber model (FR-007).
+	 *
+	 * A successful move reports itself: the active model is not necessarily the
+	 * value of any role (an explicit switch can point it anywhere), so the
+	 * role-table diff `planCyberChanges` runs elsewhere never sees this move, and
+	 * every caller that re-points the active model needs the same notice. Common
+	 * to this one function, every caller gets it for free (FR-008, FR-011).
+	 *
+	 * @returns the model switched to, or `undefined` when nothing moved.
+	 */
+	async repointCyberModel(): Promise<Model | undefined> {
+		const allowlist = this.#host.settings.getCyberAllowlist();
+		const current = this.#model;
+		if (!this.#cyberMode || !allowlist || !current) return undefined;
+		if (allowlist.keys.has(formatModelString(current))) return undefined;
+
+		const availableModels = this.#host.modelRegistry.getAvailable();
+		const role = this.#host.sessionManager.getLastModelChangeRole() ?? "default";
+		const target = resolveCyberTarget(this.#host.settings, role, availableModels, allowlist);
+		if (!target) return undefined;
+
+		await this.setModelTemporary(target);
+		this.#host.emitNotice(
+			"warning",
+			`Cyber mode is on: ${formatModelString(current)} is not cyber-capable, so the active model switches to ${formatModelString(target)} instead.`,
+			"cyber",
+		);
+		return target;
+	}
+
+	/**
+	 * Drop the claim this session object holds on the shared configuration state.
+	 *
+	 * Called when the session is disposed: a session that no longer exists must not
+	 * keep filtering the roles of the sessions that share its configuration state.
+	 * Only this session's claim goes: the configured claim and any sibling's stay,
+	 * so the shared state can only become less restrictive towards the state the
+	 * operator asked for.
+	 */
+	releaseCyberOwner(): void {
+		this.#host.settings.clearCyberRoles(this.#cyberOwner);
+	}
+
+	/**
+	 * Record the cyber state on the transcript, which is what a resume and `/new`
+	 * read back. The active model is unchanged, so nothing but the state is
+	 * written and no provider session is reset.
+	 */
+	#recordCyberState(): void {
+		const model = this.#model;
+		if (!model) return;
+		this.#host.sessionManager.appendModelChange(
+			`${model.provider}/${model.id}`,
+			this.#host.sessionManager.getLastModelChangeRole() ?? "default",
+			false,
+			this.#activeModelProfile,
+			this.cyberMode,
+		);
+	}
+
+	/**
+	 * Reinstate the cyber state a session recorded, or the configured startup value
+	 * where there is no predecessor state (FR-021, FR-024, FR-025, FR-026).
+	 *
+	 * A recorded value on the branch outranks configuration, which names only
+	 * where a process starts. An on state is re-validated against current
+	 * configuration, because the record is a boolean and carries no list of its
+	 * own; when nothing resolves, the state degrades to off with a warning rather
+	 * than pinning a list configuration no longer supports.
+	 *
+	 * Adopting an off state clears only what this session installed, so a nested
+	 * session restoring its own off record cannot drop its parent's protection or
+	 * config-driven protection (FR-030).
+	 */
+	restoreCyberMode(recorded: boolean | undefined, restoredAllowlist?: ResolvedCyberAllowlist): void {
+		const enabled = recorded ?? this.#host.settings.get("cyberMode") === true;
+		if (!enabled) {
+			this.#cyberMode = false;
+			this.#host.settings.clearCyberRoles(this.#cyberOwner);
+			return;
+		}
+
+		// Rollback restores the validated outgoing protection without another registry lookup.
+		const prepared = restoredAllowlist
+			? { ok: true as const, allowlist: restoredAllowlist }
+			: prepareCyberMode(this.#host.settings, this.#host.modelRegistry.getAvailable());
+		if (!prepared.ok) {
+			this.#cyberMode = false;
+			this.#host.settings.clearCyberRoles(this.#cyberOwner);
+			this.#host.emitNotice("warning", cyberRefusalMessage(prepared.refusal), "cyber");
+			return;
+		}
+		this.#host.settings.applyCyberRoles(this.#cyberOwner, prepared.allowlist);
+		this.#cyberMode = true;
+	}
+
+	/** Restore an adopted branch and record any degradation before later model use. */
+	async restoreCyberBranch(): Promise<void> {
+		const enabled = this.#host.sessionManager.getLastCyberMode() ?? this.#host.settings.get("cyberMode") === true;
+		this.restoreCyberMode(enabled);
+		await this.repointCyberModel();
+		if (enabled && !this.cyberMode) this.#recordCyberState();
+	}
+
+	/**
+	 * Refuse an operator switch to a model the installed protection excludes
+	 * (FR-009).
+	 *
+	 * The guard sits above the provider session reset, so a refusal costs nothing
+	 * and leaves no partial state. Turning cyber mode off is the way to reach those
+	 * models, and an explicit switch-off clears whatever installed the protection
+	 * (FR-030).
+	 */
+	#assertCyberAllows(model: Model): void {
+		if (cyberAllowsModel(this.#host.settings, model)) return;
+		throw new Error(
+			`Cyber mode is on and ${model.provider}/${model.id} is not cyber-capable. Turn cyber mode off to switch to it.`,
+		);
+	}
+
+	/**
 	 * Cycle to the next/previous `modelProfiles` bundle.
 	 *
 	 * @param role - Role to activate within the incoming profile (see
@@ -570,11 +783,21 @@ export class ModelControls {
 		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
 		const next = scopedModels[nextIndex];
 
+		// Refuse an excluded model before any provider state is touched (FR-009):
+		// the cycle key is an operator switch surface like the picker (SC-010).
+		this.#assertCyberAllows(next.model);
+
 		// Apply model
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#host.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(next.model);
-		this.#host.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
+		this.#host.sessionManager.appendModelChange(
+			`${next.model.provider}/${next.model.id}`,
+			undefined,
+			false,
+			undefined,
+			this.cyberMode,
+		);
 		this.#host.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
 
 		// Apply the scoped model's configured thinking level, preserving auto.
@@ -597,6 +820,10 @@ export class ModelControls {
 		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
 		const nextModel = availableModels[nextIndex];
 
+		// Refuse an excluded model before the API-key probe and the provider reset
+		// (FR-009): cycling may not land outside the allowlist (SC-010).
+		this.#assertCyberAllows(nextModel);
+
 		const apiKey = await this.#host.modelRegistry.getApiKey(nextModel, this.#host.sessionId());
 		if (!apiKey) {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
@@ -605,7 +832,13 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(nextModel);
-		this.#host.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
+		this.#host.sessionManager.appendModelChange(
+			`${nextModel.provider}/${nextModel.id}`,
+			undefined,
+			false,
+			undefined,
+			this.cyberMode,
+		);
 		this.#host.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
 		// Re-apply the current thinking level (or auto) for the newly selected model
 		this.#reapplyThinkingLevel();

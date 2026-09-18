@@ -1,10 +1,108 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
+import { formatModelString } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { BlockAccumulator, SpeechEnhancer } from "@oh-my-pi/pi-coding-agent/tts/speech-enhancer";
 
 afterEach(() => {
 	vi.restoreAllMocks();
+});
+
+const priorityHit = getBundledModel("anthropic", "claude-haiku-4-5");
+const otherModel = getBundledModel("openai", "gpt-5");
+if (!priorityHit || !otherModel) throw new Error("Expected bundled test models to exist");
+
+/** Catalog order decides which model `@tiny`'s fall-through resolves to. */
+const catalog = [priorityHit, otherModel];
+
+function enhancerFor(
+	settings: Settings,
+	reportCyberRoleWithoutModel?: (role: string, excludedSelector: string) => void,
+): SpeechEnhancer {
+	const registry = {
+		getAvailable: () => catalog,
+		getApiKey: async () => "test-key",
+		resolver: () => async () => "test-key",
+	};
+	return new SpeechEnhancer({ settings, registry, sessionId: "session-1", reportCyberRoleWithoutModel } as never);
+}
+
+function protectedSettings(allowlisted: typeof catalog): Settings {
+	const settings = Settings.isolated({ cyberModels: allowlisted.map(model => formatModelString(model)) });
+	const allowlist = resolveCyberAllowlist(settings, catalog);
+	if (!allowlist) throw new Error("expected the declared allowlist to resolve");
+	settings.applyCyberRoles("protector", allowlist);
+	return settings;
+}
+
+describe("SpeechEnhancer cyber mode protection", () => {
+	it("dispatches no completion to the excluded model the tiny alias resolves to", async () => {
+		// `modelRoles.tiny` and `modelRoles.smol` are unset, so `@tiny` falls through
+		// to the static smol priority chain and lands on `claude-haiku-4-5`, which
+		// this allowlist excludes. Returning null leaves the vocalizer its
+		// mechanical fallback; dispatching would send speech text to the provider
+		// the operator asked it to avoid.
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Spoken text" }],
+		} as never);
+
+		const rewritten = await enhancerFor(protectedSettings([otherModel])).rewrite("**Spoken text**");
+
+		expect(rewritten).toBeNull();
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+	});
+
+	it("still rewrites when the allowlist covers the tiny alias target", async () => {
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Spoken text" }],
+		} as never);
+		const reports: Array<[string, string]> = [];
+
+		const rewritten = await enhancerFor(protectedSettings([priorityHit]), (role, excluded) =>
+			reports.push([role, excluded]),
+		).rewrite("**Spoken text**");
+
+		expect(rewritten).toBe("Spoken text");
+		expect(formatModelString(completeSimpleMock.mock.calls[0]?.[0] as never)).toBe(formatModelString(priorityHit));
+		// The filter changed nothing here, so there is nothing to report (FR-011).
+		expect(reports).toEqual([]);
+	});
+
+	it("names the tiny role and the excluded model it could not use", async () => {
+		// FR-011/SC-003: the tiny role's selection changed, and the caller only sees
+		// `null` plus its own mechanical fallback, so the reason has to be told.
+		// Dedup belongs to the session's transcript-scoped set, so every excluded
+		// resolution reports and the session decides what is new.
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({ stopReason: "stop", content: [] } as never);
+		const reports: Array<[string, string]> = [];
+		const enhancer = enhancerFor(protectedSettings([otherModel]), (role, excluded) => reports.push([role, excluded]));
+
+		expect(await enhancer.rewrite("**Spoken text**")).toBeNull();
+		expect(await enhancer.rewrite("**More text**")).toBeNull();
+
+		expect(reports).toEqual([
+			["tiny", formatModelString(priorityHit)],
+			["tiny", formatModelString(priorityHit)],
+		]);
+	});
+
+	it("leaves the rewrite unfiltered when no protection is installed", async () => {
+		// Same catalog as the first case with cyber mode off: the alias still lands
+		// on the priority hit, which is what makes the gating above its only cause.
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Spoken text" }],
+		} as never);
+
+		const rewritten = await enhancerFor(Settings.isolated({})).rewrite("**Spoken text**");
+
+		expect(rewritten).toBe("Spoken text");
+		expect(formatModelString(completeSimpleMock.mock.calls[0]?.[0] as never)).toBe(formatModelString(priorityHit));
+	});
 });
 
 describe("SpeechEnhancer rewriting", () => {

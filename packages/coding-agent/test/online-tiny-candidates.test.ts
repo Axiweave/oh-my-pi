@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
@@ -185,5 +187,60 @@ describe("online tiny fallback candidates", () => {
 			},
 		});
 		expect(expandOnlineTinyModelFallbacks(primary, settings, models)).toEqual(models);
+	});
+});
+
+function installCyberAllowlist(settings: Settings, allowedSelectors: string[], catalog: Model<Api>[]): void {
+	settings.set("cyberModels", allowedSelectors);
+	const allowlist = resolveCyberAllowlist(settings, catalog);
+	if (!allowlist) throw new Error("test setup: cyberModels did not resolve to an allowlist");
+	// Installed the way a sibling session or shared configuration would; this
+	// settings object's own `cyberMode` flag is never switched on, matching
+	// FR-029/FR-030 shared-protection-independent-of-own-state semantics.
+	settings.applyCyberRoles("shared", allowlist);
+}
+
+describe("online tiny fallback candidates under cyber mode protection", () => {
+	it("skips an excluded fallback-chain entry but keeps the allowed entry after it", () => {
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { tiny: [secondarySelector, fallbackSelector] },
+		});
+		settings.setModelRole("tiny", primarySelector);
+		installCyberAllowlist(settings, [primarySelector, fallbackSelector], models);
+		expect(collectOnlineTinyCandidates(["tiny"], settings, models).map(c => c.model)).toEqual([primary, fallback]);
+	});
+
+	it("walks an excluded fallback's own chain to reach an allowed descendant", () => {
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { tiny: [secondarySelector], [secondarySelector]: [fallbackSelector] },
+		});
+		settings.setModelRole("tiny", primarySelector);
+		installCyberAllowlist(settings, [primarySelector, fallbackSelector], models);
+		expect(collectOnlineTinyCandidates(["tiny"], settings, models).map(c => c.model)).toEqual([primary, fallback]);
+	});
+
+	it("keeps only the primary when every fallback entry is excluded", () => {
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { tiny: [secondarySelector, fallbackSelector] },
+		});
+		settings.setModelRole("tiny", primarySelector);
+		installCyberAllowlist(settings, [primarySelector], models);
+		expect(collectOnlineTinyCandidates(["tiny"], settings, models).map(c => c.model)).toEqual([primary]);
+	});
+
+	it("drops an excluded current model when fallback expansion cannot reach anything else", () => {
+		for (const overrides of [{ "retry.modelFallback": false }, {}]) {
+			const settings = Settings.isolated(overrides);
+			installCyberAllowlist(settings, [primarySelector], models);
+			expect(expandOnlineTinyModelFallbacks(secondary, settings, models)).toEqual([]);
+		}
+	});
+
+	it("walks an excluded current model's own chain to reach an allowed descendant", () => {
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { [secondarySelector]: [fallbackSelector] },
+		});
+		installCyberAllowlist(settings, [primarySelector, fallbackSelector], models);
+		expect(expandOnlineTinyModelFallbacks(secondary, settings, models)).toEqual([fallback]);
 	});
 });

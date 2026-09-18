@@ -33,6 +33,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { isTinyMemoryLocalModelKey, isTinyMemoryReasoningModelKey, ONLINE_MEMORY_MODEL_KEY } from "../tiny/models";
@@ -199,7 +200,11 @@ class OnlineChatJudge implements ResolvedJudge {
 			{ tryAllRoles: true },
 		);
 		const session = deps.sessionModel;
-		if (session && !candidates.some(c => c.model.provider === session.provider && c.model.id === session.id)) {
+		if (
+			session &&
+			cyberAllowsModel(deps.settings, session) &&
+			!candidates.some(c => c.model.provider === session.provider && c.model.id === session.id)
+		) {
 			candidates.push({ role: "session", model: session });
 		}
 		if (candidates.length === 0) throw new Error("judgment: no tiny/smol/default model available");
@@ -213,6 +218,10 @@ class OnlineChatJudge implements ResolvedJudge {
 				const apiKey = await deps.registry.getApiKey(model, deps.sessionId);
 				if (!apiKey) {
 					lastError = `no API key for ${model.provider}/${model.id}`;
+					continue;
+				}
+				if (!cyberAllowsModel(deps.settings, model)) {
+					lastError = `${model.provider}/${model.id} is excluded by cyber mode protection`;
 					continue;
 				}
 				// Resolve metadata after getApiKey so the session-sticky credential is recorded first.

@@ -214,6 +214,27 @@ export interface TurnRecoveryHost {
 	persistedAssistantEntryId(message: AssistantMessage): string | undefined;
 	sessionMessageAlreadyPersisted(message: AssistantMessage): boolean;
 	setModelWithProviderSessionReset(model: Model): Promise<void>;
+	/**
+	 * Whether cyber mode covers `model` for the current session.
+	 *
+	 * Recovery swaps models without going through the operator switch guard, so a
+	 * configured fallback chain, the Fireworks Fast degrade, and the restore of a
+	 * fallback's primary each ask this before moving the session. A refused
+	 * candidate is skipped, never fatal: recovery keeps running on a model the
+	 * allowlist covers.
+	 */
+	cyberAllowsModel(model: Model): boolean;
+	/**
+	 * Whether this session's own cyber mode indicator is on right now: the
+	 * local switch combined with the shared allowlist still being installed,
+	 * exactly `AgentSession.cyberMode`. Recorded on every recovery
+	 * `appendModelChange` call so a resumed transcript's `cyber` field matches
+	 * the live indicator, the same value every other write site passes as
+	 * `this.cyberMode`. Distinct from `cyberAllowsModel`, which asks about
+	 * shared protection alone and must keep confining recovery even while this
+	 * session's own indicator reads off (FR-029).
+	 */
+	cyberModeEnabled(): boolean;
 	/** Edit mode resolved for the active model and settings, captured before a fallback swap. */
 	resolveActiveEditMode(): EditMode;
 	/** Rebuilds the model-dependent base system prompt when a swap changed the edit mode or model policy. */
@@ -1739,6 +1760,11 @@ export class TurnRecovery {
 				const resolved = resolveModelOverride([candidate.raw], this.#host.modelRegistry, this.#host.settings);
 				const candidateModel = resolved.model ?? this.#host.modelRegistry.find(candidate.provider, candidate.id);
 				if (!candidateModel || !this.#host.modelRegistry.hasConfiguredAuth(candidateModel)) continue;
+				// Cyber mode covers this walk too. The swap refuses an excluded
+				// candidate, so selecting one here would abandon the usage fallback
+				// entirely and leave the session on the depleted model: skip it and
+				// move on to the next entry the protection covers.
+				if (!this.#host.cyberAllowsModel(candidateModel)) continue;
 				if (ceiling !== undefined && !modelSupportsEffortCeiling(candidateModel, ceiling)) continue;
 				// A usage fallback must also fit: skip a candidate whose window cannot
 				// hold the live context so we never switch onto an oversized request
@@ -1849,6 +1875,11 @@ export class TurnRecovery {
 		if (!candidate) {
 			throw new Error(`Retry fallback model not found: ${selector.raw}`);
 		}
+		// The candidate loop skips excluded entries before reaching here, but this
+		// method is also entered from the usage path with a single candidate, so the
+		// check belongs to the swap itself: a refused candidate leaves the session
+		// where it is rather than on a model the operators asked it to avoid.
+		if (!this.#host.cyberAllowsModel(candidate)) return false;
 		const apiKey =
 			options?.apiKey ??
 			(await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), { signal: options?.signal }));
@@ -1898,7 +1929,13 @@ export class TurnRecovery {
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
 			return false;
 		}
-		this.#host.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE, true);
+		this.#host.sessionManager.appendModelChange(
+			candidateSelector,
+			EPHEMERAL_MODEL_CHANGE_ROLE,
+			true,
+			undefined,
+			this.#host.cyberModeEnabled(),
+		);
 		this.#host.settings.getStorage()?.recordModelUsage(candidateSelector);
 		this.#host.setThinkingLevel(nextThinkingLevel);
 		if (!this.#activeRetryFallback) {
@@ -1973,6 +2010,11 @@ export class TurnRecovery {
 				if (!this.#host.contextFitsModel(candidate, options?.preserveFailedTurn ? undefined : failedMessage)) {
 					continue;
 				}
+				// A configured chain is not filtered by cyber mode, so the candidates the
+				// protection excludes are skipped here: the walk moves on to the next
+				// entry instead of moving the session onto a model the operators asked it
+				// to avoid.
+				if (!this.#host.cyberAllowsModel(candidate)) continue;
 				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
 				if (!apiKey) continue;
 				return this.applyRetryFallbackCandidate(role, selector, currentSelector, options);
@@ -2070,6 +2112,9 @@ export class TurnRecovery {
 		if (!model) return false;
 		const baseModel = this.#host.modelRegistry.find("fireworks", toFireworksBaseModelId(model.id));
 		if (!baseModel) return false;
+		// A degrade is still a model switch: when the allowlist covers the Fast
+		// variant but not its base id, the session stays on the variant it has.
+		if (!this.#host.cyberAllowsModel(baseModel)) return false;
 		const apiKey = await this.#host.modelRegistry.getApiKey(baseModel, this.#host.sessionId());
 		if (!apiKey) return false;
 		const baseSelector = formatModelStringWithRouting(baseModel);
@@ -2078,7 +2123,13 @@ export class TurnRecovery {
 		// chain: the base model must not be reported as the configured primary.
 		this.#markFallbackRouted();
 		await this.#host.setModelWithProviderSessionReset(baseModel);
-		this.#host.sessionManager.appendModelChange(baseSelector, EPHEMERAL_MODEL_CHANGE_ROLE, true);
+		this.#host.sessionManager.appendModelChange(
+			baseSelector,
+			EPHEMERAL_MODEL_CHANGE_ROLE,
+			true,
+			undefined,
+			this.#host.cyberModeEnabled(),
+		);
 		this.#host.settings.getStorage()?.recordModelUsage(baseSelector);
 		await this.#host.syncAfterModelChange(previousEditMode);
 		await this.#host.emitSessionEvent({
@@ -2130,6 +2181,11 @@ export class TurnRecovery {
 		const primaryModel =
 			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
 		if (!primaryModel) return false;
+		// The fallback the session is on was checked when it was applied, so keeping
+		// it is the allowlisted choice when the recorded primary is no longer covered.
+		// Refusing before `clearActiveRetryFallback` keeps the chain record, so the
+		// session still reports how it reached the model it runs on.
+		if (!this.#host.cyberAllowsModel(primaryModel)) return false;
 		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId());
 		if (!apiKey) return false;
 
@@ -2144,7 +2200,13 @@ export class TurnRecovery {
 		// as fallback-served.
 		this.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(primaryModel);
-		this.#host.sessionManager.appendModelChange(primarySelector, EPHEMERAL_MODEL_CHANGE_ROLE);
+		this.#host.sessionManager.appendModelChange(
+			primarySelector,
+			EPHEMERAL_MODEL_CHANGE_ROLE,
+			false,
+			undefined,
+			this.#host.cyberModeEnabled(),
+		);
 		this.#host.settings.getStorage()?.recordModelUsage(primarySelector);
 		this.#host.setThinkingLevel(thinkingToApply);
 		await this.#host.syncAfterModelChange(previousEditMode);

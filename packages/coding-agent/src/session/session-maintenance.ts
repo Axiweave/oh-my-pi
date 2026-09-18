@@ -57,12 +57,14 @@ import type {
 	OpenAIResponsesHistoryPayload,
 	ProviderSessionState,
 } from "@oh-my-pi/pi-ai";
+import { completeSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isRecord, logger, Snowflake, stringifyJson } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { writeArtifact } from "./artifacts";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import { MODEL_ROLE_IDS } from "../config/model-roles";
 import type { CompactionSettings as ConfiguredCompactionSettings, Settings } from "../config/settings";
@@ -371,6 +373,26 @@ class ManualCompactionNoOpError extends Error {
 	constructor(message: string) {
 		super(message);
 		this.name = "ManualCompactionNoOpError";
+	}
+}
+
+/**
+ * Signals that cyber mode protection excluded a candidate mid-dispatch, after
+ * the top-of-loop and pre-dispatch checks already passed. Thrown from three
+ * places: the manual `/compact` path's `completeImpl` transport hook and the
+ * auto-compaction path's `completeImpl` wrapper, when a `compact()` call
+ * outlives a protection change and issues a second internal request (e.g. a
+ * summary oneshot followed by a short-summary oneshot) for a model that was
+ * allowed for the first request but excluded by the second; and the
+ * auto-compaction retry loop, when protection changes during the `getApiKey`
+ * await or a backoff sleep between retries. Distinguishes a protection-change
+ * race from a genuine transport failure so the dispatch loop skips to the
+ * next candidate instead of surfacing it as a compaction error.
+ */
+class CyberExclusionDuringDispatchError extends Error {
+	constructor(model: Model) {
+		super(`Cyber mode protection excluded ${model.provider}/${model.id} during dispatch`);
+		this.name = "CyberExclusionDuringDispatchError";
 	}
 }
 
@@ -3164,6 +3186,10 @@ export class SessionMaintenance {
 		if (!candidate) return undefined;
 		if (modelsAreEqual(candidate, currentModel)) return undefined;
 		if (candidate.contextWindow == null || candidate.contextWindow <= contextWindow) return undefined;
+		// Cyber mode narrows promotion the same way it narrows recovery: a target
+		// outside the installed allowlist leaves the session where it is, without
+		// spending a credential lookup on it.
+		if (!cyberAllowsModel(this.#host.settings, candidate)) return undefined;
 		const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), { signal });
 		if (!apiKey) return undefined;
 		return candidate;
@@ -3187,8 +3213,9 @@ export class SessionMaintenance {
 			if (seen.has(key)) return;
 			seen.add(key);
 			// `seen` still tracks rejected models so the largest-context fallback
-			// scan below doesn't reintroduce them; the filter just suppresses
-			// inclusion in this caller's candidate chain.
+			// scan below doesn't reintroduce them; the filter and the cyber
+			// allowlist just suppress inclusion in this caller's candidate chain.
+			if (!cyberAllowsModel(this.#host.settings, model)) return;
 			if (filter && !filter(model)) return;
 			candidates.push(model);
 		};
@@ -3205,10 +3232,18 @@ export class SessionMaintenance {
 
 		const sortedByContext = [...availableModels].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
 		for (const model of sortedByContext) {
-			if (!seen.has(`${model.provider}/${model.id}`)) {
-				addCandidate(model);
-				break;
+			const key = `${model.provider}/${model.id}`;
+			if (seen.has(key)) continue;
+			// Cyber-excluded entries are skipped (and remembered) so the walk
+			// keeps hunting for an allowed one; once it reaches the first
+			// allowed, not-yet-seen entry, the caller's filter gets exactly one
+			// shot at it, same as before cyber filtering existed.
+			if (!cyberAllowsModel(this.#host.settings, model)) {
+				seen.add(key);
+				continue;
 			}
+			addCandidate(model);
+			break;
 		}
 
 		return candidates;
@@ -3240,6 +3275,7 @@ export class SessionMaintenance {
 		let nativeCompactionFailure: { error: NativeCompactionError; provider: string } | undefined;
 
 		for (const candidate of candidates) {
+			if (!cyberAllowsModel(this.#host.settings, candidate)) continue;
 			const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
 			if (!apiKey) continue;
 			if (
@@ -3250,6 +3286,9 @@ export class SessionMaintenance {
 				throw nativeCompactionFailure.error;
 			}
 
+			// Re-check right before dispatch: `getApiKey` above is an await that
+			// can cross a protection change the top-of-loop check above missed.
+			if (!cyberAllowsModel(this.#host.settings, candidate)) continue;
 			try {
 				return await compact(
 					this.#host.obfuscatePreparationForProvider(preparation),
@@ -3281,12 +3320,21 @@ export class SessionMaintenance {
 						// summary requests in parallel (chatgpt-codex review on
 						// #3751).
 						completeImpl: async (requestModel, requestContext, requestOptions) => {
+							// A single compact() call can issue several internal
+							// requests (e.g. a summary oneshot, then a short-summary
+							// oneshot). Re-check on every request so a protection
+							// change mid-call stops the next one instead of only
+							// guarding the first.
+							if (!cyberAllowsModel(this.#host.settings, requestModel)) {
+								throw new CyberExclusionDuringDispatchError(requestModel);
+							}
 							const stream = await this.#host.sideStreamFn(requestModel, requestContext, requestOptions);
 							return stream.result();
 						},
 					},
 				);
 			} catch (error) {
+				if (error instanceof CyberExclusionDuringDispatchError) continue;
 				const id = AIError.classify(error instanceof NativeCompactionError ? error.cause : error, candidate.api);
 				if (AIError.is(id, AIError.Flag.AuthFailed)) continue;
 				if (error instanceof NativeCompactionError) {
@@ -4620,6 +4668,7 @@ export class SessionMaintenance {
 
 				for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
 					const candidate = candidates[candidateIndex];
+					if (!cyberAllowsModel(this.#host.settings, candidate)) continue;
 					const hasMoreCandidates = candidateIndex < candidates.length - 1;
 					const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
 					if (!apiKey) continue;
@@ -4634,6 +4683,12 @@ export class SessionMaintenance {
 					let attempt = 0;
 					while (true) {
 						try {
+							// Re-checked on every retry attempt: both the `getApiKey`
+							// await above and the backoff sleep below this try/catch can
+							// cross a protection change.
+							if (!cyberAllowsModel(this.#host.settings, candidate)) {
+								throw new CyberExclusionDuringDispatchError(candidate);
+							}
 							compactResult = await compact(
 								this.#host.obfuscatePreparationForProvider(preparation),
 								candidate,
@@ -4664,12 +4719,30 @@ export class SessionMaintenance {
 									// retry too — the budgets would multiply and each outer
 									// wait would stack on top of an inner backoff.
 									oneshotRetry: false,
+									// Auto-compaction has no side-stream transport override —
+									// it goes through the engine's default completeImpl
+									// (`completeSimple`, see telemetry.ts). Wrap that same
+									// default, unchanged, with the same re-checked-per-request
+									// cyber guard as the manual path: a single compact() call
+									// can issue several internal requests (e.g. a summary
+									// oneshot, then a short-summary oneshot), so a protection
+									// change mid-call must stop the next one too.
+									completeImpl: async (requestModel, requestContext, requestOptions) => {
+										if (!cyberAllowsModel(this.#host.settings, requestModel)) {
+											throw new CyberExclusionDuringDispatchError(requestModel);
+										}
+										return completeSimple(requestModel, requestContext, requestOptions);
+									},
 								},
 							);
 							break;
 						} catch (error) {
 							if (autoCompactionSignal.aborted) {
 								throw error;
+							}
+							if (error instanceof CyberExclusionDuringDispatchError) {
+								lastError = error;
+								break;
 							}
 
 							const message = error instanceof Error ? error.message : String(error);

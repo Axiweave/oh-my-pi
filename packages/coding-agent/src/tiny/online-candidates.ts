@@ -1,4 +1,5 @@
 import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import { formatModelStringWithRouting, resolveModelOverride, resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import {
@@ -63,7 +64,7 @@ function expandFallbackCandidates(
 		const key = candidateKey(model);
 		if (seen.has(key)) return false;
 		seen.add(key);
-		out.push({ role, model });
+		if (cyberAllowsModel(settings, model)) out.push({ role, model });
 		return true;
 	};
 
@@ -123,6 +124,9 @@ export function collectOnlineTinyCandidates(
 		const key = candidateKey(model);
 		if (seen.has(key)) return false;
 		seen.add(key);
+		// No membership check here, unlike the fallback walk below: this model
+		// comes from `resolveRoleSelection`, which reads the cyber-filtered role
+		// view, so the installed filter has already confined it.
 		out.push({ role, model });
 		return true;
 	};
@@ -178,11 +182,12 @@ export function expandOnlineTinyModelFallbacks(
 	availableModels: Model<Api>[],
 ): Model<Api>[] {
 	const seen = new Set<string>([candidateKey(model)]);
-	const out: OnlineTinyCandidate[] = [{ role: "current", model }];
-	if (settings.get("retry.modelFallback") === false) return [model];
+	const allowed = cyberAllowsModel(settings, model);
+	const out: OnlineTinyCandidate[] = allowed ? [{ role: "current", model }] : [];
+	if (settings.get("retry.modelFallback") === false) return allowed ? [model] : [];
 
 	const configuredChains = settings.get("retry.fallbackChains");
-	if (!configuredChains || typeof configuredChains !== "object") return [model];
+	if (!configuredChains || typeof configuredChains !== "object") return allowed ? [model] : [];
 
 	const context = createFallbackContext(configuredChains, settings, availableModels);
 	expandFallbackCandidates(

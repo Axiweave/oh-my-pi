@@ -5,6 +5,7 @@ import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
+import { resolveCyberAllowlist } from "../../src/config/cyber-mode";
 import type { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../../src/eval/bridge-timeout";
@@ -633,6 +634,139 @@ describe("runEvalCompletion", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("cyber mode protection", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		releaseCompletionHandles("Main");
+	});
+
+	/**
+	 * Installs the allowlist the way a sibling session or shared configuration
+	 * would: directly on the settings object, without ever switching this
+	 * session's own `cyberMode` flag on. `cyberAllowsModel` only reads the
+	 * installed allowlist, so every test below also proves shared protection
+	 * holds while this settings' `cyberMode` stays at its default `false`.
+	 */
+	function installCyberAllowlist(session: ToolSession, allowedSelectors: string[], catalog: Model<Api>[]): void {
+		const settings = session.settings;
+		settings.set("cyberModels", allowedSelectors);
+		const allowlist = resolveCyberAllowlist(settings, catalog);
+		if (!allowlist) throw new Error("test setup: cyberModels did not resolve to an allowlist");
+		settings.applyCyberRoles("shared", allowlist);
+	}
+
+	it("prefers the shared allowlist's default role over an excluded active model", async () => {
+		const excludedActive = makeModel("p", "sonnet-excluded");
+		const allowedDefault = makeModel("p", "default");
+		const session = makeSession({
+			available: [excludedActive, allowedDefault],
+			activeModel: "p/sonnet-excluded",
+			roles: { default: "p/default" },
+		});
+		installCyberAllowlist(session, ["p/default"], [excludedActive, allowedDefault]);
+		expect(session.settings.get("cyberMode")).not.toBe(true);
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+
+		const result = await runEvalCompletionAndWait({ prompt: "q", model: "default" }, { session });
+
+		expect(spy.mock.calls.map(call => (call[0] as Model<Api>).id)).toEqual(["default"]);
+		expect(result.details.model).toBe("p/default");
+	});
+
+	it("does not retarget an excluded primary to a fuzzy or suffixed sibling in a reduced catalog", async () => {
+		for (const [allowedId, excludedId] of [
+			["shared-model", "shared-model-extra"],
+			["router:max", "router"],
+		] as const) {
+			const allowed = makeModel("p", allowedId);
+			const excluded = makeModel("p", excludedId);
+			const session = makeSession({ available: [excluded], roles: { smol: `p/${allowedId}` } });
+			installCyberAllowlist(session, [`p/${allowedId}`], [allowed, excluded]);
+			const spy = vi.spyOn(ai, "completeSimple").mockRejectedValue(new Error("must not call an excluded model"));
+
+			await expect(runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session })).rejects.toThrow();
+			expect(spy).not.toHaveBeenCalled();
+			spy.mockRestore();
+		}
+	});
+
+	it("skips an excluded fallback entry and calls the next allowed entry", async () => {
+		const excludedB = makeModel("p", "b-excluded");
+		const allowedC = makeModel("p", "c-allowed");
+		const session = makeSession({ available: [SMOL, excludedB, allowedC] });
+		session.settings.set("retry.fallbackChains", { smol: ["p/b-excluded", "p/c-allowed"] });
+		installCyberAllowlist(session, ["p/smol", "p/c-allowed"], [SMOL, excludedB, allowedC]);
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "smol down" }))
+			.mockResolvedValueOnce(assistant({ text: "c answer" }));
+
+		const result = await runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session });
+
+		expect(spy.mock.calls.map(call => (call[0] as Model<Api>).id)).toEqual(["smol", "c-allowed"]);
+		expect(result.text).toBe("c answer");
+	});
+
+	it("walks an excluded fallback's own chain to reach an allowed descendant", async () => {
+		const excludedB = makeModel("p", "b-excluded");
+		const allowedC = makeModel("p", "c-allowed");
+		const session = makeSession({ available: [SMOL, excludedB, allowedC] });
+		session.settings.set("retry.fallbackChains", { smol: ["p/b-excluded"], "p/b-excluded": ["p/c-allowed"] });
+		installCyberAllowlist(session, ["p/smol", "p/c-allowed"], [SMOL, excludedB, allowedC]);
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "smol down" }))
+			.mockResolvedValueOnce(assistant({ text: "c answer" }));
+
+		const result = await runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session });
+
+		expect(spy.mock.calls.map(call => (call[0] as Model<Api>).id)).toEqual(["smol", "c-allowed"]);
+		expect(result.text).toBe("c answer");
+	});
+
+	it("throws the primary's own error when every fallback entry is excluded", async () => {
+		const excludedB = makeModel("p", "b-excluded");
+		const excludedC = makeModel("p", "c-excluded");
+		const session = makeSession({ available: [SMOL, excludedB, excludedC] });
+		session.settings.set("retry.fallbackChains", { smol: ["p/b-excluded", "p/c-excluded"] });
+		installCyberAllowlist(session, ["p/smol"], [SMOL, excludedB, excludedC]);
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(assistant({ stopReason: "error", errorMessage: "smol down" }));
+
+		await expect(runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session })).rejects.toThrow("smol down");
+		expect(spy.mock.calls.map(call => (call[0] as Model<Api>).id)).toEqual(["smol"]);
+	});
+
+	it("still blocks a candidate that only becomes excluded after candidates were already collected", async () => {
+		const midFlight = makeModel("p", "mid-flight");
+		const allowedC = makeModel("p", "c-allowed");
+		const session = makeSession({ available: [midFlight, allowedC], roles: { smol: "p/mid-flight" } });
+		session.settings.set("retry.fallbackChains", { smol: ["p/c-allowed"] });
+		session.settings.set("retry.maxRetries", 1);
+		// No protection is installed yet: candidates are built while midFlight is
+		// still unprotected, so construction-time filtering alone cannot catch it.
+		const registry = session.modelRegistry;
+		if (!registry) throw new Error("test requires a model registry");
+		registry.getApiKey = async model => {
+			if (model.id === "mid-flight") {
+				// A sibling session installs protection while this completion is
+				// already in flight, after candidates were already collected.
+				installCyberAllowlist(session, ["p/c-allowed"], [midFlight, allowedC]);
+			}
+			return "test-key";
+		};
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "c answer" }));
+
+		const result = await runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session });
+
+		// midFlight must never dispatch, and skipping it must not spend the one
+		// retry attempt the tight budget allows for reaching c-allowed.
+		expect(spy.mock.calls.map(call => (call[0] as Model<Api>).id)).toEqual(["c-allowed"]);
+		expect(result.text).toBe("c answer");
 	});
 });
 

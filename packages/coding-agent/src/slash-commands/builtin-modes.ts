@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { cyberRefusalMessage, cyberStateLine } from "../config/cyber-mode";
 import {
 	formatModelString,
 	getModelMatchPreferences,
@@ -110,6 +111,52 @@ function persistModelProfile(settings: Settings, name: string, scope: ModelProfi
 	}
 	settings.setProjectModelProfile(name);
 	return "saved as startup profile (.omp/config.yml)";
+}
+
+/**
+ * Resolves a `/cyber` argument to the switch it names, or `undefined` for a form
+ * the command does not take (contracts/slash-command.md).
+ *
+ * A scope persists the startup field, and only enabling has a persisted form, so
+ * `off global` and `status project` are usage errors rather than silent no-ops.
+ */
+function resolveCyberArg(
+	args: string,
+):
+	| { kind: "toggle" }
+	| { kind: "status" }
+	| { kind: "set"; enabled: boolean; scope?: "global" | "project" }
+	| undefined {
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	if (tokens.length === 0) return { kind: "toggle" };
+	if (tokens.length > 2) return undefined;
+	const [verb, scope] = tokens;
+	if (scope !== undefined && scope !== "global" && scope !== "project") return undefined;
+	if (verb === "on") return scope ? { kind: "set", enabled: true, scope } : { kind: "set", enabled: true };
+	if (verb === "off") return scope === undefined ? { kind: "set", enabled: false } : undefined;
+	if (verb === "status") return scope === undefined ? { kind: "status" } : undefined;
+	return undefined;
+}
+
+/** Persists `cyberMode: true` to the named scope, returning the feedback line. */
+function persistCyberMode(settings: Settings, scope: "global" | "project"): string {
+	if (scope === "global") {
+		settings.set("cyberMode", true);
+		return "saved as the startup default (global config)";
+	}
+	settings.setProjectCyberMode(true);
+	return "saved as the startup default (.omp/config.yml)";
+}
+
+/**
+ * The state `/cyber status` reports without changing anything: the session's
+ * effective state, which is what every enforcement path reads.
+ */
+function cyberState(session: AgentSession): { enabled: boolean; models: readonly string[] } {
+	return {
+		enabled: session.cyberMode,
+		models: [...(session.settings.getCyberAllowlist()?.keys ?? [])],
+	};
 }
 
 /** Applies an `/extended-context` argument and returns its operator feedback. */
@@ -581,6 +628,62 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						resolved.names.indexOf(result.profile),
 					),
 				);
+			} catch (error) {
+				runtime.ctx.showError(error instanceof Error ? error.message : String(error));
+			}
+		},
+	},
+	{
+		name: "cyber",
+		icon: "cyber",
+		description: "Toggle cyber mode: every role resolves among the cyber-capable models only",
+		acpDescription: "Toggle cyber mode",
+		acpInputHint: "[on|off|status] [global|project]",
+		allowArgs: true,
+		inlineHint: "[on|off|status] [global|project]",
+		getTuiAutocompleteDescription: runtime => `Cyber: ${runtime.ctx.session.cyberMode ? "on" : "off"}`,
+		handle: async (command, runtime) => {
+			const resolved = resolveCyberArg(command.args);
+			if (!resolved) return usage("Usage: /cyber [on|off|status] [global|project]", runtime);
+			const session = runtime.session;
+			if (resolved.kind === "status") {
+				await runtime.output(cyberStateLine(cyberState(session), session.model));
+				return commandConsumed();
+			}
+			const enabled = resolved.kind === "toggle" ? !session.cyberMode : resolved.enabled;
+			const result = await session.setCyberMode(enabled);
+			if (result.refusal) {
+				await runtime.output(cyberRefusalMessage(result.refusal));
+				return commandConsumed();
+			}
+			const scope = resolved.kind === "set" ? resolved.scope : undefined;
+			const saved = scope ? persistCyberMode(runtime.settings, scope) : undefined;
+			await runtime.output(`${cyberStateLine(result, session.model)}${saved ? ` ${saved}.` : ""}`);
+			return commandConsumed();
+		},
+		handleTui: async (command, runtime) => {
+			runtime.ctx.editor.setText("");
+			const resolved = resolveCyberArg(command.args);
+			if (!resolved) {
+				runtime.ctx.showStatus("Usage: /cyber [on|off|status] [global|project]");
+				return;
+			}
+			const session = runtime.ctx.session;
+			if (resolved.kind === "status") {
+				runtime.ctx.showStatus(cyberStateLine(cyberState(session), session.model));
+				return;
+			}
+			try {
+				const enabled = resolved.kind === "toggle" ? !session.cyberMode : resolved.enabled;
+				const result = await session.setCyberMode(enabled);
+				if (result.refusal) {
+					runtime.ctx.showStatus(cyberRefusalMessage(result.refusal));
+					return;
+				}
+				const scope = resolved.kind === "set" ? resolved.scope : undefined;
+				const saved = scope ? persistCyberMode(runtime.ctx.settings, scope) : undefined;
+				refreshStatusLine(runtime.ctx);
+				runtime.ctx.showStatus(`${cyberStateLine(result, session.model)}${saved ? ` — ${saved}` : ""}`);
 			} catch (error) {
 				runtime.ctx.showError(error instanceof Error ? error.message : String(error));
 			}

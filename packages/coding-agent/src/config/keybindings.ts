@@ -29,6 +29,7 @@ interface AppKeybindings {
 	"app.model.cycleBackward": true;
 	"app.model.cycleProfileForward": true;
 	"app.model.cycleProfileBackward": true;
+	"app.model.toggleCyber": true;
 	"app.model.select": true;
 	"app.model.selectTemporary": true;
 	"app.tools.expand": true;
@@ -125,6 +126,11 @@ export const KEYBINDINGS = {
 		// fine forward-only. Bind it in keybindings.yml when a longer list hurts.
 		defaultKeys: [],
 		description: "Cycle to previous model profile",
+	},
+	"app.model.toggleCyber": {
+		// Not alt+shift+c: `app.clipboard.copyPrompt` holds that chord.
+		defaultKeys: "alt+shift+x",
+		description: "Toggle cyber mode",
 	},
 	"app.model.select": {
 		defaultKeys: "alt+m",

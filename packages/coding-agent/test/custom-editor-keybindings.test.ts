@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
-import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
+import { type AppKeybinding, KEYBINDINGS, KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
 import { CustomEditor } from "@oh-my-pi/pi-coding-agent/modes/components/custom-editor";
 import { getEditorTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -45,6 +45,18 @@ describe("CustomEditor keybindings", () => {
 
 		expect(onCopyPrompt).toHaveBeenCalledTimes(1);
 		expect(onRetry).not.toHaveBeenCalled();
+	});
+
+	it("routes the shipped cyber toggle chord to the cyber handler", () => {
+		// Driven without setActionKeys, so the DEFAULT_ACTION_KEYS entry is the only
+		// thing that can make Alt+Shift+X reach onToggleCyber.
+		const editor = new CustomEditor(getEditorTheme());
+		const onToggleCyber = vi.fn();
+
+		editor.onToggleCyber = onToggleCyber;
+		editor.handleInput("\x1bX");
+
+		expect(onToggleCyber).toHaveBeenCalledTimes(1);
 	});
 
 	it("routes Ctrl+L to a live-toggle custom handler and Alt+L to display reset by default", () => {
@@ -228,6 +240,20 @@ describe("CustomEditor keybindings", () => {
 		editor.handleInput("\x11"); // Ctrl+Q
 		expect(onExit).toHaveBeenCalledTimes(1);
 		expect(editor.getText()).toBe("ab");
+	});
+});
+
+describe("shipped cyber toggle default", () => {
+	it("binds the toggle and keeps its chord to itself", () => {
+		const keybindings = KeybindingsManager.inMemory();
+		expect(keybindings.getKeys("app.model.toggleCyber")).toEqual(["alt+shift+x"]);
+
+		// A second action on the same chord would make one of the two unreachable,
+		// so the default chord must have exactly one owner.
+		const owners = (Object.keys(KEYBINDINGS) as AppKeybinding[]).filter(action =>
+			keybindings.getKeys(action).includes("alt+shift+x"),
+		);
+		expect(owners).toEqual(["app.model.toggleCyber"]);
 	});
 });
 

@@ -640,6 +640,17 @@ export function getModelMatchPreferences(
 	};
 }
 
+/**
+ * Read the installed cyber allowlist from a settings object, if it carries one.
+ *
+ * Mirrors {@link getModelMatchPreferences}: this resolver is handed narrow
+ * doubles as well as real settings, and a double without the cyber overlay has
+ * no protection to enforce, which is exactly the unprotected path.
+ */
+function getCyberAllowlistFrom(settings?: Partial<Pick<Settings, "getCyberAllowlist">>) {
+	return settings?.getCyberAllowlist?.();
+}
+
 function mergeModelMatchPreferences(
 	settings: Settings | undefined,
 	preferences: ModelMatchPreferences | undefined,
@@ -1072,7 +1083,6 @@ export function parseModelPattern(
 }
 
 const DEFAULT_MODEL_ROLE = "default";
-const MODEL_ROLE_ALIAS_PREFIXES = [MODEL_ROLE_ALIAS_PREFIX, LEGACY_MODEL_ROLE_ALIAS_PREFIX];
 
 export interface ModelRoleLookup {
 	getModelRole(role: ModelRole | string): string | undefined;
@@ -1088,10 +1098,15 @@ function isModelRole(role: string): role is ModelRole {
  * offset of the role name for prefixed aliases (`@role`, `pi/role`); the bare
  * `*` default alias returns 0 because its colon sits immediately after the
  * one-character token (`*:xhigh`).
+ *
+ * The prefix list is built here rather than at module scope: `model-roles`
+ * imports this module through `cyber-mode`, so a top-level read of its bindings
+ * would hit the temporal dead zone whenever that import order runs first.
  */
 function modelRoleAliasPrefixLength(value: string): number | undefined {
 	if (value === DEFAULT_MODEL_ROLE_ALIAS || value.startsWith(`${DEFAULT_MODEL_ROLE_ALIAS}:`)) return 0;
-	return MODEL_ROLE_ALIAS_PREFIXES.find(prefix => value.startsWith(prefix))?.length;
+	const prefixes = [MODEL_ROLE_ALIAS_PREFIX, LEGACY_MODEL_ROLE_ALIAS_PREFIX];
+	return prefixes.find(prefix => value.startsWith(prefix))?.length;
 }
 
 function getModelRoleAlias(value: string, settings?: ModelRoleLookup): string | undefined {
@@ -1465,6 +1480,7 @@ export function resolveModelRoleValue(
 	}
 
 	let warning: string | undefined;
+	const cyberAllowlist = getCyberAllowlistFrom(options?.settings);
 	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
 	// Build the O(n) preference context (model-order map over all available
 	// models) once and reuse it across every fallback pattern instead of
@@ -1473,6 +1489,12 @@ export function resolveModelRoleValue(
 	for (const [patternIndex, effectivePattern] of effectivePatterns.entries()) {
 		const resolved = matchPatternWithContext(effectivePattern, availableModels, preferenceContext);
 		if (resolved.model) {
+			// A filtered selector names an identity in the installed catalog. A
+			// smaller catalog must not retarget it through fuzzy or suffix matching.
+			if (cyberAllowlist && !cyberAllowlist.keys.has(formatModelString(resolved.model))) {
+				const intended = resolveModelFromString(effectivePattern, cyberAllowlist.catalog, matchPreferences);
+				if (intended && cyberAllowlist.keys.has(formatModelString(intended))) continue;
+			}
 			return {
 				model: resolved.model,
 				matchedPatternIndex: patternIndex,
@@ -1576,7 +1598,9 @@ export function resolveModelFromSettings(options: {
 		if (expanded.includes("/")) {
 			sawConfiguredProviderQualifiedRole = true;
 		}
-		const resolved = resolveModelFromString(expanded, availableModels, matchPreferences);
+		const resolved = settings.getCyberAllowlist()
+			? resolveModelRoleValue(expanded, availableModels, { settings, matchPreferences }).model
+			: resolveModelFromString(expanded, availableModels, matchPreferences);
 		if (resolved) return resolved;
 	}
 	return sawConfiguredProviderQualifiedRole ? undefined : availableModels[0];

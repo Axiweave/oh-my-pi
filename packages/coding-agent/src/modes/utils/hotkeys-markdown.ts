@@ -76,6 +76,7 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		`| \`${appKey(bindings, "app.model.cycleBackward")}\` | Cycle role models (backward) |`,
 		`| \`${appKey(bindings, "app.model.cycleProfileForward")}\` | Cycle model profiles (whole role bundle) |`,
 		`| \`${appKey(bindings, "app.model.cycleProfileBackward")}\` | Cycle model profiles (backward) |`,
+		`| \`${appKey(bindings, "app.model.toggleCyber")}\` | Toggle cyber mode |`,
 		`| \`${appKey(bindings, "app.model.selectTemporary")}\` | Select model (temporary) |`,
 		`| \`${appKey(bindings, "app.model.select")}\` | Select model (set roles) |`,
 		`| \`${appKey(bindings, "app.plan.toggle")}\` | Toggle plan mode |`,

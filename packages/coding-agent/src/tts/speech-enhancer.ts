@@ -18,7 +18,8 @@
 import { type AssistantMessage, completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
+import { cyberAllowsModel } from "../config/cyber-mode";
+import { formatModelString, getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import speechRewritePrompt from "../prompts/system/speech-rewrite.md" with { type: "text" };
 
@@ -40,6 +41,8 @@ export interface SpeechEnhancerDeps {
 	registry: ModelRegistry;
 	sessionId: string;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
+	/** Cyber report channel for the role this rewrite resolves through (FR-011). */
+	reportCyberRoleWithoutModel?: (role: string, excludedSelector: string) => void;
 }
 
 function extractText(content: AssistantMessage["content"]): string {
@@ -78,6 +81,18 @@ export class SpeechEnhancer {
 				matchPreferences: getModelMatchPreferences(settings),
 			}).model;
 			if (!model) return null;
+			// Cyber mode: `@tiny` falls through to the role's static priority chain
+			// when no role is configured, and that chain is not a configured role
+			// value, so the protection never rewrites it. A background rewrite MUST
+			// NOT land on an excluded model; null keeps the caller's mechanical
+			// fallback, which is the same no-model contract as an unresolved role.
+			if (!cyberAllowsModel(settings, model)) {
+				logger.debug("speech-enhancer: rewrite model is excluded by cyber mode", { model: model.id });
+				// The session owns the per-transcript dedup, so a repeated block in the
+				// same transcript stays silent while a fresh transcript reports again.
+				this.#deps.reportCyberRoleWithoutModel?.("tiny", formatModelString(model));
+				return null;
+			}
 			const apiKey = await registry.getApiKey(model, sessionId);
 			if (!apiKey) return null;
 			// Resolve metadata after getApiKey so the session-sticky credential is recorded first.

@@ -867,9 +867,9 @@ describe("resolveModelRoleValue", () => {
 	test("resolves @role:<thinking> by expanding role alias before parsing thinking", () => {
 		const settings = {
 			getModelRole: (role: string) => (role === "smol" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
-		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
+		};
 
-		const result = resolveModelRoleValue("@smol:high", allModels, { settings });
+		const result = resolveModelRoleValue("@smol:high", allModels, { roleLookup: settings });
 
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
@@ -880,9 +880,9 @@ describe("resolveModelRoleValue", () => {
 	test("resolves @role:max by expanding role alias before parsing thinking", () => {
 		const settings = {
 			getModelRole: (role: string) => (role === "smol" ? "openai-codex/gpt-5.3-codex" : undefined),
-		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
+		};
 
-		const result = resolveModelRoleValue("@smol:max", allModels, { settings });
+		const result = resolveModelRoleValue("@smol:max", allModels, { roleLookup: settings });
 
 		expect(result.model?.provider).toBe("openai-codex");
 		expect(result.model?.id).toBe("gpt-5.3-codex");
@@ -894,9 +894,9 @@ describe("resolveModelRoleValue", () => {
 	test("resolves @default through configured default role alias", () => {
 		const settings = {
 			getModelRole: (role: string) => (role === "default" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
-		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
+		};
 
-		const result = resolveModelRoleValue("@default", allModels, { settings });
+		const result = resolveModelRoleValue("@default", allModels, { roleLookup: settings });
 
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
@@ -916,9 +916,9 @@ describe("resolveModelRoleValue", () => {
 		};
 		const settings = {
 			getModelRole: (role: string) => roles[role],
-		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
+		};
 
-		const result = resolveModelRoleValue("@fast_worker", allModels, { settings });
+		const result = resolveModelRoleValue("@fast_worker", allModels, { roleLookup: settings });
 
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");

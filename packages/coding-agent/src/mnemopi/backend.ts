@@ -40,6 +40,7 @@ import {
 	requireMnemopiCore,
 	setMnemopiSessionState,
 } from "./state";
+import { cyberAllowsModel } from "../config/cyber-mode";
 
 // `/diagnose` is the only user of this subpath; load it lazily alongside the
 // loaders in ./state to keep mnemopi off the CLI startup module graph.
@@ -577,14 +578,18 @@ async function resolveMnemopiProviderOptions(
 
 	try {
 		const resolved = resolveRoleSelection(["tiny", "smol"], settings, modelRegistry.getAvailable());
-		const model = resolved?.model;
-		if (!model) {
+		const initialModel = resolved?.model;
+		if (!initialModel) {
 			logger.warn("Mnemopi: llmMode=smol but no tiny/smol model resolved; continuing without LLM.");
 			return base;
 		}
 		return {
 			...base,
 			llm: async (prompt, opts) => {
+				const model = settings.getCyberAllowlist()
+					? resolveRoleSelection(["tiny", "smol"], settings, modelRegistry.getAvailable())?.model
+					: initialModel;
+				if (!model || !cyberAllowsModel(settings, model)) return null;
 				const request = resolveMemoryCompletionInput(prompt, opts);
 				const hasApiKey = await modelRegistry.getApiKey(model, sessionId);
 				if (!hasApiKey) {
@@ -594,9 +599,13 @@ async function resolveMnemopiProviderOptions(
 					});
 					return null;
 				}
+				if (!cyberAllowsModel(settings, model)) return null;
 				const message = await retryTransientCompletion(
-					() =>
-						completeSimple(
+					() => {
+						if (!cyberAllowsModel(settings, model)) {
+							throw new Error(`Cyber mode excludes memory model ${model.provider}/${model.id}.`);
+						}
+						return completeSimple(
 							model,
 							{
 								...(request.systemPrompt ? { systemPrompt: [request.systemPrompt] } : {}),
@@ -608,7 +617,8 @@ async function resolveMnemopiProviderOptions(
 								maxTokens: opts?.maxTokens,
 								temperature: opts?.temperature,
 							},
-						),
+						);
+					},
 					{ provider: model.provider },
 				);
 				return message.content
