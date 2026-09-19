@@ -810,3 +810,79 @@ describe("editToolRenderer diff line wrapping", () => {
 		for (const row of bodyRows.slice(1)) expect(row).not.toMatch(/^│\s*\|/);
 	});
 });
+
+describe("edit streaming preview is a constant-height frame", () => {
+	// Collapsed streaming previews cap at 12 body rows. Pin a tall viewport so
+	// the viewport-derived budget never shrinks that cap: previewWindowRows()
+	// lands at 30 (rows - 20 reserve), leaving the 12-row tail in charge.
+	const WIDTH = 100;
+	const HEIGHT_CEILING = 14; // 12 body rows + the two frame borders
+
+	function withTallViewport<T>(run: () => Promise<T>): Promise<T> {
+		const originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { value: 50, configurable: true });
+		return run().finally(() => {
+			if (originalRowsDescriptor) Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		});
+	}
+
+	async function previewHeights(lines: readonly string[], width = WIDTH): Promise<number[]> {
+		const uiTheme = await getUiTheme();
+		return lines.map((_, index) => {
+			const component = editToolRenderer.renderCall(
+				{ path: "/tmp/tasks.md", previewDiff: lines.slice(0, index + 1).join("\n") },
+				{ expanded: false, isPartial: true, spinnerFrame: 0 },
+				uiTheme,
+			);
+			return component.render(width).length;
+		});
+	}
+
+	// Wrapped rows are packed whole, so a window that cannot be filled exactly
+	// re-quantized its drawn row count on nearly every tick: the frame's height
+	// flickered between two values forever and the transcript's row allocator
+	// re-clipped the block's head, so the box visibly moved while the stream ran.
+	it("holds one height once wrapping content saturates the window", async () => {
+		const lines = Array.from({ length: 30 }, (_, index) =>
+			index % 2 === 0
+				? `+${index + 1}|short ${index}`
+				: `+${index + 1}|- [ ] 7.3 Add run-directory reads and database-failure fallback with exact experiment/run/instance validation ${index}`,
+		);
+		const heights = await withTallViewport(() => previewHeights(lines));
+
+		// Grows while the window fills: monotone, never past the cap.
+		for (let i = 1; i < heights.length; i++) expect(heights[i]!).toBeGreaterThanOrEqual(heights[i - 1]!);
+		for (const height of heights) expect(height).toBeLessThanOrEqual(HEIGHT_CEILING);
+
+		// Holds once it saturates, whatever mix of short and wrapped rows streams in.
+		const peak = Math.max(...heights);
+		const settled = heights.slice(heights.indexOf(peak));
+		expect(settled.length).toBeGreaterThan(5); // precondition: it really did saturate
+		expect(settled.every(height => height === peak)).toBe(true);
+	});
+
+	// The tail slicer admits a single over-budget line whole so the newest change
+	// stays visible; without a clamp the frame grew to the line's own row count.
+	it("bounds a single line taller than the whole window", async () => {
+		expect(await withTallViewport(() => previewHeights([`+1|${"z".repeat(4000)}`]))).toEqual([HEIGHT_CEILING]);
+	});
+
+	// Frame rows are emitted unpadded past the borders, so a row wider than the
+	// frame soft-wraps in the terminal and smears the box's right edge.
+	it("never emits a row wider than the frame", async () => {
+		const uiTheme = await getUiTheme();
+		for (const body of [
+			"x".repeat(500),
+			"日本語テキスト".repeat(10),
+			"\ttab\tindented\tand\tlong\tenough\tto\twrap\there",
+		]) {
+			const component = editToolRenderer.renderCall(
+				{ path: "~/openspec/v12-specs/openspec/changes/monitor-tui/tasks.md", previewDiff: `+1|${body}` },
+				{ expanded: false, isPartial: true, spinnerFrame: 0 },
+				uiTheme,
+			);
+			for (const row of component.render(60)) expect(visibleWidth(Bun.stripANSI(row))).toBe(60);
+		}
+	});
+});

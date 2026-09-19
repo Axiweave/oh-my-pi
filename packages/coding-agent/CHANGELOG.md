@@ -52,6 +52,7 @@
 - Fixed dismissing an extension dialog throwing when its context carries no session view. The IDE `session_state_changed` publisher runs inside the dialog's settle handler, so it now reads a missing session or transcript as `idle` instead of failing the dismissal.
 - Fixed the transcript rebuild throwing `Settings not initialized` when a host renders chat rows before `Settings.init()`. Both command-card render gates now fall back to the `display.collapseCommandCards` schema default.
 - Fixed Ghostel prompt navigation landing on blank padding instead of the first input character, including multiline prompts. Synthetic messages and expanded command bodies no longer create extra prompt markers.
+- Fixed the Edit tool's streaming diff preview changing height on nearly every update once a long line pushed the window past its budget. The tail window packed whole lines, so the row count it drew re-quantized between the budget and one line less on each tick, moving the frame's bottom border and re-clipping the block's head in the transcript. A single line taller than the whole window was admitted whole and grew the frame to the line's own row count. The window is now measured on the rows the diff renderer actually draws, clamped to the budget, and padded to a constant height once it saturates, matching the Write tool's streaming preview.
 
 ## [18.2.4] - 2026-09-17
 

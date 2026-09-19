@@ -497,21 +497,43 @@ function formatStreamingDiff(
 	// innerWidth/budget are in the cache salt so a resize re-slices.
 	const innerWidth = Math.max(1, width - 2);
 	const budget = expanded ? previewWindowRows() : Math.min(EDIT_STREAMING_PREVIEW_LINES, previewWindowRows());
+	// The budget is the whole body: one row for the "… (content above)" marker
+	// and one for the trailing "(preview)" line, leaving the rest for diff rows.
+	const bodyRows = Math.max(1, budget - 2);
 	let text = cachedRenderedString(cache, uiTheme, expanded, `${rawPath}:${innerWidth}:${budget}`, diff, () => {
 		// "Cursor" tail window: pin the last rows to the bottom so freshly streamed
 		// changes stay on screen. The whole-file diff is recomputed every chunk and
 		// its Myers alignment is not monotonic in payload length, so a hunk-aware
 		// window stutters as rows move between hunks. Expanded widens the window
 		// to the viewport; the full diff appears once the result finalizes.
-		const tail = sliceStreamingDiffTail(diff, innerWidth, budget);
+		const tail = sliceStreamingDiffTail(diff, innerWidth, bodyRows);
+		// Wrap the RENDERED rows, not the raw ones the tail was measured on:
+		// renderDiff pads line numbers to a 3-column gutter, so a raw row can
+		// measure one column narrower than the row the frame actually draws.
+		const rows = renderDiffColored(tail.content, { filePath: rawPath, theme: uiTheme })
+			.split("\n")
+			.flatMap(row => wrapTextWithAnsi(row.trimEnd(), innerWidth));
+		// A single line taller than the window is admitted whole by the tail
+		// slicer; cut it back to the budget instead of blowing the frame open.
+		const over = rows.length > bodyRows;
+		const kept = over ? rows.slice(rows.length - bodyRows) : rows;
+		// Whole-line packing cannot fill the window exactly, so the drawn row
+		// count re-quantizes on nearly every update: the frame's height flickers
+		// and the transcript's row allocator re-clips the block's head. Once the
+		// window saturates, pad the shortfall so every later tick draws the same
+		// number of rows. Rows are the emitter's own, so the budgeted count is
+		// the drawn count.
+		const saturated = tail.hidden || over;
 		let rendered = "\n\n";
-		if (tail.hidden) {
+		if (saturated) {
 			// Exact hidden line/hunk counts require scanning the discarded prefix,
 			// which would make every streaming update scale with the complete diff.
-			rendered += `${uiTheme.fg("dim", "… (content above)")}\n`;
+			rendered += `${uiTheme.fg("dim", tail.hidden ? "… (content above)" : "…")}\n`;
+			// Filler sits below the marker, never at the head: the caller strips
+			// leading blank rows, which would eat the padding and restore the jitter.
+			for (let i = kept.length; i < bodyRows; i++) rendered += "\n";
 		}
-		rendered += renderDiffColored(tail.content, { filePath: rawPath, theme: uiTheme });
-		return rendered;
+		return `${rendered}${kept.join("\n")}`;
 	});
 	// The animated glyph rides this trailing line — inside the transcript's
 	// volatile-tail holdback — never the block header: an animating head row
