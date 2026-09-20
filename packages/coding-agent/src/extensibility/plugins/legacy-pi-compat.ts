@@ -820,6 +820,31 @@ function remapLegacyPiSubpath(rest: string): string {
 
 const LEGACY_PI_SPECIFIER_FILTER = new RegExp(`^@(?:${PI_SCOPE_ALTERNATION})/(?:${PI_PACKAGE_ALTERNATION})(?:/.*)?$`);
 const resolvedSpecifierFallbacks = new Map<string, string>();
+
+/**
+ * Set while the shim resolves a specifier through Bun itself.
+ *
+ * A specifier matching {@link LEGACY_PI_SPECIFIER_FILTER} re-enters
+ * `resolveLegacyPiSpecifier` whenever Bun resolves it — including from the
+ * handler's own `Bun.resolveSync` call. Without this guard the handler recurses
+ * into itself, and every nested pass prepends the scheme again until the
+ * resolved path overflows the filesystem name limit. The failure then surfaces
+ * as `NameTooLong reading "file:file:…"`, which kills interactive rendering
+ * (the model hub is loaded through exactly such a specifier).
+ */
+let isResolvingThroughHostResolver = false;
+
+/** Resolve `specifier` from `importerDir`, standing the shim down for the call. */
+function resolveSpecifierBypassingShim(specifier: string, importerDir: string): string {
+	const wasResolving = isResolvingThroughHostResolver;
+	isResolvingThroughHostResolver = true;
+	try {
+		return Bun.resolveSync(specifier, importerDir);
+	} finally {
+		isResolvingThroughHostResolver = wasResolving;
+	}
+}
+
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const;
 const SUPPORTED_PACKAGE_IMPORT_CONDITIONS = new Set(["bun", "node", "import", "default"]);
 const SUPPORTED_PACKAGE_REQUIRE_CONDITIONS = new Set(["bun", "node", "require", "default"]);
@@ -1058,7 +1083,7 @@ function getResolvedSpecifier(specifier: string): string {
 		return cached;
 	}
 
-	const resolved = Bun.resolveSync(specifier, import.meta.dir);
+	const resolved = resolveSpecifierBypassingShim(specifier, import.meta.dir);
 	resolvedSpecifierFallbacks.set(specifier, resolved);
 	return resolved;
 }
@@ -2634,6 +2659,10 @@ function getLoader(path: string): "js" | "jsx" | "ts" | "tsx" {
 }
 
 function resolveLegacyPiSpecifier(args: { path: string; importer: string }): LegacyPiResolveResult | undefined {
+	// Re-entry from this handler's own resolution: let Bun resolve natively.
+	if (isResolvingThroughHostResolver) {
+		return undefined;
+	}
 	const remappedSpecifier = remapLegacyPiSpecifier(args.path);
 	if (!remappedSpecifier) {
 		return undefined;
@@ -2652,10 +2681,10 @@ function resolveLegacyPiSpecifier(args: { path: string; importer: string }): Leg
 		// @earendil-works peer deps.
 		const importerDir = path.dirname(args.importer);
 		try {
-			return toLegacyPiResolveResult(Bun.resolveSync(remappedSpecifier, importerDir));
+			return toLegacyPiResolveResult(resolveSpecifierBypassingShim(remappedSpecifier, importerDir));
 		} catch {
 			try {
-				return toLegacyPiResolveResult(Bun.resolveSync(args.path, importerDir));
+				return toLegacyPiResolveResult(resolveSpecifierBypassingShim(args.path, importerDir));
 			} catch {
 				return undefined;
 			}
