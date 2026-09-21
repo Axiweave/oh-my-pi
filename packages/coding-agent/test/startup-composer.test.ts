@@ -386,6 +386,57 @@ describe("Composer prepaint", () => {
 		}
 	});
 
+	it("nests wrapper prompt packets in front of the leading command", () => {
+		const terminal = new CountingTerminal();
+		const composer = new Composer({ preferences: config, terminal });
+		const stdin = new StdinBuffer();
+		stdin.on("data", data => terminal.sendInput(data));
+		composer.start();
+
+		try {
+			// Wrapper in front of a skill; the body cursor shifts with the insert.
+			terminal.sendInput("/skill:x fix it");
+			terminal.sendInput("\x1b[D");
+			terminal.sendInput("\x1b[D");
+			stdin.process("\x1b_pi:prompt;queue\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/queue /skill:x fix it");
+			terminal.sendInput("X");
+			expect(composer.editor.getExpandedText()).toBe("/queue /skill:x fix Xit");
+
+			// Same wrapper twice is a no-op.
+			stdin.process("\x1b_pi:prompt;queue\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/queue /skill:x fix Xit");
+
+			// A non-wrapper packet replaces the wrapped command, not the wrapper.
+			stdin.process("\x1b_pi:prompt;skill:y\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/queue /skill:y fix Xit");
+
+			// Ordinary drafts keep replace semantics.
+			composer.editor.setText("/old body");
+			stdin.process("\x1b_pi:prompt;new\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/new body");
+
+			// Wrapper on an empty draft inserts like any command.
+			composer.editor.setText("");
+			stdin.process("\x1b_pi:prompt;plan\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/plan ");
+			expect(composer.editor.getCursor()).toEqual({ line: 0, col: 6 });
+
+			// Queue shorthand keeps its header; the wrapper nests in the body line.
+			composer.editor.setText("-> /skill:x go");
+			stdin.process("\x1b_pi:prompt;plan\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("-> /plan /skill:x go");
+
+			// A bare wrapper at line end gets the command appended after it.
+			composer.editor.setText("/queue");
+			stdin.process("\x1b_pi:prompt;skill:z\x1b\\");
+			expect(composer.editor.getExpandedText()).toBe("/queue /skill:z ");
+		} finally {
+			stdin.destroy();
+			composer.stop();
+		}
+	});
+
 	it("puts keyword control packets at the message start without moving the body cursor", () => {
 		const terminal = new CountingTerminal();
 		const composer = new Composer({ preferences: config, terminal });

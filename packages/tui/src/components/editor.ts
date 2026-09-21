@@ -2611,17 +2611,24 @@ export class Editor implements Component, Focusable {
 	 * body cursor keeps its position, except in a body with no text yet: there the
 	 * caret lands after the inserted command and its trailing space, ready for
 	 * arguments. A `line` past the last one is appended to hold the command.
+	 *
+	 * With `nest`, an existing leading command is kept and `command` goes in front
+	 * of it (`/skill:x` → `/queue /skill:x`). Already leading with `command` is a no-op.
 	 */
-	setLeadingSlashCommand(command: string, line = 0, anchor = 0): void {
+	setLeadingSlashCommand(command: string, line = 0, anchor = 0, nest = false): void {
 		this.#exitHistoryForEditing();
 		if (line > this.#state.lines.length) return;
 		const target = this.#state.lines[line] ?? "";
 		const leadingStart = findLeadingSlashCommandStart(target.slice(anchor));
 		const start = leadingStart === null ? anchor : anchor + leadingStart;
 		const tokenEnd = leadingStart === null ? -1 : target.slice(start).search(/\s/u);
-		const oldEnd = leadingStart === null ? anchor : tokenEnd === -1 ? target.length : start + tokenEnd;
+		let oldEnd = leadingStart === null ? anchor : tokenEnd === -1 ? target.length : start + tokenEnd;
+		if (nest && leadingStart !== null) {
+			if (target.slice(start, oldEnd) === `/${command}`) return;
+			oldEnd = start;
+		}
 		const lead = anchor > 0 && start === anchor && !/^\s/u.test(target[anchor - 1] ?? "") ? " " : "";
-		const replacement = `${lead}/${command}${leadingStart === null || oldEnd === target.length ? " " : ""}`;
+		const replacement = `${lead}/${command}${leadingStart === null || oldEnd === target.length || nest ? " " : ""}`;
 		const nextLine = target.slice(0, start) + replacement + target.slice(oldEnd);
 		if (nextLine === target) return;
 		const append = line === this.#state.lines.length;

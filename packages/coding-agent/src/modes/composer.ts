@@ -23,6 +23,13 @@ import { queueShorthandBodyStart } from "./queue-input";
 import { ensureThemeSync, getEditorTheme, theme } from "./theme/theme";
 
 const DOUBLE_INTERRUPT_MS = 500;
+/**
+ * Commands that forward their args as a fresh message (`/queue /skill:x`). A
+ * `pi:prompt` packet naming one nests it in front of the draft's leading command
+ * instead of replacing it, and a packet naming any other command replaces the
+ * command after the wrapper rather than the wrapper itself.
+ */
+const WRAPPER_COMMANDS: Record<string, true> = { queue: true, plan: true, debate: true, vibe: true };
 
 /** Live settings that affect the composer before and after session adoption. */
 export interface ComposerPreferences {
@@ -293,15 +300,26 @@ export class Composer implements TerminalFrameProvider {
 			const editorResult = handleEditorInput(data);
 			if (editorResult) return editorResult;
 			if (!data.startsWith("\x1b_pi:")) return;
-			// `pi:prompt;<name>` replaces the leading slash command; `pi:keyword;<word>`
-			// puts a standalone word (ultrathink, orchestrate, workflowz, …) at the message start.
+			// `pi:prompt;<name>` replaces the leading slash command (or nests a wrapper in
+			// front of it); `pi:keyword;<word>` puts a standalone word (ultrathink,
+			// orchestrate, workflowz, …) at the message start.
 			const match = /^\x1b_pi:(prompt|keyword);([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
 			if (match && this.ui.getFocused() === this.editor) {
 				// A `->` / `=>` queue draft keeps its header line: the command or keyword
 				// belongs to the queued body, not in front of the shorthand.
 				const body = queueShorthandBodyStart(this.editor.getText());
-				if (match[1] === "prompt") this.editor.setLeadingSlashCommand(match[2] ?? "", body.line, body.anchor);
-				else this.editor.insertLeadingKeyword(match[2] ?? "", body.line, body.anchor);
+				const name = match[2] ?? "";
+				if (match[1] === "prompt") {
+					const nest = WRAPPER_COMMANDS[name] === true;
+					let anchor = body.anchor;
+					if (!nest) {
+						// An existing wrapper keeps its slot: replace the command it wraps.
+						const line = this.editor.getLines()[body.line] ?? "";
+						const wrapper = /^\s*\/([^\s/]+)(?:\s+|$)/u.exec(line.slice(anchor));
+						if (wrapper && WRAPPER_COMMANDS[wrapper[1] ?? ""] === true) anchor += wrapper[0].length;
+					}
+					this.editor.setLeadingSlashCommand(name, body.line, anchor, nest);
+				} else this.editor.insertLeadingKeyword(name, body.line, body.anchor);
 				this.ui.requestRender();
 			}
 			return { consume: true };
