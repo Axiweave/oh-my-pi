@@ -14,6 +14,15 @@ Invocation authorizes a local merge commit after verification. Do not push.
 
 Never reset, discard, automatically stash, or commit unrelated user work.
 
+7. Find the latest first-parent commit whose subject matches `Merge tag 'v<version>'`.
+8. Before fetching or merging, force the local tag `u<version>` to the current `HEAD`.
+
+   ```bash
+   git tag -f "u<version>" HEAD
+   ```
+
+This tag records the fork head before the next upstream merge. For example, `Merge tag 'v18.2.4'` produces `u18.2.4`.
+
 ## 2. Select the Release
 
 1. Query the latest published release:
