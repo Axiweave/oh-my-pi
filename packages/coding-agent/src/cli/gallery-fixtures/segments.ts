@@ -52,6 +52,7 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 		ideSelection: null,
 		ideFile: null,
 		stream: null,
+		recording: false,
 		usageStats: {
 			input: 12_400,
 			output: 3_600,
