@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.2.4` on 2026-09-17.
+**Reviewed against:** `v18.2.9` on 2026-09-22.
 
 ## Maintenance
 
@@ -46,7 +46,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Appearance:** Keep the loader spinner when the footer hides the `pi` brand segment.
 - **Appearance:** Use the theme model color in this footer instead of the session accent.
 - **Why:** The fixed footer replaces the normal status layout, so upstream spinner and accent assumptions do not apply.
-- **Key paths:** `packages/coding-agent/src/modes/components/status-line/component.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/components/composer/types.ts`.
+- **Key paths:** `packages/tui/src/status-line/component.ts`, `packages/tui/src/components/composer/preferences.ts`, and `packages/coding-agent/src/modes/interactive-mode.ts`.
 - **Checks:** `packages/coding-agent/test/modes/components/status-line/component.test.ts` and `packages/coding-agent/test/interactive-mode-working-accent.test.ts`.
 
 ### Working message icon spacing
@@ -84,7 +84,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Size filler from the current chrome and visible history. Let real content grow to full screen height and move older history into scrollback.
 - **Decision:** Use the current chrome height for history retirement. Save displaced command and tool rows before clipping the viewport.
 - **Why:** A stable input position reduces visual movement in long sessions.
-- **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
+- **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/coding-agent/test/composer-inline-shrink.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
 
 ### Full assistant text during streaming
@@ -94,7 +94,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Preserve existing shell history on startup. Shutdown appends the unretired tail without clearing or replaying accepted history.
 - **Decision:** Use row-pressure retirement by default, with capacity based on current chrome. A live append-only head retires finished rows to native history in one batch per cycle.
 - **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
-- **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/tui/src/tui.ts`.
+- **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts` and `packages/tui/test/history-frame-plan.test.ts`.
 
 ### Collapsed command cards
@@ -104,7 +104,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Gate both card kinds at render time with `display.collapseCommandCards` (default on).
 - **Decision:** Preserve compact command cards for steering and follow-up messages. Queue labels and restored drafts use the original command and arguments.
 - **Why:** The transcript should show the submitted command without repeating expanded template text.
-- **Key paths:** `packages/coding-agent/src/config/prompt-templates.ts`, `packages/coding-agent/src/extensibility/slash-commands.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/modes/components/user-message.ts`, `packages/coding-agent/src/modes/components/chat-transcript-builder.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
+- **Key paths:** `packages/coding-agent/src/config/prompt-templates.ts`, `packages/coding-agent/src/extensibility/slash-commands.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/chat/user-message.ts`, `packages/tui/src/chat/chat-transcript-builder.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
 - **Checks:** `packages/coding-agent/test/agent-session-command-card.test.ts` and `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`.
 
 ### Emacs-hosted resize behavior
@@ -126,7 +126,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 - **Decision:** Keep the streaming write-tool preview at a constant height.
 - **Why:** Stable preview geometry prevents the composer and transcript from moving during streamed arguments.
-- **Key path:** `packages/coding-agent/src/tools/write.ts`.
+- **Key path:** `packages/tui/src/tools/write.ts`.
 - **Checks:** `packages/coding-agent/test/write-streaming-incremental.test.ts` and `packages/coding-agent/test/write-streaming-preview-expand.test.ts`.
 
 ### Image identity keyed on content
@@ -135,7 +135,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Keep `ImageBudget.acquireId(key, contentTag)`: a key names the placement site, and a changed tag supersedes the id so the new bytes transmit instead of the terminal redrawing the previous image.
 - **Decision:** Retire a superseded id like a demotion on the pass's own surface — cancel an unflushed transmit or queue `d=I` — and leave a copy resident on the other surface, plus its key, alone.
 - **Why:** A site whose bytes changed kept an id `shouldTransmit()` had already marked sent, so the terminal re-drew the earlier image forever. Upstream keys on the placement site and has no content tag.
-- **Key paths:** `packages/tui/src/components/image.ts`, `packages/coding-agent/src/modes/image-references.ts`, `packages/coding-agent/src/modes/components/assistant-message.ts`, `packages/coding-agent/src/modes/components/tool-execution.ts`, `packages/coding-agent/src/modes/components/bash-execution.ts`, and `packages/coding-agent/src/modes/components/attachment-chips.ts`.
+- **Key paths:** `packages/tui/src/components/image.ts`, `packages/tui/src/prompt/image-references.ts`, `packages/tui/src/chat/assistant-message.ts`, `packages/tui/src/chat/tool-execution.ts`, `packages/tui/src/chat/bash-execution.ts`, and `packages/tui/src/prompt/attachment-chips.ts`.
 - **Checks:** `packages/tui/test/image-budget.test.ts` (`supersedes a key's id when its content tag changes so the new bytes transmit`, `cancels a superseded id's transmit instead of purging it when the bytes never flushed`).
 
 ### Model profiles
@@ -171,7 +171,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Expand file commands before prompt templates in steering and follow-up messages. Queue shorthand and `/queue` also load registered skill commands.
 - **Decision:** Preserve command images and queue modes during compaction replay, including mixed and command-only queues.
 - **Why:** Editors such as claude-code-ide.el drive the composer through these packets instead of terminal keystrokes, and a command queued for the next yield must stay visible and reach the message body. Upstream has no packet intake, no leading-command editor API, and no recognition ranges.
-- **Key paths:** `packages/coding-agent/src/modes/composer.ts`, `packages/coding-agent/src/modes/queue-input.ts`, `packages/coding-agent/src/modes/components/custom-editor.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/components/editor.ts`, and `packages/tui/src/autocomplete.ts`.
+- **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/tui/src/prompt/queue-input.ts`, `packages/tui/src/prompt/custom-editor.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/components/editor.ts`, and `packages/tui/src/autocomplete.ts`.
 - **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/coding-agent/test/modes/components/custom-editor.test.ts`, `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`, `packages/coding-agent/test/input-controller-skill-queue.test.ts`, and `packages/tui/test/editor.test.ts`.
 
 ### OSC 133 prompt markers on submitted messages
@@ -179,7 +179,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Emit OSC 133 `A` before the first content row's one-column margin and `B` before its text. Close `C` and `D;0` after the last content row.
 - **Decision:** Leave padding outside the prompt zone. Empty messages and synthetic bodies emit no prompt markers.
 - **Why:** Ghostel navigation must find one input boundary per submitted message, not a separate prompt on each rendered row.
-- **Key paths:** `packages/coding-agent/src/modes/components/user-message.ts`.
+- **Key path:** `packages/tui/src/chat/user-message.ts`.
 - **Checks:** `packages/coding-agent/test/modes/components/user-message-keywords.test.ts`.
 
 ### Cyber mode allowlist

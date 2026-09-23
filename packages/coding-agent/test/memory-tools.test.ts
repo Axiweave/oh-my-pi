@@ -29,7 +29,6 @@ import {
 	setMnemopiSessionState,
 } from "@oh-my-pi/pi-coding-agent/mnemopi/state";
 import type { AgentSessionEventListener } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { ONLINE_MEMORY_MODEL_KEY } from "@oh-my-pi/pi-coding-agent/tiny/models";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { MemoryEditTool } from "@oh-my-pi/pi-coding-agent/tools/memory-edit";
 import { MemoryRecallTool } from "@oh-my-pi/pi-coding-agent/tools/memory-recall";
@@ -736,8 +735,11 @@ describe("Mnemopi backend lifecycle", () => {
 			"mnemopi.scoping": "global",
 			"mnemopi.bank": "default",
 			"mnemopi.dbPath": makeMnemopiConfig().dbPath,
-			"providers.memoryModel": ONLINE_MEMORY_MODEL_KEY,
-			modelRoles: { tiny: `anthropic/${sonnet.id}`, smol: `anthropic/${sonnet.id}` },
+			modelRoles: {
+				memory: `anthropic/${sonnet.id}`,
+				tiny: `anthropic/${sonnet.id}`,
+				smol: `anthropic/${sonnet.id}`,
+			},
 			cyberModels: [`anthropic/${haiku.id}`],
 		});
 		let available = [haiku, sonnet];
@@ -805,12 +807,12 @@ describe("Mnemopi backend lifecycle", () => {
 		const inFlight = complete("Summarize memory after credentials.");
 		settings.applyCyberRoles("parent", allowlist);
 		credentialGate.resolve("test-key");
-		expect(await inFlight).toBeNull();
-		expect(attempts).toEqual([sonnet.id, haiku.id, sonnet.id, haiku.id]);
+		expect(await inFlight).toBe("memory reply");
+		expect(attempts).toEqual([sonnet.id, haiku.id, sonnet.id, haiku.id, haiku.id]);
 
 		available = [];
 		expect(await complete("No available model.")).toBeNull();
-		expect(attempts).toEqual([sonnet.id, haiku.id, sonnet.id, haiku.id]);
+		expect(attempts).toEqual([sonnet.id, haiku.id, sonnet.id, haiku.id, haiku.id]);
 	});
 
 	it("does not re-store retained turns during consolidation or after resume", async () => {

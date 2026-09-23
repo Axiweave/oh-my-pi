@@ -41,6 +41,7 @@ import {
 	markStage1Failed,
 	markStage1SucceededNoOutput,
 	markStage1SucceededWithOutput,
+	normalizeScopeCwd,
 	openMemoryDb,
 	type Stage1Claim,
 	type Stage1OutputRow,
@@ -1315,7 +1316,7 @@ function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 }
 
 export function getMemoryRoot(agentDir: string, cwd: string): string {
-	return path.join(getMemoriesDir(agentDir), encodeProjectPath(cwd));
+	return path.join(getMemoriesDir(agentDir), encodeProjectPath(normalizeScopeCwd(cwd)));
 }
 
 /**

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { HistorySearchComponent } from "@oh-my-pi/pi-coding-agent/modes/components/history-search";
-import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { HistoryEntry, HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 
 beforeAll(async () => {
@@ -11,7 +11,7 @@ const NOW_SECONDS = Math.floor(Date.now() / 1000);
 const TEST_CWD = "/projects/current";
 
 function makeEntry(id: number, prompt: string, ageSeconds = 0, cwd = TEST_CWD): HistoryEntry {
-	return { id, prompt, created_at: NOW_SECONDS - ageSeconds, cwd };
+	return { id, prompt, created_at: NOW_SECONDS - ageSeconds, cwd, useCount: 1 };
 }
 
 /** Minimal in-memory stand-in matching the two methods the component touches. */

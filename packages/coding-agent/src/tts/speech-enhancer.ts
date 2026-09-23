@@ -20,6 +20,7 @@ import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { cyberAllowsModel } from "../config/cyber-mode";
 import { formatModelString, getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
+import { roleCandidatePool } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import speechRewritePrompt from "../prompts/system/speech-rewrite.md" with { type: "text" };
 
@@ -76,7 +77,7 @@ export class SpeechEnhancer {
 			// `@tiny` expands a configured `modelRoles.tiny` and otherwise falls
 			// through tiny's alias to the smol priority chain — unlike bare role
 			// lookup, this resolves even with no roles configured.
-			const model = resolveModelRoleValue("@tiny", registry.getAvailable(), {
+			const model = resolveModelRoleValue("@tiny", roleCandidatePool("tiny", settings, registry), {
 				settings,
 				matchPreferences: getModelMatchPreferences(settings),
 			}).model;

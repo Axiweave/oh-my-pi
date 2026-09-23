@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
-import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
-import { Composer, type ComposerPreferences } from "@oh-my-pi/pi-coding-agent/modes/composer";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import { Composer, type ComposerPreferences } from "@oh-my-pi/pi-tui/prompt/composer";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { VirtualRenderScheduler } from "../../tui/test/virtual-render-scheduler";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";

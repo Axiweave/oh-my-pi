@@ -22,7 +22,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { hashPlanContent } from "@oh-my-pi/pi-coding-agent/plan-mode/debate";
 import { serializeImplReviewState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";

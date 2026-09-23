@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { renderSegment } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
-import type { SegmentContext } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/types";
-import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { SymbolPreset } from "@oh-my-pi/pi-coding-agent/modes/theme/symbols";
+import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
+import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/types";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import type { SymbolPreset } from "@oh-my-pi/pi-tui/theme/symbols";
 
 beforeAll(async () => {
 	resetSettingsForTest();

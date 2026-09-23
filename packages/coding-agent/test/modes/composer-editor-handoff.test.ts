@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
-import { COMPOSER_DEFAULTS, Composer } from "../../src/modes/composer";
-import { initTheme } from "../../src/modes/theme/theme";
+import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { takeEditorOrigin } from "../../src/utils/external-editor";
 
 /** One PTY write reaches the TUI as one event per sequence, as StdinBuffer splits it. */

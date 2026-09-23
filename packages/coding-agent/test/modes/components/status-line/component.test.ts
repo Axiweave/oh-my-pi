@@ -1,13 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { createGallerySegmentContext } from "../../../../src/cli/gallery-fixtures/segments";
-import { Settings, settings } from "../../../../src/config/settings";
+import { Settings } from "../../../../src/config/settings";
+import { setComposerStylePreferences } from "@oh-my-pi/pi-tui/components/composer/preferences";
 import { clearIdeSelection, subscribeIdeSelection } from "../../../../src/mcp/ide-selection";
 import type { MCPManager } from "../../../../src/mcp/manager";
-import { StatusLineComponent } from "../../../../src/modes/components/status-line/component";
-import { renderSegment } from "../../../../src/modes/components/status-line/segments";
-import { loadTheme } from "../../../../src/modes/theme/loader";
-import { getThemeByName, setThemeInstance, theme } from "../../../../src/modes/theme/theme";
+import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line/component";
+import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
+import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
+import { loadTheme } from "@oh-my-pi/pi-tui/theme/loader";
+import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSession } from "../../../../src/session/agent-session";
 import { StatusLineTestComponents } from "../../../helpers/status-line";
 
@@ -124,6 +126,7 @@ describe("StatusLineComponent", () => {
 						},
 					],
 				}) as unknown as AgentSession,
+				statusLineHost,
 			),
 		);
 
@@ -132,7 +135,7 @@ describe("StatusLineComponent", () => {
 
 	it("renders Prewalk annotation when prewalk is armed", () => {
 		const statusLine = statusLines.track(
-			new StatusLineComponent(makeSessionWithLastMessage(null, true) as unknown as AgentSession),
+			new StatusLineComponent(makeSessionWithLastMessage(null, true) as unknown as AgentSession, statusLineHost),
 		);
 
 		// By default preset, 'mode' segment is included in left/right segments.
@@ -148,22 +151,28 @@ describe("StatusLineComponent", () => {
 		// custom layout sees the state without configuring anything.
 		const protectedLine = statusLines
 			.track(
-				new StatusLineComponent({
-					...makeSessionWithLastMessage(null),
-					cyberMode: true,
-				} as unknown as AgentSession),
+				new StatusLineComponent(
+					{
+						...makeSessionWithLastMessage(null),
+						cyberMode: true,
+					} as unknown as AgentSession,
+					statusLineHost,
+				),
 			)
 			.getTopBorder(200);
 		expect(Bun.stripANSI(protectedLine.content)).toContain("Cyber");
 
 		const unprotectedLine = statusLines
-			.track(new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession))
+			.track(new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession, statusLineHost))
 			.getTopBorder(200);
 		expect(Bun.stripANSI(unprotectedLine.content)).not.toContain("Cyber");
 	});
 
 	it("renders the claude 3-line footer with model, git/cwd, and hints", () => {
-		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+		const statusLine = new StatusLineComponent(
+			makeSessionWithLastMessage(null) as unknown as AgentSession,
+			statusLineHost,
+		);
 		statusLine.setComposerStyle({
 			statusAttachment: "none",
 			bottomBar: "full",
@@ -186,7 +195,7 @@ describe("StatusLineComponent", () => {
 		// has to be placed by the footer itself (FR-020).
 		const renderFooter = (cyberMode: boolean) => {
 			const session = { ...makeSessionWithLastMessage(null), cyberMode };
-			const statusLine = new StatusLineComponent(session as unknown as AgentSession);
+			const statusLine = new StatusLineComponent(session as unknown as AgentSession, statusLineHost);
 			statusLine.setComposerStyle({
 				statusAttachment: "none",
 				bottomBar: "full",
@@ -206,7 +215,10 @@ describe("StatusLineComponent", () => {
 	});
 
 	it("keeps the claude footer model on the theme model color", () => {
-		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+		const statusLine = new StatusLineComponent(
+			makeSessionWithLastMessage(null) as unknown as AgentSession,
+			statusLineHost,
+		);
 		statusLine.setComposerStyle({
 			statusAttachment: "none",
 			bottomBar: "full",
@@ -219,7 +231,10 @@ describe("StatusLineComponent", () => {
 	});
 
 	it("omits the claude footer hints row when no hints are active", () => {
-		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+		const statusLine = new StatusLineComponent(
+			makeSessionWithLastMessage(null) as unknown as AgentSession,
+			statusLineHost,
+		);
 		statusLine.setComposerStyle({
 			statusAttachment: "none",
 			bottomBar: "full",
@@ -232,10 +247,13 @@ describe("StatusLineComponent", () => {
 	});
 
 	it("renders the claude footer for any shape when composerStyle.footerMode is claude3", () => {
-		settings.override("composerStyle.footerMode", "claude3");
+		setComposerStylePreferences({ footerMode: "claude3" });
 		try {
-			const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
-			// No footerMode on the style — the config override forces the footer.
+			const statusLine = new StatusLineComponent(
+				makeSessionWithLastMessage(null) as unknown as AgentSession,
+				statusLineHost,
+			);
+			// No footerMode on the style — the host preference forces the footer.
 			statusLine.setComposerStyle({ statusAttachment: "none", bottomBar: "full", bottomBarGap: false });
 			statusLine.setHookStatus("advisor", "advisor running");
 
@@ -247,7 +265,7 @@ describe("StatusLineComponent", () => {
 			expect(stripped[1]).toContain(path.basename(process.cwd()));
 			expect(stripped[2]).toContain("advisor running");
 		} finally {
-			settings.clearOverride("composerStyle.footerMode");
+			setComposerStylePreferences({ footerMode: "default" });
 		}
 	});
 
@@ -257,7 +275,10 @@ describe("StatusLineComponent", () => {
 		try {
 			fire("ide", "selection_changed", { filePath: "/a/b/foo.ts", selection: { isEmpty: true } });
 
-			const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null) as unknown as AgentSession);
+			const statusLine = new StatusLineComponent(
+				makeSessionWithLastMessage(null) as unknown as AgentSession,
+				statusLineHost,
+			);
 			statusLine.setComposerStyle({
 				statusAttachment: "none",
 				bottomBar: "full",
@@ -286,6 +307,7 @@ describe("StatusLineComponent", () => {
 					modelName: "Stale Model",
 					sessionName: "stale-session",
 				}) as unknown as AgentSession,
+				statusLineHost,
 			),
 		);
 
@@ -336,6 +358,7 @@ describe("StatusLineComponent", () => {
 					advisorCost: 0.41,
 					usingSubscription: true,
 				}) as unknown as AgentSession,
+				statusLineHost,
 			),
 		);
 
@@ -352,6 +375,7 @@ describe("StatusLineComponent", () => {
 					usingSubscription: true,
 					advisorUsingSubscription: true,
 				}) as unknown as AgentSession,
+				statusLineHost,
 			),
 		);
 
@@ -373,6 +397,7 @@ describe("StatusLineComponent", () => {
 						usingSubscription: true,
 						advisorUsingSubscription: true,
 					}) as unknown as AgentSession,
+					statusLineHost,
 				),
 			);
 			const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
@@ -389,6 +414,7 @@ describe("StatusLineComponent", () => {
 					cost: 2.67,
 					usingSubscription: true,
 				}) as unknown as AgentSession,
+				statusLineHost,
 			),
 		);
 
@@ -411,6 +437,7 @@ describe("StatusLineComponent", () => {
 						usingSubscription: true,
 						advisorUsingSubscription: true,
 					}) as unknown as AgentSession,
+					statusLineHost,
 				),
 			);
 			const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");

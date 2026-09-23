@@ -5,7 +5,6 @@ import { resolveCyberAllowlist } from "../../src/config/cyber-mode";
 import type { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { resolveJudge, type JudgeDeps } from "../../src/judgment";
-import { ONLINE_MEMORY_MODEL_KEY } from "../../src/tiny/models";
 
 function makeModel(provider: string, id: string): Model<Api> {
 	return {
@@ -36,14 +35,13 @@ describe("resolveJudge online fallback under cyber mode protection", () => {
 	it("does not fall back to an excluded session model when the shared allowlist blocks it", async () => {
 		const excludedSession = makeModel("p", "session-excluded");
 		const allowedOther = makeModel("p", "allowed-other");
-		const settings = Settings.isolated({ "providers.judgmentProvider": "llm" });
+		const settings = Settings.isolated();
 		installCyberAllowlist(settings, ["p/allowed-other"], [excludedSession, allowedOther]);
 		expect(settings.get("cyberMode")).not.toBe(true);
 		const apiKeySpy = vi.fn(async () => undefined);
 		const deps: JudgeDeps = {
 			settings,
 			registry: { getAvailable: () => [], getApiKey: apiKeySpy } as unknown as ModelRegistry,
-			backend: ONLINE_MEMORY_MODEL_KEY,
 			sessionModel: excludedSession,
 		};
 
@@ -57,13 +55,12 @@ describe("resolveJudge online fallback under cyber mode protection", () => {
 
 	it("still falls back to an allowed session model when nothing else resolves", async () => {
 		const allowedSession = makeModel("p", "session-allowed");
-		const settings = Settings.isolated({ "providers.judgmentProvider": "llm" });
+		const settings = Settings.isolated();
 		installCyberAllowlist(settings, ["p/session-allowed"], [allowedSession]);
 		const apiKeySpy = vi.fn(async () => undefined);
 		const deps: JudgeDeps = {
 			settings,
 			registry: { getAvailable: () => [], getApiKey: apiKeySpy } as unknown as ModelRegistry,
-			backend: ONLINE_MEMORY_MODEL_KEY,
 			sessionModel: allowedSession,
 		};
 
@@ -71,29 +68,36 @@ describe("resolveJudge online fallback under cyber mode protection", () => {
 
 		await expect(
 			judge.judge({ state: "s", questions: { ok: { type: "noul", instructions: "ok?" } } }),
-		).rejects.toThrow(/every tiny\/smol candidate failed/);
+		).rejects.toThrow(/every judge candidate failed/);
 		expect(apiKeySpy).toHaveBeenCalledTimes(1);
-		expect(apiKeySpy).toHaveBeenCalledWith(allowedSession, undefined);
+		expect(apiKeySpy).toHaveBeenCalledWith(allowedSession, undefined, expect.objectContaining({}));
 	});
 
 	it("still blocks a session model that only becomes excluded after candidates were already collected", async () => {
 		const midFlight = makeModel("p", "mid-flight");
-		const settings = Settings.isolated({ "providers.judgmentProvider": "llm" });
+		const siblingChoice = makeModel("p", "someone-else");
+		const settings = Settings.isolated();
 		// No protection installed yet: the session model is still unprotected
-		// when OnlineChatJudge collects its candidates.
+		// when ChainJudge collects its candidates.
 		const backendSpy = vi.spyOn(ai, "chatTextBackend").mockImplementation(() => {
 			throw new Error("must not construct a backend for an excluded model");
 		});
 		const apiKeySpy = vi.fn(async () => {
 			// A sibling session installs protection while this judge call is
 			// already in flight, after candidates were already collected.
-			installCyberAllowlist(settings, ["p/someone-else"], [midFlight]);
+			// The catalog includes a model the new pattern actually matches, so
+			// the allowlist genuinely resolves and excludes mid-flight, rather
+			// than failing installation outright.
+			installCyberAllowlist(settings, ["p/someone-else"], [midFlight, siblingChoice]);
 			return "test-key";
 		});
 		const deps: JudgeDeps = {
 			settings,
-			registry: { getAvailable: () => [], getApiKey: apiKeySpy } as unknown as ModelRegistry,
-			backend: ONLINE_MEMORY_MODEL_KEY,
+			registry: {
+				getAvailable: () => [],
+				getApiKey: apiKeySpy,
+				resolver: () => undefined,
+			} as unknown as ModelRegistry,
 			sessionModel: midFlight,
 		};
 

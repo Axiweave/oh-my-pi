@@ -22,6 +22,8 @@ export interface HistoryEntry {
 	cwd?: string;
 	/** Session ID of the most recent submission, if known. */
 	sessionId?: string;
+	/** Number of times this prompt has been submitted, including the first. */
+	useCount: number;
 }
 
 type HistoryRow = {
@@ -30,6 +32,7 @@ type HistoryRow = {
 	created_at: number;
 	cwd: string | null;
 	session_id: string | null;
+	use_count: number;
 };
 
 type HistoryLocationRow = {
@@ -59,7 +62,11 @@ function normalizePrompt(prompt: string): string {
 		.replace(/[^\S\n]+\n/g, "\n")
 		.trim();
 }
-/** Bumped when stored rows need the one-time dump-and-rebuild pass on open; see `#rebuildHistory`. */
+/**
+ * Bumped only when stored rows need the one-time dump-and-rebuild pass on open;
+ * see `#rebuildHistory`. Purely additive columns go through `#ensureColumn`
+ * instead so existing stores are never rewritten for them.
+ */
 const HISTORY_DATA_VERSION = 2;
 
 /** Canonical history schema; `#rebuildHistory` recreates both tables from this exact DDL. */
@@ -69,7 +76,8 @@ CREATE TABLE IF NOT EXISTS history (
 	prompt TEXT NOT NULL UNIQUE,
 	created_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH}),
 	cwd TEXT,
-	session_id TEXT
+	session_id TEXT,
+	use_count INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
 CREATE TABLE IF NOT EXISTS history_locations (
@@ -113,6 +121,9 @@ PRAGMA synchronous=NORMAL;
 ${HISTORY_TABLE_DDL}
 		`);
 
+		// Additive column on stores created before the counter existed; runs before
+		// the rebuild so the dump below always sees it.
+		this.#ensureColumn("use_count", "INTEGER NOT NULL DEFAULT 1");
 		const rebuilt = this.#rebuildHistory();
 
 		this.#db.run(`
@@ -131,13 +142,13 @@ END;
 			}
 		}
 		this.#recentStmt = this.#db.prepare(
-			"SELECT id, prompt, created_at, cwd, session_id FROM history ORDER BY created_at DESC, id DESC LIMIT ?",
+			"SELECT id, prompt, created_at, cwd, session_id, use_count FROM history ORDER BY created_at DESC, id DESC LIMIT ?",
 		);
 		this.#searchStmt = this.#db.prepare(
-			"SELECT h.id, h.prompt, h.created_at, h.cwd, h.session_id FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? ORDER BY h.created_at DESC, h.id DESC LIMIT ?",
+			"SELECT h.id, h.prompt, h.created_at, h.cwd, h.session_id, h.use_count FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? ORDER BY h.created_at DESC, h.id DESC LIMIT ?",
 		);
 		this.#scopedRecentStmt = this.#db.prepare(`
-SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id
+SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id, h.use_count
 FROM history_locations l
 JOIN history h ON h.prompt = l.prompt
 WHERE l.cwd = ?
@@ -145,7 +156,7 @@ ORDER BY l.created_at DESC, h.id DESC
 LIMIT ?
 		`);
 		this.#scopedSearchStmt = this.#db.prepare(`
-SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id
+SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id, h.use_count
 FROM history_fts f
 JOIN history h ON h.id = f.rowid
 JOIN history_locations l ON l.prompt = h.prompt
@@ -159,7 +170,8 @@ VALUES (?, ${SQLITE_NOW_EPOCH}, ?, ?)
 ON CONFLICT(prompt) DO UPDATE SET
 	created_at = excluded.created_at,
 	cwd = excluded.cwd,
-	session_id = excluded.session_id
+	session_id = excluded.session_id,
+	use_count = history.use_count + 1
 		`);
 		this.#upsertLocationStmt = this.#db.prepare(`
 INSERT INTO history_locations (prompt, cwd, created_at, session_id)
@@ -238,7 +250,8 @@ ON CONFLICT(prompt, cwd) DO UPDATE SET
 	}
 
 	/**
-	 * Stores a prompt and replaces its provenance with the latest submission.
+	 * Stores a prompt, replaces its provenance with the latest submission, and
+	 * bumps its use count on resubmission.
 	 * The write is synchronous: prompt submission is human-paced, not a hot
 	 * path, so the row is durable the moment `add()` returns and can never be
 	 * lost to an exit racing a deferred flush. Failures are logged, not thrown.
@@ -346,13 +359,22 @@ ON CONFLICT(prompt, cwd) DO UPDATE SET
 		return columns.some(col => col.name === column);
 	}
 
+	/** Adds `column` to `history` when absent; `definition` must carry a default so existing rows stay valid. */
+	#ensureColumn(column: string, definition: string): void {
+		if (this.#historySchemaHasColumn(column)) return;
+		this.#db.run(`ALTER TABLE history ADD COLUMN ${column} ${definition}`);
+	}
+
 	/**
 	 * One-time dump-and-rebuild pass, gated by `PRAGMA user_version` (owned by
 	 * this pass — nothing else versions history.db). Dumps every row, folds each
 	 * prompt through {@link normalizePrompt} in JS, keeps the most recent global
 	 * submission per prompt and per-folder submission per prompt/location pair,
-	 * and recreates both tables from {@link HISTORY_TABLE_DDL}. Subsumes every
-	 * legacy shape at once. Returns whether it ran so the caller can rebuild FTS.
+	 * with the use counts of every collapsed row summed, and recreates both
+	 * tables from {@link HISTORY_TABLE_DDL}. Subsumes every legacy shape at
+	 * once — unixepoch defaults, missing session_id, non-unique prompt,
+	 * per-line trailing padding — without per-shape SQL migrations. Returns
+	 * whether it ran so the caller can rebuild the FTS index.
 	 */
 	#rebuildHistory(): boolean {
 		const versionRow = this.#db.prepare("PRAGMA user_version").get() as { user_version: number };
@@ -362,7 +384,7 @@ ON CONFLICT(prompt, cwd) DO UPDATE SET
 		try {
 			const sessionIdSelection = this.#historySchemaHasColumn("session_id") ? "session_id" : "NULL AS session_id";
 			rows = this.#db
-				.prepare(`SELECT id, prompt, created_at, cwd, ${sessionIdSelection} FROM history`)
+				.prepare(`SELECT id, prompt, created_at, cwd, ${sessionIdSelection}, use_count FROM history`)
 				.all() as HistoryRow[];
 			storedLocations = this.#db
 				.prepare("SELECT prompt, cwd, created_at, session_id FROM history_locations")
@@ -377,12 +399,16 @@ ON CONFLICT(prompt, cwd) DO UPDATE SET
 			const prompt = normalizePrompt(row.prompt);
 			if (!prompt) continue;
 			const incumbent = winners.get(prompt);
-			// Most recent submission wins, matching the upsert's "latest provenance" rule.
+			if (!incumbent) {
+				winners.set(prompt, { ...row, prompt });
+				continue;
+			}
+			// Most recent submission wins, matching the upsert's "latest provenance" rule;
+			// every collapsed row still counts as a submission.
+			const useCount = incumbent.use_count + row.use_count;
 			const rowWins =
-				!incumbent ||
-				row.created_at > incumbent.created_at ||
-				(row.created_at === incumbent.created_at && row.id > incumbent.id);
-			if (rowWins) winners.set(prompt, { ...row, prompt });
+				row.created_at > incumbent.created_at || (row.created_at === incumbent.created_at && row.id > incumbent.id);
+			winners.set(prompt, rowWins ? { ...row, prompt, use_count: useCount } : { ...incumbent, use_count: useCount });
 		}
 
 		let locationOrder = 0;
@@ -422,10 +448,10 @@ ON CONFLICT(prompt, cwd) DO UPDATE SET
 			this.#db.run("DROP TABLE history");
 			this.#db.run(HISTORY_TABLE_DDL);
 			const insertHistory = this.#db.prepare(
-				"INSERT INTO history (id, prompt, created_at, cwd, session_id) VALUES (?, ?, ?, ?, ?)",
+				"INSERT INTO history (id, prompt, created_at, cwd, session_id, use_count) VALUES (?, ?, ?, ?, ?, ?)",
 			);
 			for (const row of winners.values()) {
-				insertHistory.run(row.id, row.prompt, row.created_at, row.cwd, row.session_id);
+				insertHistory.run(row.id, row.prompt, row.created_at, row.cwd, row.session_id, row.use_count);
 			}
 			insertHistory.finalize();
 			const insertLocation = this.#db.prepare(
@@ -479,14 +505,14 @@ ON CONFLICT(prompt, cwd) DO UPDATE SET
 		const whereClause = Array(tokenCount).fill(`${promptColumn} LIKE ? ESCAPE '\\' COLLATE NOCASE`).join(" AND ");
 		stmt = scoped
 			? this.#db.prepare(`
-SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id
+SELECT h.id, h.prompt, l.created_at, l.cwd, l.session_id, h.use_count
 FROM history h
 JOIN history_locations l ON l.prompt = h.prompt
 WHERE l.cwd = ? AND ${whereClause}
 ORDER BY l.created_at DESC, h.id DESC
 LIMIT ?`)
 			: this.#db.prepare(
-					`SELECT id, prompt, created_at, cwd, session_id FROM history WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+					`SELECT id, prompt, created_at, cwd, session_id, use_count FROM history WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
 				);
 		statements.set(tokenCount, stmt);
 		return stmt;
@@ -499,6 +525,7 @@ LIMIT ?`)
 			created_at: row.created_at,
 			cwd: row.cwd ?? undefined,
 			sessionId: row.session_id ?? undefined,
+			useCount: row.use_count,
 		};
 	}
 }

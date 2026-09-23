@@ -4,6 +4,7 @@ export * from "./box";
 export * from "./claude";
 export * from "./field";
 export * from "./pi";
+export * from "./preferences";
 export * from "./rail";
 export * from "./registry";
 export * from "./rule";

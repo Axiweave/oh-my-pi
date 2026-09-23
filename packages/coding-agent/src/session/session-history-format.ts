@@ -20,7 +20,7 @@ import type {
 	PythonExecutionMessage,
 } from "./messages";
 import { CORE_PLAN_MODE_CONTEXT_MESSAGE_TYPE } from "./messages";
-import { truncateMiddle } from "./streaming-output";
+import { truncateMiddle } from "@oh-my-pi/pi-tui/tools/streaming-output";
 
 export interface HistoryFormatOptions {
 	/** Optional H1 prepended to the transcript. */
