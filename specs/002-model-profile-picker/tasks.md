@@ -114,3 +114,11 @@ description: "Implementation tasks for the model profile picker"
 2. Preserve the cycle path under the alternative style and validate each key direction.
 3. Confirm the unchanged slash command and save scopes.
 4. Run the complete quickstart and keep the final diff limited to behavior the spec requires.
+
+## Phase 7: Convergence
+
+- [X] T013 Add focused Bun behavior tests in packages/coding-agent/test/model-profile-picker.test.ts for default picker key dispatch, legacy forward/backward dispatch, profile-name filtering and selection, and cancellation that leaves the active profile unchanged per plan: testing decision (partial)
+
+## Phase 8: Convergence
+
+- [X] T014 Exercise the registered forward and backward editor profile-key callbacks in both picker and cycling styles with focused Bun tests in packages/coding-agent/test/model-profile-picker.test.ts per plan: testing decision (partial)
