@@ -3,9 +3,9 @@
 ## Model profile
 
 - **Identity**: A unique name in the configured `modelProfiles` mapping.
-- **Fields**: Name and model-role selectors. Order follows configured profile order for cycling and picker display.
+- **Fields**: Name and model-role selectors. Cycling and the unfiltered picker follow configured profile order. Prefix-filtered choices sort by name.
 - **Relationship**: One active profile name per session when a bundle has been installed. The profile supplies all model roles, not just the visible model.
-- **Validation**: A picker entry must name a configured profile. Empty configuration opens no picker.
+- **Validation**: A picker entry must name a configured profile other than the active one. Empty configuration opens no picker. With only the active profile configured, the picker shows no other choices.
 
 ## Profile-key style
 

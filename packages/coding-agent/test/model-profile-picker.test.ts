@@ -22,7 +22,8 @@ function harness(names = ["base", "work", "review"]) {
 	const settings = Settings.instance;
 	settings.override("modelProfiles", Object.fromEntries(names.map(name => [name, { default: `test/${name}` }])));
 	const state = { activeModelProfile: names[0] as string | undefined };
-	const overlays: Array<{ handleInput(key: string): void; renderContent(width: number): string[] }> = [];
+	const overlays: Array<{ title: string; handleInput(key: string): void; renderContent(width: number): string[] }> =
+		[];
 	const hide = vi.fn();
 	const closed: Promise<void>[] = [];
 	const showStatus = vi.fn();
@@ -96,8 +97,12 @@ describe("model profile keys", () => {
 		const h = harness(names);
 		await h.editor.onCycleModelProfileForward!();
 		const first = h.overlays.at(-1)!;
+		expect(first.title).toContain("base");
+		expect(first.renderContent(60).join("\n")).toContain("Search profiles:");
+		expect(first.renderContent(60).join("\n")).not.toContain("base");
 		first.handleInput("r");
 		first.handleInput("e");
+		expect(first.renderContent(60).join("\n")).toContain("Search profiles: re");
 		expect(first.renderContent(60).join("\n")).toContain("review");
 		expect(first.renderContent(60).join("\n")).not.toContain("work");
 		first.handleInput("\x1b");
@@ -114,6 +119,88 @@ describe("model profile keys", () => {
 		expect(h.settings.get("modelProfile")).toBe("");
 	});
 
+	it("cycles choices only with an empty search field", async () => {
+		const h = harness(["base", "sol", "sol-low", "luna"]);
+		await h.editor.onCycleModelProfileForward!();
+		const first = h.overlays.at(-1)!;
+		first.handleInput("\t");
+		first.handleInput("\r");
+		await h.closed[0];
+		expect(h.state.activeModelProfile).toBe("sol-low");
+
+		await h.editor.onCycleModelProfileBackward!();
+		const second = h.overlays.at(-1)!;
+		second.handleInput("\x1b[Z");
+		second.handleInput("\r");
+		await h.closed[1];
+		expect(h.state.activeModelProfile).toBe("luna");
+	});
+
+	it("completes a partial search once, then stops at the exact choice", async () => {
+		const h = harness(["base", "sonnet", "sol-low", "sol", "luna"]);
+		await h.editor.onCycleModelProfileForward!();
+		const first = h.overlays.at(-1)!;
+		first.handleInput("s");
+		first.handleInput("o");
+		first.handleInput("\t");
+		expect(first.renderContent(60).join("\n")).toContain("Search profiles: sol");
+		expect(first.renderContent(60).join("\n")).toContain("sol-low");
+		first.handleInput("\t");
+		first.handleInput("\x1b[Z");
+		expect(first.renderContent(60)[0]).not.toContain("Search profiles: sol-low");
+		first.handleInput("\r");
+		await h.closed[0];
+		expect(h.state.activeModelProfile).toBe("sol");
+
+		await h.editor.onCycleModelProfileBackward!();
+		const second = h.overlays.at(-1)!;
+		second.handleInput("l");
+		second.handleInput("u");
+		second.handleInput("\t");
+		await h.closed[1];
+		expect(h.state.activeModelProfile).toBe("luna");
+	});
+
+	it("narrows literal prefixes through punctuation and restores choices after deletion", async () => {
+		const h = harness(["base", "sonnet", "sol-low", "sol"]);
+		await h.editor.onCycleModelProfileForward!();
+		const picker = h.overlays.at(-1)!;
+		for (const key of "so") picker.handleInput(key);
+		picker.handleInput("\t");
+		picker.handleInput("\t");
+		picker.handleInput("\x1b[Z");
+		picker.handleInput("-");
+		const rows = picker
+			.renderContent(60)
+			.slice(1)
+			.map(line => Bun.stripANSI(line).trimEnd());
+		expect(rows.some(line => line.endsWith(" sol"))).toBe(false);
+		expect(rows.some(line => line.endsWith("sol-low"))).toBe(true);
+		expect(rows.some(line => line.endsWith("sonnet"))).toBe(false);
+
+		picker.handleInput("x");
+		expect(picker.renderContent(60).join("\n")).toContain("No matching model profiles");
+		picker.handleInput("\t");
+		picker.handleInput("\r");
+		expect(h.state.activeModelProfile).toBe("base");
+		expect(h.hide).not.toHaveBeenCalled();
+		picker.handleInput("\x7f");
+		picker.handleInput("\x7f");
+		expect(
+			picker
+				.renderContent(60)
+				.slice(1)
+				.some(line => Bun.stripANSI(line).trimEnd().endsWith(" sol")),
+		).toBe(true);
+		picker.handleInput("\t");
+		picker.handleInput("\x1b[Z");
+		expect(picker.renderContent(60)[0]).not.toContain("sol-low");
+		picker.handleInput("-");
+		picker.handleInput("\t");
+		await h.closed[0];
+		expect(h.state.activeModelProfile).toBe("sol-low");
+	});
+
 	it("keeps the original forward and backward transitions in cycling style", async () => {
 		const h = harness();
 		h.settings.override("modelProfileSwitchStyle", "cycling");
@@ -128,6 +215,7 @@ describe("model profile keys", () => {
 		const h = harness(["only"]);
 		await h.input.cycleModelProfile();
 		const picker = h.overlays.at(-1)!;
+		expect(picker.renderContent(60).join("\n")).toContain("No other model profiles");
 		for (const key of "missing") picker.handleInput(key);
 		expect(picker.renderContent(60).join("\n")).toContain("No matching model profiles");
 		picker.handleInput("\r");

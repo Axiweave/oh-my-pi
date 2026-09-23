@@ -18,7 +18,7 @@
 
 ### User Story 1 - Choose a Profile from a Picker (Priority: P1)
 
-A user presses a profile-switch key and sees the configured profiles in a searchable picker similar to the model picker. The current profile is clear. The user selects a profile and the session applies its role bundle.
+A user presses a profile-switch key and sees a searchable picker of other configured profiles. The title names the current profile. With an empty field, Tab and Shift+Tab cycle through choices. With a partial name, Tab completes the highlighted choice or selects a sole match. Both keys stop when the field matches that choice.
 
 **Why this priority**: This is the requested default way to choose a profile without memorizing names or cycling through all profiles.
 
@@ -26,8 +26,8 @@ A user presses a profile-switch key and sees the configured profiles in a search
 
 **Acceptance Scenarios**:
 
-1. **Given** two or more configured profiles and no style preference, **When** the user presses either profile-switch key, **Then** a picker lists those profiles and marks the active profile.
-2. **Given** an open picker, **When** the user types part of a profile name and selects a match, **Then** the session activates that profile and closes the picker.
+1. **Given** two or more configured profiles and no style preference, **When** the user presses either profile-switch key, **Then** the picker lists the other profiles and names the active profile in its title.
+2. **Given** an open picker, **When** the user types part of a profile name, **Then** the list narrows. Tab fills the highlighted name or selects a sole match. Tab and Shift+Tab do not move past an exact highlighted name. Enter selects the highlighted match.
 3. **Given** an open picker, **When** the user cancels, **Then** the active profile remains unchanged.
 
 ---
@@ -65,15 +65,16 @@ A user can still name a profile directly, request profile status, and choose whe
 
 - When no profiles exist, opening the switcher explains that the user must configure profiles and does not show an empty picker.
 - When the filter finds no profile, the picker shows a no-match state and does not switch the session.
-- When only one profile exists, the picker still shows it and allows the user to cancel or select it.
+- When only the active profile exists, the picker names it in the title and reports that no other profiles are available.
 - If a selected profile has no available model for the active role, the system keeps the existing notice that the profile was installed but no model resolved.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST offer a profile picker that lists the configured model profiles and identifies the active profile.
-- **FR-002**: The picker MUST let users filter profiles by name, select a bundle, or cancel without changing the active profile.
+- **FR-001**: The system MUST offer a profile picker that lists the other configured model profiles and identifies the active profile in its title.
+- **FR-002**: The picker MUST provide a visible search field, empty-field Tab and Shift+Tab navigation, partial-name Tab completion, sole-match Tab selection, and no Tab or Shift+Tab movement past an exact match. Enter selection and cancellation MUST remain available.
+  Search MUST match literal name prefixes without case sensitivity and preserve punctuation. Filtered choices MUST sort by name and highlight the first match after a text edit.
 - **FR-003**: The system MUST retain forward and backward key-based profile cycling as a selectable style.
 - **FR-004**: The system MUST expose a configuration preference for the profile-key style with exactly two supported choices: picker and cycling.
 - **FR-005**: The system MUST open the picker when either profile-switch key is pressed and the style preference is absent or set to picker.

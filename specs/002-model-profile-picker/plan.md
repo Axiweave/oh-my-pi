@@ -6,7 +6,7 @@
 
 ## Summary
 
-Make both profile-cycle keys open a searchable profile picker by default. Preserve forward and backward cycling behind a `modelProfileSwitchStyle: cycling` setting. Reuse the existing profile application path and a TUI list with built-in filtering. Leave `/model-profile` and startup-profile persistence unchanged.
+Make both profile-cycle keys open a searchable profile picker by default. Preserve forward and backward cycling behind a `modelProfileSwitchStyle: cycling` setting. Reuse the existing profile application path, a TUI input, and a list of profiles other than the active one. Leave `/model-profile` and startup-profile persistence unchanged.
 
 ## Technical Context
 
@@ -69,4 +69,4 @@ packages/tui/src/
     └── plugin-selector.ts
 ```
 
-**Structure Decision**: Add the style enum beside `modelProfile` in `settings-schema.ts`. Route the existing editor callbacks by that setting. Put picker lifecycle near other overlays in `selector-controller.ts`, and use the existing TUI list. Keep session profile application in `model-controls.ts`; do not duplicate it. Add a dedicated overlay component only if the existing list cannot supply filtering, selection, and cancellation without one.
+**Structure Decision**: Add the style enum beside `modelProfile` in `settings-schema.ts`. Route the existing editor callbacks by that setting. Put picker lifecycle near other overlays in `selector-controller.ts`, with a visible `Input` and a `SelectList` for other profiles. The title shows the active profile. Empty-field Tab and Shift+Tab navigate. Partial-name Tab completes a choice or selects a sole match. Neither key moves past an exact match. Keep session profile application in `model-controls.ts`; do not duplicate it.

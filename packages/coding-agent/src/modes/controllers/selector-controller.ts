@@ -5,7 +5,7 @@ import type { getOAuthProviders as GetOAuthProviders } from "@oh-my-pi/pi-ai/oau
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle, ResizeScrollbackMode } from "@oh-my-pi/pi-tui";
-import { Loader, SelectList, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
+import { Input, Loader, SelectList, Spacer, getKeybindings, matchesKey, setTuiTight, Text } from "@oh-my-pi/pi-tui";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -162,13 +162,53 @@ function loadProviderToggles(): ProviderToggleModules {
 }
 
 class ModelProfilePickerPanel extends OverlayPanel {
-	constructor(private readonly list: SelectList) {
-		super("Model Profiles");
+	private readonly search = new Input();
+
+	constructor(
+		private readonly list: SelectList,
+		activeProfile: string | undefined,
+	) {
+		super(`Model Profile (${theme.symbol("icon.package")} ${activeProfile ?? "none"})`);
+		this.search.prompt = `${theme.symbol("icon.search")} Search profiles: `;
+		this.search.focused = true;
+		this.addChild(this.search);
 		this.addChild(list);
 	}
 
 	handleInput(data: string): void {
-		this.list.handleInput(data);
+		const keys = getKeybindings();
+		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+			const backward = matchesKey(data, "shift+tab");
+			const query = this.search.getValue();
+			if (query) {
+				if (backward) return;
+				const selected = this.list.getSelectedItem();
+				if (!selected || selected.value === query) return;
+				if (this.list.getVisibleCount() === 1) {
+					this.list.handleInput("\n");
+					return;
+				}
+				this.search.setValue(selected.value);
+				this.list.setFilter(selected.value);
+				return;
+			}
+			this.list.moveSelection(backward ? -1 : 1);
+		} else if (
+			keys.matches(data, "tui.select.up") ||
+			keys.matches(data, "tui.select.down") ||
+			keys.matches(data, "tui.select.confirm") ||
+			keys.matches(data, "tui.select.cancel")
+		) {
+			this.list.handleInput(data);
+		} else {
+			const previous = this.search.getValue();
+			this.search.handleInput(data);
+			const query = this.search.getValue();
+			if (query !== previous) {
+				this.list.setFilter(query);
+				this.list.setSelectedIndex(0);
+			}
+		}
 	}
 }
 
@@ -919,18 +959,25 @@ export class SelectorController {
 			return;
 		}
 
+		const activeProfile = this.ctx.session.activeModelProfile;
+		const choices = names.filter(name => name !== activeProfile);
 		const list = new SelectList(
-			names.map(name => ({
-				value: name,
-				label: name,
-				description: name === this.ctx.session.activeModelProfile ? "(current)" : undefined,
-			})),
-			Math.min(names.length, 20),
+			choices.map(name => ({ value: name, label: name })),
+			Math.min(choices.length, 20),
 			getSelectListTheme(),
-			{ search: "always", noMatchText: "No matching model profiles" },
+			{
+				search: "never",
+				emptyText: "No other model profiles",
+				noMatchText: "No matching model profiles",
+				filterItems: (items, query) => {
+					const prefix = query.toLowerCase();
+					return items
+						.filter(item => item.value.toLowerCase().startsWith(prefix))
+						.sort((a, b) => a.value.localeCompare(b.value));
+				},
+			},
 		);
-		if (this.ctx.session.activeModelProfile) list.setSelectedValue(this.ctx.session.activeModelProfile);
-		const panel = new ModelProfilePickerPanel(list);
+		const panel = new ModelProfilePickerPanel(list, activeProfile);
 		const done = () => {
 			overlayHandle.hide();
 			this.focusActiveEditorArea();

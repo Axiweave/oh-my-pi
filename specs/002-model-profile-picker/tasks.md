@@ -46,10 +46,10 @@ description: "Implementation tasks for the model profile picker"
 
 ### Implementation
 
-- [X] T004 [US1] Add a bottom-anchored profile picker using `SelectList` with `search: "always"`, active-name preselection, no-match text, cancel cleanup, and empty-profile guidance in packages/coding-agent/src/modes/controllers/selector-controller.ts
+- [X] T004 [US1] Add a bottom-anchored profile picker using `Input` and `SelectList` with active-name title, other-profile choices, empty-search Tab navigation, partial-name Tab completion and sole-match selection, no movement past an exact match, no-match text, cancel cleanup, and empty-profile guidance in packages/coding-agent/src/modes/controllers/selector-controller.ts
 - [X] T005 [US1] Apply a selected bundle with `session.applyModelProfile(name, plan-or-default-role)` and update status and border without saving the startup profile in packages/coding-agent/src/modes/controllers/selector-controller.ts
 - [X] T006 [US1] Route both existing profile-key callbacks to the picker when `modelProfileSwitchStyle` is `picker` in packages/coding-agent/src/modes/controllers/input-controller.ts
-- [X] T007 [US1] Exercise search, no-match, cancellation, selection, and both keys with zero, one, and two configured profiles using specs/002-model-profile-picker/quickstart.md; with one profile, cancel without changing state
+- [X] T007 [US1] Exercise search, no-match, cancellation, selection, and both keys with zero, one, and two configured profiles using specs/002-model-profile-picker/quickstart.md; with one active profile, show its title and no other choices
 
 **Checkpoint**: Default picker selection and cancellation work independently. Do not replace the existing `cycleModelProfile` implementation.
 

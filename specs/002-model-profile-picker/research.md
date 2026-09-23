@@ -18,9 +18,11 @@
 
 ## Searchable picker
 
-**Decision**: Use the existing `SelectList` in a bottom-anchored overlay. Set `search: "always"`, preselect the active profile by value, and use its built-in no-match and cancellation behavior. Present configured profile names as entries.
+**Decision**: Use a visible `Input` and the existing `SelectList` in a bottom-anchored overlay. Show the active profile in the title and exclude it from the choices. Empty-field Tab and Shift+Tab navigate. Partial-name Tab completes the highlighted choice or selects a sole match. Neither key moves past an exact match.
 
-**Rationale**: `SelectList` supports filtering, preselection, cancel, and a no-match message. `selector-controller.ts` already hosts a bottom-anchored model picker with overlay cleanup and focus restoration. No model registry search is needed for names already in configuration.
+**Filtering decision**: Use the list's `filterItems` callback for case-insensitive literal prefix matches, sorted by name. Preserve punctuation so `sol-` excludes `sol`. Query edits reset the highlight to the first match. Keep fuzzy matching unchanged in other pickers.
+
+**Rationale**: `Input` makes search visible and supports normal text editing. `SelectList` handles filtered choices, navigation, and cancellation. `selector-controller.ts` already hosts bottom-anchored overlays with cleanup and focus restoration.
 
 **Alternatives considered**: Reusing `ModelPickerComponent` directly would select concrete models and carry unrelated provider, role, and context behavior. A new search engine would duplicate `SelectList`.
 

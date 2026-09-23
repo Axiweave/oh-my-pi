@@ -214,6 +214,14 @@ export class SelectList implements Component, MouseRoutable {
 	getFilter(): string {
 		return this.#selection.query;
 	}
+	getVisibleCount(): number {
+		return this.#selection.visibleItems.length;
+	}
+
+	/** Move the highlighted item without interpreting a keybinding. */
+	moveSelection(delta: -1 | 1): void {
+		if (this.#selection.move(delta, this.layout.wrapNavigation !== false)) this.#notifySelectionChange();
+	}
 
 	/** Resolve a 0-based rendered-line index to a filtered-item index. */
 	hitTest(line: number): number | undefined {
@@ -361,9 +369,11 @@ export class SelectList implements Component, MouseRoutable {
 
 		let selectionChanged = false;
 		if (kb.matches(keyData, "tui.select.up")) {
-			selectionChanged = this.#selection.move(-1, this.layout.wrapNavigation !== false);
+			this.moveSelection(-1);
+			return;
 		} else if (kb.matches(keyData, "tui.select.down")) {
-			selectionChanged = this.#selection.move(1, this.layout.wrapNavigation !== false);
+			this.moveSelection(1);
+			return;
 		} else if (kb.matches(keyData, "tui.select.pageUp")) {
 			selectionChanged = this.#selection.move(-this.#maxVisible);
 		} else if (kb.matches(keyData, "tui.select.pageDown")) {
