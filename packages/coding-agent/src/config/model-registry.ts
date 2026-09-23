@@ -81,6 +81,7 @@ import {
 	normalizeBareDiscoveryBaseUrl,
 	normalizeLiteLLMDiscoveryBaseUrl,
 	normalizeLlamaCppBaseUrl,
+	normalizeOpenAIModelsListBaseUrl,
 } from "./model-discovery";
 import {
 	AUTHORITATIVE_RUNTIME_CATALOG_PROVIDERS,
@@ -1544,10 +1545,12 @@ export class ModelRegistry {
 					baseUrl:
 						providerConfig.discovery?.type === "litellm"
 							? normalizeLiteLLMDiscoveryBaseUrl(providerConfig.baseUrl)
-							: providerConfig.discovery?.type === "openai-models-list" &&
-								  providerConfig.discovery.injectV1 === false
-								? normalizeBareDiscoveryBaseUrl(providerConfig.baseUrl)
-								: providerConfig.baseUrl,
+							: providerConfig.discovery?.type === "cliproxyapi" && providerConfig.baseUrl
+								? normalizeOpenAIModelsListBaseUrl(providerConfig.baseUrl)
+								: providerConfig.discovery?.type === "openai-models-list" &&
+									  providerConfig.discovery.injectV1 === false
+									? normalizeBareDiscoveryBaseUrl(providerConfig.baseUrl)
+									: providerConfig.baseUrl,
 					headers: providerConfig.headers,
 					apiKey: providerConfig.apiKey,
 					authHeader: providerConfig.authHeader,
@@ -1769,6 +1772,9 @@ export class ModelRegistry {
 			// non-conversational modes. Keep this in lockstep with the catalog
 			// package's `litellm:rich-vN` namespace whenever mapping behavior changes.
 			return `${providerConfig.provider}:litellm-rich-v5`;
+		}
+		if (providerConfig.discovery.type === "cliproxyapi") {
+			return `${providerConfig.provider}:cliproxyapi-v1`;
 		}
 		return providerConfig.provider;
 	}

@@ -109,7 +109,7 @@ providers:
 ### Allowed auth/discovery values
 
 - `auth`: `apiKey` (default), `none`, or `oauth`; for `models.yml` custom models, `oauth` is accepted by schema but does not waive the `apiKey` requirement
-- `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, `proxy`, or `litellm`
+- `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, `proxy`, `litellm`, or `cliproxyapi`.
 - `discovery.injectV1`: optional boolean, default `true`, for `openai-models-list`. Set `false` to fetch the model list from `{baseUrl}/models` without injecting `/v1` — for gateways that root their OpenAI-compatible surface at a versioned path (e.g. `https://api.opper.ai/v3/compat`) where the forced `/v1/models` returns a different, smaller model list. Query strings in `baseUrl` are ignored, matching the default mode.
 - `transport`: `pi-native` only. When set, every model under that provider is sent to an `omp auth-gateway` compatible `baseUrl` via `POST /v1/pi/stream`; `apiKey` is the gateway bearer.
 - `imageInputDecoder`: `stb` only. Set this on a custom model or `modelOverrides` entry when the serving backend uses an STB-compatible image decoder that cannot accept WebP; OMP converts attached and historical WebP images before provider dispatch.
@@ -350,6 +350,45 @@ providers:
     discovery:
       type: proxy
 ```
+
+### CLIProxyAPI discovery (`discovery.type: cliproxyapi`)
+
+Use one provider entry for each CLIProxyAPI server. Each entry has independent credentials, discovery state, and cached models.
+The provider names are arbitrary. The discovery type selects the protocol, not the provider name.
+
+```yaml
+providers:
+  cliproxy-home:
+    baseUrl: https://home-proxy.example/v1
+    api: openai-responses
+    apiKey: CLIPROXY_HOME_KEY
+    authHeader: true
+    discovery:
+      type: cliproxyapi
+  cliproxy-work:
+    baseUrl: https://work-proxy.example/v1
+    api: openai-responses
+    apiKey: CLIPROXY_WORK_KEY
+    authHeader: true
+    discovery:
+      type: cliproxyapi
+```
+
+Discovery requests `{root}/v1/models?client_version=pi` and reads the `models` array, not the generic OpenAI `data` array.
+Set `baseUrl` to the server root or its `/v1` URL. Path prefixes remain intact.
+The configured `api` still controls inference. With `openai-responses`, inference uses `{root}/v1/responses`, not the Pi extension's `/backend-api/codex/responses` route.
+
+The mapper reads model IDs from `slug`, names from `display_name`, context and output limits, input modalities, and advertised reasoning levels.
+It excludes hidden entries and ignores unsupported effort names, including `ultra` in this OMP version.
+It uses the advertised default effort when supported. Otherwise, it uses the lowest supported advertised effort.
+An explicit `none` or `off` level permits reasoning-off requests. Missing effort metadata does not create a guessed effort ladder.
+Costs remain unknown (zero). Normal `modelOverrides` still apply after discovery.
+
+The catalog's prompts, tool policy, and service-tier fields do not change agent behavior or enable paid Fast mode.
+A malformed response fails discovery and retains the existing cache. An explicit empty `models` array clears that provider's discovered models.
+
+Select a model with its provider prefix, such as `cliproxy-home/claude-opus-5-5` or `cliproxy-work/claude-opus-5-5`.
+Use HTTPS or an encrypted tunnel for remote servers because requests carry the bearer credential.
 
 ### Extension provider registration
 

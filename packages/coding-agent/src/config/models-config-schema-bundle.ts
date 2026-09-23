@@ -273,7 +273,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 	});
 
 	const ProviderDiscoverySchema = type({
-		type: '"ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy" | "litellm"',
+		type: '"ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy" | "litellm" | "cliproxyapi"',
 		"timeoutMs?": "number",
 		/**
 		 * Defaults to `true`. Set `false` to fetch the model list from

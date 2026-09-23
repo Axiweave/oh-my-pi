@@ -1,6 +1,6 @@
 /**
  * HTTP discovery protocols for configured and implicit providers — ollama,
- * llama.cpp, lm-studio, openai-models-list, and new-api/one-api-style proxies.
+ * llama.cpp, lm-studio, openai-models-list, CLIProxyAPI, and reseller proxies.
  * `ModelRegistry` owns the orchestration (status, state, caching) and calls
  * `discoverModelsByProviderType` with a `DiscoveryContext`; built-in provider
  * discovery lives in pi-catalog's provider-models.
@@ -8,6 +8,7 @@
 import { type ApiKey, withAuth } from "@oh-my-pi/pi-ai/auth-retry";
 import type { Api, FetchImpl, Model, RemoteCompactionConfig } from "@oh-my-pi/pi-ai/types";
 import { buildDiscoveredModel, buildModel } from "@oh-my-pi/pi-catalog/build";
+import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import {
 	getBundledModelReferenceIndex,
 	inheritReferenceThinking,
@@ -439,6 +440,8 @@ export function discoverModelsByProviderType(
 			return discoverProxyModels(providerConfig, ctx);
 		case "litellm":
 			return discoverLiteLLMModels(providerConfig, ctx);
+		case "cliproxyapi":
+			return discoverCLIProxyAPIModels(providerConfig, ctx);
 	}
 }
 
@@ -904,6 +907,88 @@ export async function discoverOpenAIModelsList(
 						: {}),
 				},
 			} as ModelSpec<Api>),
+		);
+	}
+	return discovered;
+}
+
+/** Read CLIProxyAPI's rich catalog without importing its prompts or tool policy. */
+async function discoverCLIProxyAPIModels(
+	providerConfig: DiscoveryProviderConfig,
+	ctx: DiscoveryContext,
+): Promise<Model<Api>[]> {
+	if (!providerConfig.baseUrl) throw new Error("CLIProxyAPI discovery requires a baseUrl.");
+	const baseUrl = normalizeOpenAIModelsListBaseUrl(providerConfig.baseUrl);
+	const modelsUrl = `${baseUrl}/models?client_version=pi`;
+	const baseHeaders: Record<string, string> = { Accept: "application/json", ...providerConfig.headers };
+	let headers = baseHeaders;
+	const attempt = async (requestHeaders: Record<string, string>): Promise<unknown> =>
+		withTimeoutSignal(providerConfig.discovery.timeoutMs ?? 10_000, async signal => {
+			const response = await ctx.fetch(modelsUrl, { headers: requestHeaders, signal });
+			if (!response.ok) throw new DiscoveryHttpError(response.status, modelsUrl);
+			headers = requestHeaders;
+			return response.json();
+		});
+	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
+	const payload = apiKey
+		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		: await attempt(baseHeaders);
+	if (!isRecord(payload) || !Array.isArray(payload.models)) {
+		throw new Error("CLIProxyAPI catalog must contain a models array.");
+	}
+	const discovered: Model<Api>[] = [];
+	for (const item of payload.models) {
+		if (!isRecord(item)) continue;
+		const id = typeof item.slug === "string" ? item.slug.trim() : "";
+		const visibility = typeof item.visibility === "string" ? item.visibility.toLowerCase() : "";
+		if (!id || visibility === "hide" || visibility === "hidden") continue;
+		const reportedEfforts = new Set<string>();
+		if (Array.isArray(item.supported_reasoning_levels)) {
+			for (const entry of item.supported_reasoning_levels) {
+				const effort = isRecord(entry) ? entry.effort : entry;
+				if (typeof effort === "string") reportedEfforts.add(effort.trim().toLowerCase());
+			}
+		}
+		const efforts = THINKING_EFFORTS.filter(effort => reportedEfforts.has(effort));
+		const defaultLevel = efforts.find(effort => effort === item.default_reasoning_level) ?? efforts[0];
+		const contextWindow =
+			toPositiveNumberOrUndefined(item.context_window) ??
+			toPositiveNumberOrUndefined(item.max_context_window) ??
+			DISCOVERY_DEFAULT_CONTEXT_WINDOW;
+		const maxTokens =
+			toPositiveNumberOrUndefined(item.max_tokens) ??
+			toPositiveNumberOrUndefined(item.max_output_tokens) ??
+			toPositiveNumberOrUndefined(item.max_completion_tokens) ??
+			discoveryDefaultMaxTokens(providerConfig.api);
+		discovered.push(
+			buildModel({
+				id,
+				name: typeof item.display_name === "string" ? item.display_name.trim() || id : id,
+				api: providerConfig.api,
+				provider: providerConfig.provider,
+				baseUrl,
+				reasoning: efforts.length > 0,
+				thinking:
+					efforts.length > 0
+						? {
+								mode: "effort",
+								efforts,
+								defaultLevel,
+								effortMap: Object.fromEntries(efforts.map(effort => [effort, effort])),
+								requiresEffort: !reportedEfforts.has("none") && !reportedEfforts.has("off"),
+							}
+						: undefined,
+				input: extractOpenAIModelsListInputCapabilities(item) ?? ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow,
+				maxTokens: Math.min(maxTokens, contextWindow),
+				headers,
+				compat: {
+					supportsStore: false,
+					supportsReasoningEffort: efforts.length > 0,
+					trustExplicitThinkingOnly: true,
+				},
+			}),
 		);
 	}
 	return discovered;

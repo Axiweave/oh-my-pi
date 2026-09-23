@@ -203,3 +203,12 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Why:** A canonical `@oh-my-pi/pi-*` specifier that carries a subpath missed the package-root override and reached `Bun.resolveSync`, which dispatched the same handler again. Each pass prefixed another `file:`, so the path grew until it failed with `NameTooLong reading "file:file:…"`. A lazy `require` of the model hub runs on exactly that path, so the runaway took interactive rendering down. Upstream v18.2.5 and v18.2.6 still carry the bug (upstream issue #12293, open, no merged fix).
 - **Key path:** `packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts`.
 - **Checks:** `packages/coding-agent/test/extensibility/legacy-pi-canonical-subpath-reentrancy.test.ts`.
+
+### CLIProxyAPI catalog discovery
+
+- **Decision:** Support `discovery.type: cliproxyapi` for any named provider entry in `models.yml`.
+- **Decision:** Read `/v1/models?client_version=pi` for advertised limits, modalities, and reasoning efforts. Keep inference on the configured API.
+- **Decision:** Keep credentials and caches separate for each provider. Do not import catalog prompts or tool policy.
+- **Why:** Multiple proxy servers need independent connections without copies of a single-connection Pi extension.
+- **Key paths:** `packages/coding-agent/src/config/model-discovery.ts`, `packages/coding-agent/src/config/model-registry.ts`, and `packages/coding-agent/src/config/models-config-schema-bundle.ts`.
+- **Checks:** `packages/coding-agent/test/cliproxyapi-discovery.test.ts` and a source CLI replay against two local servers.
