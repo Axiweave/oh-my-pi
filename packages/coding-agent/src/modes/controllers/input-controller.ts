@@ -2440,6 +2440,10 @@ export class InputController {
 	}
 
 	async cycleModelProfile(direction: "forward" | "backward" = "forward"): Promise<void> {
+		if (this.ctx.settings.get("modelProfileSwitchStyle") === "picker") {
+			this.ctx.showModelProfilePicker();
+			return;
+		}
 		if (this.ctx.focusedAgentId) {
 			this.ctx.showStatus("Model/thinking apply to the main session — press ←← to return first");
 			return;

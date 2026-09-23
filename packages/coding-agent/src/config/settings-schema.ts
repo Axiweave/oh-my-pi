@@ -527,6 +527,22 @@ export const SETTINGS_SCHEMA = {
 
 	modelProfile: { type: "string", default: "" },
 
+	modelProfileSwitchStyle: {
+		type: "enum",
+		values: ["picker", "cycling"] as const,
+		default: "picker",
+		ui: {
+			tab: "model",
+			group: "Prompt",
+			label: "Model Profile Switch Style",
+			description: "How the model profile keys switch between role bundles",
+			options: [
+				{ value: "picker", label: "Picker", description: "Search and choose a profile" },
+				{ value: "cycling", label: "Cycling", description: "Cycle forward or backward through profiles" },
+			],
+		},
+	},
+
 	modelProfiles: { type: "record", default: EMPTY_MODEL_PROFILES_RECORD },
 
 	modelTags: { type: "record", default: EMPTY_MODEL_TAGS_RECORD },

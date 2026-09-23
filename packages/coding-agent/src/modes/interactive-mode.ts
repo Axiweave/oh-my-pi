@@ -7150,6 +7150,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showModelSelector(options);
 	}
 
+	showModelProfilePicker(): void {
+		this.#selectorController.showModelProfilePicker();
+	}
+
 	switchSessionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void> {
 		return this.#selectorController.switchSessionModel(model, thinkingLevel);
 	}

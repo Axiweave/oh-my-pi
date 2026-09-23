@@ -126,13 +126,13 @@ export const KEYBINDINGS = {
 	},
 	"app.model.cycleProfileForward": {
 		defaultKeys: "alt+shift+m",
-		description: "Cycle to next model profile",
+		description: "Choose model profile (or cycle forward in cycling style)",
 	},
 	"app.model.cycleProfileBackward": {
-		// Unbound by default: chord space is tight and two or three profiles cycle
-		// fine forward-only. Bind it in keybindings.yml when a longer list hurts.
+		// Unbound by default: both keys open the picker, and forward-only cycling
+		// remains available without another chord. Bind this key for backward cycling.
 		defaultKeys: [],
-		description: "Cycle to previous model profile",
+		description: "Choose model profile (or cycle backward in cycling style)",
 	},
 	"app.model.toggleCyber": {
 		// Not alt+shift+c: `app.clipboard.copyPrompt` holds that chord.

@@ -5,7 +5,7 @@ import type { getOAuthProviders as GetOAuthProviders } from "@oh-my-pi/pi-ai/oau
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle, ResizeScrollbackMode } from "@oh-my-pi/pi-tui";
-import { Loader, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
+import { Loader, SelectList, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -25,6 +25,7 @@ import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-confi
 import { showGitOverlay } from "../../cli/git-tui";
 import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import { OverlayPanel } from "@oh-my-pi/pi-tui/chrome/overlay-box";
 import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
 import { createSettingsHost } from "../../config/settings-ui";
@@ -39,6 +40,7 @@ import {
 	MarketplaceManager,
 } from "../../extensibility/plugins/marketplace";
 import {
+	getSelectListTheme,
 	getAvailableThemes,
 	getSymbolTheme,
 	previewTheme,
@@ -157,6 +159,17 @@ interface ProviderToggleModules {
 function loadProviderToggles(): ProviderToggleModules {
 	const discovery = require("../../discovery");
 	return { disableProvider: discovery.disableProvider, enableProvider: discovery.enableProvider };
+}
+
+class ModelProfilePickerPanel extends OverlayPanel {
+	constructor(private readonly list: SelectList) {
+		super("Model Profiles");
+		this.addChild(list);
+	}
+
+	handleInput(data: string): void {
+		this.list.handleInput(data);
+	}
 }
 
 export class SelectorController {
@@ -893,6 +906,66 @@ export class SelectorController {
 			// All other settings are handled by the definitions (get/set on SettingsManager)
 			// No additional side effects needed
 		}
+	}
+
+	showModelProfilePicker(): void {
+		if (this.ctx.focusedAgentId) {
+			this.ctx.showStatus("Model/thinking apply to the main session — press ←← to return first");
+			return;
+		}
+		const names = Object.keys(this.ctx.settings.getModelProfiles());
+		if (names.length === 0) {
+			this.ctx.showStatus("No model profiles configured — add `modelProfiles` to your config");
+			return;
+		}
+
+		const list = new SelectList(
+			names.map(name => ({
+				value: name,
+				label: name,
+				description: name === this.ctx.session.activeModelProfile ? "(current)" : undefined,
+			})),
+			Math.min(names.length, 20),
+			getSelectListTheme(),
+			{ search: "always", noMatchText: "No matching model profiles" },
+		);
+		if (this.ctx.session.activeModelProfile) list.setSelectedValue(this.ctx.session.activeModelProfile);
+		const panel = new ModelProfilePickerPanel(list);
+		const done = () => {
+			overlayHandle.hide();
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		};
+		list.onCancel = done;
+		list.onSelect = async item => {
+			try {
+				const role = this.ctx.session.getPlanModeState()?.enabled ? "plan" : "default";
+				const result = await this.ctx.session.applyModelProfile(item.value, role);
+				if (!result) {
+					this.ctx.showStatus("No model profiles configured — add `modelProfiles` to your config");
+					done();
+					return;
+				}
+				this.ctx.statusLine.invalidate();
+				this.ctx.updateEditorBorderColor();
+				this.ctx.showStatus(
+					result.model
+						? `Model profile ${result.profile}: now on ${result.model.provider}/${result.model.id}`
+						: `Model profile ${result.profile}: no configured role resolved to an available model`,
+				);
+				done();
+			} catch (error) {
+				this.ctx.showError(error instanceof Error ? error.message : String(error));
+			}
+		};
+		const overlayHandle = this.ctx.ui.showOverlay(panel, {
+			anchor: "bottom-center",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+		});
+		this.ctx.ui.setFocus(panel);
+		this.ctx.ui.requestRender();
 	}
 
 	showModelSelector(options?: { temporaryOnly?: boolean }): void {

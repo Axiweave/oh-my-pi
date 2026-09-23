@@ -4,6 +4,7 @@
 
 ### Added
 
+- Model-profile keys now open a searchable picker by default. Set `modelProfileSwitchStyle: cycling` to keep forward and backward cycling; `/model-profile` remains unchanged.
 - Added `cyberModels` and `cyberMode` to constrain role selection, model switches, and recovery to an operator-defined allowlist. Startup and live notices identify substitutions. Session transitions restore and revalidate the recorded state.
 - Added `/cyber [on|off|status] [global|project]` and `app.model.toggleCyber` (`Alt+Shift+X`). Enable and status output list every allowed model. The scoped command forms persist the startup value.
 - Added the `cyber` status-line segment to the default and `claude3` layouts. Custom layouts can also select it.

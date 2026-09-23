@@ -455,8 +455,8 @@ If a role points at another role, the target model still inherits normally and a
 
 `modelProfiles` bundles several role assignments under one name so a single
 keypress swaps the whole set. `Ctrl+P` cycles one role at a time within the
-current assignments; `Alt+Shift+M` — `app.model.cycleProfileForward` — cycles
-the bundles themselves.
+current assignments. `Alt+Shift+M` opens a searchable profile picker by default.
+Both profile-switch keys open the same picker when bound.
 
 ```yaml
 modelRoles:
@@ -472,11 +472,23 @@ modelProfiles:
     plan: anthropic/claude-fable-5:xhigh
 ```
 
+Set `modelProfileSwitchStyle: cycling` to keep the old key behavior. The forward
+key cycles to the next bundle, and the backward key cycles to the previous one:
+
+```yaml
+modelProfileSwitchStyle: cycling
+```
+
+The picker and cycling both apply the entire profile to the running session.
+Use `/model-profile` to show the active and available bundles. Use
+`/model-profile <name> [global|project]` to select one and optionally save it as
+the startup profile. The style setting does not change these commands.
+
 Because a profile carries its own `plan` role, entering plan mode under the
 `fable` profile stays on Fable rather than jumping to the global
-`modelRoles.plan`. Cycling profiles *while plan mode is active* switches to the
-incoming profile's `plan` role; everywhere else it switches to its `default`
-role, falling back to `default` when the requested role is unset.
+`modelRoles.plan`. Switching profiles *while plan mode is active* uses the
+incoming profile's `plan` role; elsewhere it uses its `default` role, falling
+back to `default` when the requested role is unset.
 
 Profiles apply to the running session only — they are never written back to
 `config.yml`. Roles a profile does not name keep resolving through the normal
@@ -486,9 +498,9 @@ Runtime overrides that predate the first profile switch (`--smol`, `--slow`,
 
 `modelProfiles` reads from the same layers as every other setting, so a
 repository can define its own in `.omp/config.yml`. Project bundles join the
-cycle alongside your global ones, and a project bundle sharing a global name
-overrides only the roles it names — the rest of that bundle still comes from
-your global config.
+picker and cycle alongside your global ones, and a project bundle sharing a
+global name overrides only the roles it names — the rest of that bundle still
+comes from your global config.
 
 A profile with nothing under it is the way back to your plain `modelRoles` —
 it names no overrides, so every role resolves through config again:
@@ -501,8 +513,8 @@ modelProfiles:
   base:
 ```
 
-Without such an entry the cycle only visits named bundles; once you switch to
-one there is no stop that means "config as written". The status-line segment
+Without such an entry the picker and cycle only visit named bundles; once you
+switch to one there is no stop that means "config as written". The status-line
 stays hidden while an empty profile is active — the session is in exactly the
 state it would be in having never switched, so there is nothing to report.
 
