@@ -40,6 +40,7 @@
 - Queued file commands and prompt templates now show the same compact command cards as composer input. Queue labels and restored drafts retain the original command and arguments.
 - Fixed `->`, `=>`, and `/queue` messages skipping `/skill:<name>` instructions.
 - Fixed compaction replay rejecting queued commands while busy or dropping their image attachments.
+- Fixed exiting to the shell when opening the model picker or model hub after compatibility extensions load ([#12293](https://github.com/can1357/oh-my-pi/issues/12293)).
 - Fixed growing transcript, Todo, and editor rows disappearing after history retirement, while keeping pinned input stable during typing.
 - Fixed command cards and completed tool output disappearing during assistant output after the Todo HUD or editor grows.
 - Fixed nested agent creation resetting the parent session's active model-profile roles.
