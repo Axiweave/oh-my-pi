@@ -942,8 +942,8 @@ export class SelectorController {
 				const role = this.ctx.session.getPlanModeState()?.enabled ? "plan" : "default";
 				const result = await this.ctx.session.applyModelProfile(item.value, role);
 				if (!result) {
-					this.ctx.showStatus("No model profiles configured — add `modelProfiles` to your config");
 					done();
+					this.ctx.showStatus(`Model profile ${item.value} is no longer configured`);
 					return;
 				}
 				this.ctx.statusLine.invalidate();
@@ -955,6 +955,7 @@ export class SelectorController {
 				);
 				done();
 			} catch (error) {
+				done();
 				this.ctx.showError(error instanceof Error ? error.message : String(error));
 			}
 		};

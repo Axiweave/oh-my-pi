@@ -563,6 +563,7 @@ Related settings:
 - `modelRoles` (record)
 - `modelProfiles` (record of named role bundles)
 - `modelProfile` (name of the bundle a session starts on)
+- `modelProfileSwitchStyle` (`picker` by default, or `cycling` for the profile keys)
 - `enabledModels` (scoped pattern list)
 - `modelProviderOrder` (provider precedence when equivalent concrete choices share an id)
 - `providers.kimiApiFormat` (`openai` or `anthropic` request format)
