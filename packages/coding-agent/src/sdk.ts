@@ -23,6 +23,7 @@ import type {
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
+import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/discover";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
@@ -112,6 +113,7 @@ import {
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
+import { createSkillDescriptionCompressor, SkillDescriptionCatalog } from "./extensibility/skill-descriptions";
 import {
 	loadSkills as loadSkillsInternal,
 	type Skill,
@@ -162,7 +164,11 @@ import {
 	type SecretObfuscator,
 } from "./secrets";
 import { AgentSession, type InitialRetryFallbackState, type PlanYolo, type Prewalk } from "./session/agent-session";
-import { discoverAuthStorage as discoverAuthStorageFromConfig } from "./session/auth-broker-config";
+import {
+	discoverAuthStorage as discoverAuthStorageFromConfig,
+	type EffectiveSettingsScope,
+	loadEffectiveAuthAccountPolicyConfig,
+} from "./session/auth-broker-config";
 import type { AuthStorage } from "./session/auth-storage";
 import { DateCwdReminderInjector } from "./session/date-cwd-reminder";
 import { createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
@@ -183,6 +189,7 @@ import {
 	type RetryFallbackResolutionContext,
 	resolveRetryFallbackChainKey,
 } from "./session/retry-fallback-chains";
+import { describeUsageFallback } from "./session/retry-fallback-reason";
 import { getRestorableSessionModels } from "./session/session-context";
 import { SessionManager } from "./session/session-manager";
 import { collectMountedMCPToolRoutes, projectMountedMCPXdevGuidance } from "./session/session-tools";
@@ -248,7 +255,7 @@ import { createBrowserPrelude } from "./tools/browser";
 import { isMCPToolName, normalizeToolNames } from "./tools/builtin-names";
 import { createComputerPrelude } from "./tools/computer";
 import { ToolContextStore } from "./tools/context";
-import { isIrcEnabled } from "./tools/hub";
+import { isIrcEnabled } from "./irc/messaging";
 import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { isFilesystemSourcePath } from "./tools/path-utils";
@@ -774,11 +781,28 @@ export {
  * back into the broker through the {@link AuthStorageOptions.refreshOAuthCredential}
  * override to re-mint access tokens when needed.
  *
+ * Account routing (`auth.accountPolicies`, `retry.usageReservePct`) comes from
+ * effective settings: `options.settings` when given, else the matching global
+ * instance, else a read-only load for `options.cwd`; explicit option values win.
+ *
  * Delegates to {@link ./session/auth-broker-config} so the TUI and the catalog
  * generator share the same credential-discovery logic.
  */
-export async function discoverAuthStorage(agentDir: string = getAgentDir()): Promise<AuthStorage> {
-	return discoverAuthStorageFromConfig(agentDir);
+export async function discoverAuthStorage(
+	agentDir: string = getAgentDir(),
+	options: Omit<DiscoverAuthStorageOptions, "agentDir" | "configValueResolver"> &
+		Omit<EffectiveSettingsScope, "agentDir"> = {},
+): Promise<AuthStorage> {
+	const { settings, cwd, ...discoveryOptions } = options;
+	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings, cwd, agentDir });
+	return discoverAuthStorageFromConfig(agentDir, {
+		...discoveryOptions,
+		accountPolicies: discoveryOptions.accountPolicies ?? policy.accountPolicies,
+		authStorageOptions: {
+			...discoveryOptions.authStorageOptions,
+			defaultReservePct: discoveryOptions.authStorageOptions?.defaultReservePct ?? policy.defaultReservePct,
+		},
+	});
 }
 
 /**
@@ -1385,7 +1409,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const modelRegistry =
 		options.modelRegistry ??
 		new ModelRegistry(
-			options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)),
+			options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir, { settings, cwd })),
 			path.join(agentDir, "models.yml"),
 			{
 				settings,
@@ -1407,7 +1431,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// buffer — so we can't rely on it to catch startup events for the extension runner.
 	const startupCredentialDisabledEvents: CredentialDisabledEvent[] = [];
 	let credentialDisabledTarget: ExtensionRunner | undefined;
-	const unsubscribeCredentialDisabled: (() => void) | undefined = authStorage.onCredentialDisabled(event => {
+	const unsubscribeCredentialDisabled: (() => void) | undefined = authStorage.credentials.onDisabled(event => {
 		if (credentialDisabledTarget) {
 			// Discard return: any handler error is routed through runner.onError listeners.
 			void credentialDisabledTarget.emitCredentialDisabled(event);
@@ -1499,7 +1523,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	}
 	const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
 	if (options.credentialSourceSessionId) {
-		modelRegistry.authStorage.inheritSessionCredentials(options.credentialSourceSessionId, providerSessionId);
+		modelRegistry.authStorage.sessions.inherit(options.credentialSourceSessionId, providerSessionId);
 	}
 	const forkCacheShapeChanged =
 		options.model !== undefined ||
@@ -1938,7 +1962,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			agentRegistry,
 			// The global lifecycle releases through AgentRegistry.global(); wiring it
 			// onto a caller-supplied registry would report a cancel while releasing an
-			// unrelated global ref. With no lifecycle, hub cancel falls back to
+			// unrelated global ref. With no lifecycle, explicit cancellation falls back to
 			// dispose + unregister on the session's own registry.
 			agentLifecycle: options.agentRegistry ? undefined : () => AgentLifecycleManager.global(),
 			getSessionSpawns: () => options.spawns ?? "*",
@@ -1956,6 +1980,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getTurnBudget: () => sessionManager.getTurnBudget(),
 			recordEvalSubagentUsage: output => sessionManager.recordEvalSubagentOutput(output),
 			getClientBridge: () => session?.clientBridge,
+			emitBeforeSubagentSpawn: (event, signal) =>
+				session?.extensionRunner?.emitBeforeSubagentSpawn(event, signal) ?? Promise.resolve(undefined),
 			queueDeferredDiagnostics: entry => session?.yieldQueue.enqueue(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, entry),
 			queueLaunchCompletion: notification =>
 				session?.queueLaunchCompletion(notification) ??
@@ -2104,6 +2130,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}));
 		const mcpDiscoverOptions = {
 			onStatus: onMCPStatus,
+			startupTimeoutMs: settings.get("mcp.startupTimeoutMs"),
 			enableProjectConfig: settings.get("mcp.enableProjectConfig") ?? true,
 			// Always filter Exa - we have native integration
 			filterExa: true,
@@ -2580,6 +2607,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				? availableModels
 				: allEnabledModels;
 			let usageFallbackTriggered = false;
+			let usageFallbackReason: { from: string; reason: string } | undefined;
 			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
 				const { pattern, retryFallback } = expandedModelPatterns[patternIndex];
 				const primary = parseModelPattern(pattern, resolutionModels, matchPreferences);
@@ -2609,7 +2637,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				) {
 					let usageHealth: ModelUsageHealth | undefined;
 					try {
-						usageHealth = await modelRegistry.authStorage.getModelUsageHealth(primary.model.provider, {
+						usageHealth = await modelRegistry.authStorage.health.model(primary.model.provider, {
 							modelId: primary.model.id,
 							baseUrl: primary.model.baseUrl,
 							reserveFraction: settings.get("retry.usageReservePct") / 100,
@@ -2629,6 +2657,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						}
 						if (modelFallbackEnabled) {
 							usageFallbackTriggered = true;
+							usageFallbackReason ??= {
+								from: formatModelSelectorValue(
+									formatModelStringWithRouting(primary.model),
+									primary.thinkingLevel,
+								),
+								reason: describeUsageFallback(usageHealth, settings.get("retry.usageReservePct")),
+							};
 							continue;
 						}
 					}
@@ -2643,6 +2678,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							(usageReservePolicy === "auto" || (!options.hasUI && !options.deferUsageReserveConfirmation))
 						) {
 							usageFallbackTriggered = true;
+							usageFallbackReason ??= {
+								from: formatModelSelectorValue(
+									formatModelStringWithRouting(primary.model),
+									primary.thinkingLevel,
+								),
+								reason: describeUsageFallback(usageHealth, settings.get("retry.usageReservePct")),
+							};
 							continue;
 						}
 					}
@@ -2740,6 +2782,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						? resolveProvisionalAutoLevel(selectedModel)
 						: resolveThinkingLevelForModel(selectedModel, effectiveThinkingLevel),
 				);
+				if (usageFallbackReason) {
+					const target = formatModelSelectorValue(
+						formatModelStringWithRouting(selectedModel),
+						effectiveThinkingLevel,
+					);
+					modelFallbackMessage = `Fallback: ${usageFallbackReason.from} -> ${target}\n${usageFallbackReason.reason}`;
+				}
 				preconnectModelHost(selectedModel.baseUrl);
 				break;
 			}
@@ -3218,6 +3267,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// constructed) and refreshed on every later rebuild via
 		// `setAdvisorMemoryPrompt`.
 		let advisorMemoryPrompt: string | undefined;
+		const skillDescriptions = new SkillDescriptionCatalog({
+			dbPath: path.join(agentDir, "skill-descriptions.db"),
+			compress: createSkillDescriptionCompressor(modelRegistry, settings),
+		});
 		const rebuildSystemPrompt = async (
 			toolNames: string[],
 			tools: Map<string, AgentTool>,
@@ -3357,6 +3410,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				resolvedCustomPrompt: options.customSystemPrompt,
 				systemPromptTemplate: options.systemPromptTemplate,
 				skills: settings.get("skillful") ? (session?.skills ?? skills) : [],
+				skillDescriptions,
 				contextFiles,
 				tools: promptTools,
 				toolNames,
@@ -3588,8 +3642,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			return obfuscateMessages(obfuscator, converted);
 		};
 
-		const transformContext = async (messages: AgentMessage[], _signal?: AbortSignal) => {
-			const withContext = await extensionRunner.emitContext(messages);
+		const transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
+			const withContext = await extensionRunner.emitContext(messages, signal);
 			return wrapSteeringForModel(withContext);
 		};
 		// Per-request provider-context transforms. Obfuscate FIRST so secrets are
@@ -3645,11 +3699,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				getCurrentIdeFile(),
 			);
 		};
-		const onPayload = async (payload: unknown, model?: Model) => {
-			return await extensionRunner.emitBeforeProviderRequest(payload, model);
+		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
+			return await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
 		};
-		const onResponse: SimpleStreamOptions["onResponse"] = async (response, model) => {
-			await extensionRunner.emitAfterProviderResponse(response, model);
+		const onResponse: SimpleStreamOptions["onResponse"] = async (response, model, signal) => {
+			await extensionRunner.emitAfterProviderResponse(response, model, signal);
 		};
 
 		const setToolUIContext = (uiContext: ExtensionUIContext, hasUI: boolean) => {
@@ -4041,6 +4095,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			evalToolSession: toolSession,
 			customCommands: customCommandsResult.commands,
 			skills,
+			skillDescriptions,
 			skillWarnings,
 			skillsReloadable: options.skills === undefined,
 			skillsSettings: settings.getGroup("skills"),

@@ -80,8 +80,8 @@ describe("compaction dispatch honors cyber mode protection", () => {
 		});
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey(currentModel.provider, "excluded-token");
-		authStorage.setRuntimeApiKey(allowedFallback.provider, "allowed-token");
+		authStorage.keys.setRuntime(currentModel.provider, "excluded-token");
+		authStorage.keys.setRuntime(allowedFallback.provider, "allowed-token");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
 		const session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
@@ -139,7 +139,7 @@ describe("compaction dispatch honors cyber mode protection", () => {
 		});
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey(currentModel.provider, "shared-token");
+		authStorage.keys.setRuntime(currentModel.provider, "shared-token");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
 		const session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
@@ -202,7 +202,7 @@ describe("compaction dispatch honors cyber mode protection", () => {
 		settings.setModelRole("smol", `${allowedFallback.provider}/${allowedFallback.id}`);
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey(primaryModel.provider, "shared-token");
+		authStorage.keys.setRuntime(primaryModel.provider, "shared-token");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
 		const parentAgent = new Agent({
@@ -312,7 +312,7 @@ describe("compaction dispatch honors cyber mode protection", () => {
 		});
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey(firstCandidate.provider, "shared-token");
+		authStorage.keys.setRuntime(firstCandidate.provider, "shared-token");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
 		const session = new AgentSession({
@@ -381,7 +381,7 @@ describe("compaction dispatch honors cyber mode protection", () => {
 		});
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey(firstCandidate.provider, "shared-token");
+		authStorage.keys.setRuntime(firstCandidate.provider, "shared-token");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
 		const session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });

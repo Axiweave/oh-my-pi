@@ -21,7 +21,7 @@ describe("AgentSession model profiles", () => {
 	beforeAll(async () => {
 		fixtureDir = TempDir.createSync("@pi-model-profiles-fixture-");
 		authStorage = await AuthStorage.create(path.join(fixtureDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.yml"));
 	});
 
@@ -75,7 +75,7 @@ describe("AgentSession model profiles", () => {
 				thinkingLevel: Effort.Medium,
 			},
 		});
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 
 		sessionSettings = Settings.isolated();
 		for (const [role, value] of Object.entries(options.modelRoles ?? {})) {

@@ -57,10 +57,63 @@
 - Fixed Ghostel prompt navigation landing on blank padding instead of the first input character, including multiline prompts. Synthetic messages and expanded command bodies no longer create extra prompt markers.
 - Fixed the Edit tool's streaming diff preview changing height on nearly every update once a long line pushed the window past its budget. The tail window packed whole lines, so the row count it drew re-quantized between the budget and one line less on each tick, moving the frame's bottom border and re-clipping the block's head in the transcript. A single line taller than the whole window was admitted whole and grew the frame to the line's own row count. The window is now measured on the rows the diff renderer actually draws, clamped to the budget, and padded to a constant height once it saturates, matching the Write tool's streaming preview.
 
+## [18.3.0] - 2026-09-24
+
+### Breaking Changes
+
+- The `hub` tool is deprecated; use `wait`, `write`, and the `proc://` protocols instead.
+- The `irc.timeoutMs` configuration setting has been removed.
+- The edit mode syntax now uses `*** Edit File:`, `*** Find`, and `*** Replace` headers instead of `SM:` headers.
+- Cancelling a process through `write` now requires an explicit `proc://<id>/kill` target; other write targets validate content normally.
+
+### Added
+
+- Added `omp://` documentation scopes for `find` and `omp find`. Search all embedded harness documentation with `omp://` or a specific document with `omp://<file>.md`; results are returned as canonical URLs that `read` can open, including range selectors.
+- Added extension support for ephemeral, `/btw`-style side turns through `ctx.runEphemeralTurn()`, with optional tool suppression and output/context limits without adding the turn to session history.
+- Added background job and service management through the `wait` tool and `proc://` URLs, including supervised services in `bash` and direct agent messaging through `agent://` write targets.
+- Added `*** Insert Before` and `*** Insert After` edit operations for adding lines without replacing existing code.
+- Added the `toks` command for offline token counting, including support for Jev (TypeSafe Jev 1.13) encodings.
+- Added automatic discovery of Apple Foundation Models on supported Apple silicon devices.
+- Added `/changelog last [N]` for viewing the latest release or a selected number of recent releases.
+- Added terminal-based OAuth authentication with `omp login`, including browser-assisted login, account and organization details, and automatic model discovery refresh. Added provider support for `org-scoped-identity`, `oauth-token-env`, and per-account OAuth priority/reserve policies through `auth.accountPolicies`, with policy state shown by `omp usage`.
+- Added the `daybreak` badge to `omp usage` for enabled accounts.
+- Added `/export` and `/usage` to focused subagent views for exporting a focused transcript and viewing account usage without returning to the main session.
+- Pasted clipboard images are now saved in the session artifact directory, allowing agents to read, copy, or upload them by file path.
+- Added `/annotate` for attaching notes to diffs, replies, session messages, files, or quoted text and inserting or sending those notes in prompts and reviews.
+- Added configurable MCP startup behavior through `MCP_STARTUP_TIMEOUT_MS`/`mcp.startupTimeoutMs` and `OMP_MCP_REQUIRE_READY=1`, allowing headless runs to require MCP servers to become ready before the first turn.
+- Added native judgment usage reporting, including error stop reasons and messages, and added `openrouter/~typesafe/jev-latest` as a native judge candidate.
+
 ### Changed
 
-- Extensions load faster on warm starts: their dependencies are no longer re-parsed on every launch ([#12908](https://github.com/can1357/oh-my-pi/pull/12908) by [@H4vC](https://github.com/H4vC)).
-- The first highlighted code block, bash preview, or diff no longer stalls the screen while syntax highlighting initializes ([#12908](https://github.com/can1357/oh-my-pi/pull/12908) by [@H4vC](https://github.com/H4vC)).
+- Session compaction now supports native Anthropic snapshot branches and rewinds.
+- The default `bash.autoBackground.strategy` is now `catalog`.
+- The `Launch` configuration group has been renamed to `Services`.
+- Terminal OAuth behavior is now consistent between `omp login` and `omp auth-broker login`.
+- Judgment fallback now uses only native candidates, preventing prompted models from replacing failed native judges.
+- Browser screenshot comparisons now tolerate minor rasterizer differences.
+
+### Fixed
+
+- Fixed credential-aware API key resolution during authentication rotation.
+- Fixed comma-separated line selectors in `read`, `grep` paths, and `fetch`; selectors now read the requested range, while a bare number selects only that line.
+- Fixed `write` reporting JavaScript character counts instead of UTF-8 byte counts.
+- Fixed background job and service status reporting, including incorrect durations, reused job IDs, stale logs after named-service restarts, and foreground calls incorrectly appearing as background jobs.
+- Fixed `wait` and agent messaging so completed subagent results and peer messages are delivered reliably, including when a wait is interrupted by an incoming message.
+- Fixed headless print mode dropping or silently ignoring MCP servers that start slowly; it now waits within the configured timeout and warns when a server is not ready.
+- Fixed reader-mode `fetch` sending inline SVG icons and base64 images as unreadable model input; alt text is retained instead.
+- Fixed long non-Latin judged TTSR output exceeding token limits by applying token-aware truncation.
+
+## [18.2.11] - 2026-09-23
+
+### Fixed
+
+- Fixed nested `eval` Todo updates not being reflected by the Todo tracker, including cases where a cell fails after committing an update.
+- Fixed strict-mode structured-output validation for JSON Schemas without a root `type`, preserving their `items` and `required` keywords.
+- Improved streamed TTSR whole-buffer matching to avoid repeated scans from the beginning of the buffer.
+- Fixed plural browser queries when compiled binaries provide shallow stack traces.
+- Fixed browser `tab.fill` timing out on pages whose animation frames stall.
+- Fixed the first LSP diagnostics request returning no results while a newly started language server is still analyzing.
+- `/shake thinking` now reports the number of tokens freed.
 
 ## [18.2.10] - 2026-09-22
 
@@ -2026,3 +2079,4 @@
 
 Older entries are archived in [packages/coding-agent/CHANGELOG.md@48b07e000c63](https://github.com/can1357/oh-my-pi/blob/48b07e000c630f9f071eec6ad4d5580a898bb8dd/packages/coding-agent/CHANGELOG.md).
 Older entries are archived in [packages/coding-agent/CHANGELOG.md@da359efe2858](https://github.com/can1357/oh-my-pi/blob/da359efe2858f68baa4ae290574c7c4c9c8da3c3/packages/coding-agent/CHANGELOG.md).
+Older entries are archived in [packages/coding-agent/CHANGELOG.md@3642216898e4](https://github.com/can1357/oh-my-pi/blob/3642216898e473f6a4472e78f792e641891c6d62/packages/coding-agent/CHANGELOG.md).

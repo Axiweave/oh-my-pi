@@ -56,7 +56,7 @@ describe("AgentSession implementation review", () => {
 	beforeAll(async () => {
 		authDir = TempDir.createSync("@pi-impl-review-auth-");
 		authStorage = await AuthStorage.create(authDir.join("auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, authDir.join("models.yml"));
 	});
 

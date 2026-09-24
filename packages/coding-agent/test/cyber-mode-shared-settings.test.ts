@@ -34,7 +34,7 @@ describe("cyber protection on configuration state shared by several sessions", (
 		registryDir = path.join(os.tmpdir(), `pi-cyber-shared-settings-${Snowflake.next()}`);
 		fs.mkdirSync(registryDir, { recursive: true });
 		authStorage = await AuthStorage.create(path.join(registryDir, "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(registryDir, "models.yml"));
 	});
 

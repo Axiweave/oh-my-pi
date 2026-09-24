@@ -48,8 +48,8 @@ describe("advisor runtime model under cyber mode protection", () => {
 
 	beforeAll(() => {
 		authStorage = createInMemoryAuthStorage();
-		authStorage.setRuntimeApiKey(slowChainHit.provider, "test-key");
-		authStorage.setRuntimeApiKey(allowlisted.provider, "test-key");
+		authStorage.keys.setRuntime(slowChainHit.provider, "test-key");
+		authStorage.keys.setRuntime(allowlisted.provider, "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.2.10` on 2026-09-22.
+**Reviewed against:** `v18.3.0` on 2026-09-23.
 
 ## Maintenance
 
@@ -28,7 +28,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Keep each prompt unique globally while preserving its membership and latest metadata in every recorded working directory.
 - **Decision:** Omit transient lifecycle commands and non-interactive `/mcp add` arguments from persisted prompt history.
 - **Why:** Local-first results remove unrelated project prompts. The filter also removes stale actions and protects credentials in MCP command arguments.
-- **Key paths:** `packages/coding-agent/src/session/history-storage.ts`, `packages/coding-agent/src/modes/components/history-search.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/modes/controllers/input-controller.ts`.
+- **Key paths:** `packages/coding-agent/src/session/history-storage.ts`, `packages/tui/src/overlays/history-search.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/modes/controllers/input-controller.ts`.
 - **Checks:** `packages/coding-agent/test/history-storage-search.test.ts`, `packages/coding-agent/test/history-storage-sqlite-compat.test.ts`, `packages/coding-agent/test/modes/components/history-search.test.ts`, `packages/coding-agent/test/keybindings-selector-navigation.test.ts`, `packages/coding-agent/test/slash-commands/history-security.test.ts`, and `packages/coding-agent/test/input-controller-slash-history.test.ts`.
 
 ### Debate plan workflow with implementation review
@@ -74,7 +74,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Publish `session_state_changed` (`idle`, `working`, `needs-input`, `done`, `failed`) to the IDE MCP server at turn and modal-dialog boundaries, and re-announce it after every reconnect. Only the main session publishes: focusing a subagent sends nothing, and returning to main or closing an idle dialog re-announces how the main session's last turn ended instead of a blanket `idle`.
 - **Decision:** Carry the session working directory in every `session_state_changed` payload, and republish the unchanged state when the directory moves (`/wt`, `/move`, persistent `!cd`, cross-project `/resume`), so the editor can relabel a running session instead of showing its start directory.
 - **Why:** The model needs current editor context even when the editor or its endpoint restarts, and the editor needs the exact agent state instead of terminal-output guesses.
-- **Key paths:** `packages/coding-agent/src/discovery/ide.ts`, `packages/coding-agent/src/mcp/config.ts`, `packages/coding-agent/src/mcp/manager.ts`, `packages/coding-agent/src/mcp/ide-selection.ts`, `packages/coding-agent/src/session/ide-selection-reminder.ts`, `packages/coding-agent/src/modes/components/status-line/segments.ts`, `packages/coding-agent/src/mcp/ide-state.ts`, `packages/coding-agent/src/modes/controllers/event-controller.ts`, `packages/coding-agent/src/modes/controllers/extension-ui-controller.ts`, and `packages/coding-agent/src/modes/controllers/session-focus-controller.ts`.
+- **Key paths:** `packages/coding-agent/src/discovery/ide.ts`, `packages/coding-agent/src/mcp/config.ts`, `packages/coding-agent/src/mcp/manager.ts`, `packages/coding-agent/src/mcp/ide-selection.ts`, `packages/coding-agent/src/session/ide-selection-reminder.ts`, `packages/tui/src/status-line/segments.ts`, `packages/coding-agent/src/mcp/ide-state.ts`, `packages/coding-agent/src/modes/controllers/event-controller.ts`, `packages/coding-agent/src/modes/controllers/extension-ui-controller.ts`, and `packages/coding-agent/src/modes/controllers/session-focus-controller.ts`.
 - **Checks:** `packages/coding-agent/test/discovery/ide.test.ts`, `packages/coding-agent/test/mcp-manager-ide-reconnect.test.ts`, `packages/coding-agent/test/mcp/ide-selection.test.ts`, `packages/coding-agent/test/ide-selection-reminder.test.ts`, `packages/coding-agent/test/ide-selection-segment.test.ts`, `packages/coding-agent/test/mcp/ide-state.test.ts`, `packages/coding-agent/test/modes/controllers/event-controller-ide-state.test.ts`, `packages/coding-agent/test/modes/controllers/extension-ui-controller-ide-state.test.ts`, and `packages/coding-agent/test/modes/controllers/ide-state-approval.test.ts`.
 
 ### Pinned composer
@@ -85,7 +85,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Use the current chrome height for history retirement. Save displaced command and tool rows before clipping the viewport.
 - **Why:** A stable input position reduces visual movement in long sessions.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
-- **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/coding-agent/test/composer-inline-shrink.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
+- **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/tui/test/composer-inline-shrink.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
 
 ### Full assistant text during streaming
 
@@ -127,7 +127,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Keep the streaming write-tool preview at a constant height.
 - **Why:** Stable preview geometry prevents the composer and transcript from moving during streamed arguments.
 - **Key path:** `packages/tui/src/tools/write.ts`.
-- **Checks:** `packages/coding-agent/test/write-streaming-incremental.test.ts` and `packages/coding-agent/test/write-streaming-preview-expand.test.ts`.
+- **Checks:** `packages/tui/test/write-streaming-incremental-render.test.ts` and `packages/coding-agent/test/write-streaming-preview-expand.test.ts`.
 
 ### Image identity keyed on content
 
@@ -172,7 +172,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Preserve command images and queue modes during compaction replay, including mixed and command-only queues.
 - **Why:** Editors such as claude-code-ide.el drive the composer through these packets instead of terminal keystrokes, and a command queued for the next yield must stay visible and reach the message body. Upstream has no packet intake, no leading-command editor API, and no recognition ranges.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/tui/src/prompt/queue-input.ts`, `packages/tui/src/prompt/custom-editor.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/components/editor.ts`, and `packages/tui/src/autocomplete.ts`.
-- **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/coding-agent/test/modes/components/custom-editor.test.ts`, `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`, `packages/coding-agent/test/input-controller-skill-queue.test.ts`, and `packages/tui/test/editor.test.ts`.
+- **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/tui/test/custom-editor.test.ts`, `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`, `packages/coding-agent/test/input-controller-skill-queue.test.ts`, and `packages/tui/test/editor.test.ts`.
 
 ### OSC 133 prompt markers on submitted messages
 

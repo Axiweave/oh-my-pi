@@ -28,7 +28,7 @@ describe("cyber mode across session startup", () => {
 	beforeAll(async () => {
 		sharedDir = TempDir.createSync("@pi-cyber-session-shared-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.yml"));
 	});
 
