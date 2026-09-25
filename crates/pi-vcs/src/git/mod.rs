@@ -230,15 +230,18 @@ fn resolve_info(
 /// Parse the `gitdir: <path>` pointer written into linked-worktree `.git`
 /// files.
 fn parse_gitdir_pointer(content: &str) -> Option<&str> {
-	let rest = content.trim().strip_prefix("gitdir:")?;
-	let target = rest.trim();
+	let rest = content.strip_prefix("gitdir:")?;
+	let target = rest
+		.strip_prefix(' ')
+		.unwrap_or(rest)
+		.trim_end_matches(['\r', '\n']);
 	(!target.is_empty()).then_some(target)
 }
 
 fn resolve_common_dir(git_dir: &Path) -> PathBuf {
 	match read_optional(&git_dir.join("commondir")) {
 		Some(content) => {
-			let relative = content.trim();
+			let relative = content.trim_end_matches(['\r', '\n']);
 			if relative.is_empty() {
 				git_dir.to_owned()
 			} else {
@@ -361,17 +364,6 @@ mod tests {
 	}
 
 	#[test]
-	fn gitdir_pointer_parsing() {
-		assert_eq!(
-			parse_gitdir_pointer("gitdir: /a/b/.git/worktrees/x\n"),
-			Some("/a/b/.git/worktrees/x")
-		);
-		assert_eq!(parse_gitdir_pointer("gitdir:../relative"), Some("../relative"));
-		assert_eq!(parse_gitdir_pointer("not a pointer"), None);
-		assert_eq!(parse_gitdir_pointer("gitdir:   "), None);
-	}
-
-	#[test]
 	fn discovery_ignores_an_empty_dot_git_directory() {
 		let temp = tempfile::tempdir().unwrap();
 		let fence = temp.path().join("fence");
@@ -439,28 +431,66 @@ mod tests {
 		);
 	}
 
+	// Invariant: discovery agrees with Git on exact metadata identity, including
+	// lookalikes.
 	#[test]
-	fn discovery_accepts_a_linked_worktree_gitfile() {
+	fn discovery_preserves_worktree_metadata_whitespace() {
 		let temp = tempfile::tempdir().unwrap();
 		let main = temp.path().join("main");
-		fs::create_dir_all(&main).unwrap();
-		run_git(&main, &["init", "-q", "-b", "main"]);
+		let store = temp.path().join("store\u{a0}");
+		run_git(temp.path(), &[
+			"init",
+			"-q",
+			"-b",
+			"main",
+			"--separate-git-dir",
+			store.to_str().unwrap(),
+			main.to_str().unwrap(),
+		]);
 		run_git(&main, &["config", "user.name", "VCS Test"]);
 		run_git(&main, &["config", "user.email", "vcs@example.com"]);
 		run_git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
-		let linked = temp.path().join("linked");
-		run_git(&main, &["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "wt"]);
-		assert!(linked.join(".git").is_file(), "linked worktree `.git` is a gitfile");
-
-		let info = discover_info(&linked).unwrap().expect("linked worktree");
-		assert_eq!(info.repo_root, std::path::absolute(&linked).unwrap());
-		assert!(info.head_path.is_file());
-		assert_ne!(info.git_dir, info.common_dir);
-		assert!(
-			GitRepo::discover(&linked)
-				.unwrap()
-				.unwrap()
-				.is_linked_worktree()
-		);
+		let mut roots = Vec::new();
+		// Create Unicode endings before the plain name can mask a trimmed-pointer
+		// failure.
+		for suffix in ["\u{a0}", "\u{2002}", " ", ""] {
+			let linked = temp.path().join(format!("linked{suffix}"));
+			run_git(&main, &["worktree", "add", "-q", "--detach", linked.to_str().unwrap()]);
+			roots.push(linked);
+			for root in &roots {
+				let output = Command::new("git")
+					.args(["rev-parse", "--absolute-git-dir"])
+					.current_dir(root)
+					.output()
+					.unwrap();
+				assert!(output.status.success());
+				let expected = PathBuf::from(
+					String::from_utf8(output.stdout)
+						.unwrap()
+						.trim_end_matches(['\r', '\n']),
+				);
+				let pointer = fs::read_to_string(root.join(".git")).unwrap();
+				for ending in ["\n", "\r\n"] {
+					fs::write(
+						root.join(".git"),
+						format!("{}{ending}", pointer.trim_end_matches(['\r', '\n'])),
+					)
+					.unwrap();
+					fs::write(expected.join("commondir"), format!("{}{ending}", store.display()))
+						.unwrap();
+					let info = discover_info(root).unwrap().expect("registered worktree");
+					assert_eq!(info.repo_root, std::path::absolute(root).unwrap());
+					assert_eq!(info.git_dir, expected);
+					assert_eq!(info.common_dir, store);
+					assert!(info.head_path.is_file());
+					assert!(
+						GitRepo::discover(root)
+							.unwrap()
+							.unwrap()
+							.is_linked_worktree()
+					);
+				}
+			}
+		}
 	}
 }
