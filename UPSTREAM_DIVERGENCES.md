@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.3.0` on 2026-09-23.
+**Reviewed against:** `v18.3.1` on 2026-09-25.
 
 ## Maintenance
 
@@ -62,7 +62,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Use `tui.workingTimerMinSeconds` (default: `0`) to delay the timer. Hide it when the status brand already shows one.
 - **Decision:** Keep the working-row suffix order tok/s readout, session title, turn timer. The readout comes from upstream's `composer.tokenRate` (default off); the timer keeps its own gating beside it.
 - **Why:** Users need turn duration when the selected footer omits the status brand.
-- **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/utils/src/format.ts`.
+- **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/modes/settings.ts`, and `packages/utils/src/format.ts`.
 - **Checks:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts` and `packages/utils/test/format.test.ts`.
 
 ### IDE selection and open-file context
@@ -94,7 +94,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Preserve existing shell history on startup. Shutdown appends the unretired tail without clearing or replaying accepted history.
 - **Decision:** Use row-pressure retirement by default, with capacity based on current chrome. A live append-only head retires finished rows to native history in one batch per cycle.
 - **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
-- **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/config/settings-schema.ts`, and `packages/tui/src/tui.ts`.
+- **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/modes/settings.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts` and `packages/tui/test/history-frame-plan.test.ts`.
 
 ### Collapsed command cards
@@ -104,7 +104,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Gate both card kinds at render time with `display.collapseCommandCards` (default on).
 - **Decision:** Preserve compact command cards for steering and follow-up messages. Queue labels and restored drafts use the original command and arguments.
 - **Why:** The transcript should show the submitted command without repeating expanded template text.
-- **Key paths:** `packages/coding-agent/src/config/prompt-templates.ts`, `packages/coding-agent/src/extensibility/slash-commands.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/chat/user-message.ts`, `packages/tui/src/chat/chat-transcript-builder.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
+- **Key paths:** `packages/coding-agent/src/config/prompt-templates.ts`, `packages/coding-agent/src/extensibility/slash-commands.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/chat/user-message.ts`, `packages/tui/src/chat/chat-transcript-builder.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/modes/settings.ts`.
 - **Checks:** `packages/coding-agent/test/agent-session-command-card.test.ts` and `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`.
 
 ### Emacs-hosted resize behavior
@@ -119,7 +119,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Keep `terminal.reportCwd` disabled by default. Only the active interactive TUI sends OSC 7 directory reports.
 - **Decision:** Report startup, successful main-process directory changes, and live enable transitions. Use tmux passthrough when needed.
 - **Why:** Ghostel must follow OMP directory changes without changing the parent shell's directory or adding bytes to non-interactive output.
-- **Key paths:** `packages/utils/src/dirs.ts`, `packages/coding-agent/src/utils/terminal-directory.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
+- **Key paths:** `packages/utils/src/dirs.ts`, `packages/coding-agent/src/utils/terminal-directory.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/coding-agent/src/modes/settings.ts`.
 - **Checks:** `packages/utils/test/dirs.test.ts`, `packages/coding-agent/test/terminal-directory.test.ts`, and source CLI checks in Ghostel with direct and tmux output.
 
 ### Constant write preview height
@@ -153,7 +153,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Resolve compaction settings per active model through `compaction.modelOverrides` selector patterns. An exact `provider/id` key wins, else the first matching wildcard in declaration order.
 - **Decision:** A matching override replaces the whole threshold policy (`thresholdTokens`, `thresholdPercent`, `reserveTokens`); it never merges into the global group.
 - **Why:** One global threshold cannot fit models with very different context windows.
-- **Key paths:** `packages/coding-agent/src/session/compaction-methods.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
+- **Key paths:** `packages/coding-agent/src/session/context-settings.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, and `packages/coding-agent/src/session/session-advisors.ts`.
 - **Checks:** `packages/coding-agent/test/compaction-model-overrides.test.ts` and `packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts`.
 
 ### Native JJ snapshot contract test
@@ -193,16 +193,9 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Decision:** Send print/RPC startup warnings to stderr at CLI session creation. Publish ACP warnings after registration, excluding temporary-session transitions.
 - **Decision:** Keep protection on shared configuration state. An implicit clear removes only its owner's claim. An explicit operator switch-off clears all claims.
 - **Decision:** Apply installed membership checks to background overrides, fallback traversal, and dispatch. A retained callback re-checks protection before it dispatches, and a session that shares another session's protection stays constrained while its own indicator is off.
-- **Why:** Upstream has no way to keep a session off the models a provider blocks for security work. An upstream merge would drop the filtering, the switch guard, the `cyber` status-line segment, and the lifecycle rules.
+- **Why:** Operators need to restrict cyber work to approved models. This allowlist does not bypass provider safety restrictions. Preserve the filtering, switch guard, `cyber` status-line segment, and lifecycle rules.
 - **Key paths:** `packages/coding-agent/src/config/cyber-mode.ts`, `packages/coding-agent/src/config/model-resolver.ts`, `packages/coding-agent/src/config/settings.ts`, `packages/coding-agent/src/config/model-roles.ts`, `packages/coding-agent/src/session/model-controls.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/session/turn-recovery.ts`, `packages/coding-agent/src/session/session-advisors.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, `packages/coding-agent/src/eval/completion-bridge.ts`, `packages/coding-agent/src/tiny/online-candidates.ts`, `packages/coding-agent/src/judgment/index.ts`, `packages/coding-agent/src/mnemopi/backend.ts`, `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/modes/components/status-line/segments.ts`, `packages/coding-agent/src/slash-commands/builtin-modes.ts`, and `docs/cyber-mode.md`.
 - **Checks:** `packages/coding-agent/test/cyber-mode.test.ts`, `packages/coding-agent/test/cyber-mode-session.test.ts`, `packages/coding-agent/test/cyber-mode-shared-settings.test.ts`, `packages/coding-agent/test/cyber-switch-guard.test.ts`, `packages/coding-agent/test/agent-session-retry-fallback.test.ts`, `packages/coding-agent/test/eval/completion-bridge.test.ts`, `packages/coding-agent/test/online-tiny-candidates.test.ts`, `packages/coding-agent/test/judgment/index.test.ts`, `packages/coding-agent/test/compaction-cyber-candidates.test.ts`, `packages/coding-agent/test/compaction-cyber-dispatch.test.ts`, `packages/coding-agent/test/main-cyber-warnings.test.ts`, `packages/coding-agent/test/status-line-cyber.test.ts`, and `packages/coding-agent/test/slash-commands/cyber.test.ts`.
-
-### Legacy pi specifier shim re-entrancy
-
-- **Decision:** Stand the legacy pi specifier shim down while it resolves a specifier through Bun itself.
-- **Why:** A canonical `@oh-my-pi/pi-*` specifier that carries a subpath missed the package-root override and reached `Bun.resolveSync`, which dispatched the same handler again. Each pass prefixed another `file:`, so the path grew until it failed with `NameTooLong reading "file:file:…"`. A lazy `require` of the model hub runs on exactly that path, so the runaway took interactive rendering down. Upstream v18.2.5 and v18.2.6 still carry the bug (upstream issue #12293, open, no merged fix).
-- **Key path:** `packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts`.
-- **Checks:** `packages/coding-agent/test/extensibility/legacy-pi-canonical-subpath-reentrancy.test.ts`.
 
 ### CLIProxyAPI catalog discovery
 

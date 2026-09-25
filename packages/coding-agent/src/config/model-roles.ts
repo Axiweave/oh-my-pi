@@ -14,6 +14,8 @@ import { isValidThemeColor } from "@oh-my-pi/pi-tui/theme";
 import { validateCyberMode } from "./cyber-mode";
 import type { Settings } from "./settings";
 
+import { cfgCycleOrder, cfgModelProfile, cfgModelProfiles, cfgModelTags } from "./model-settings";
+
 /** Canonical prefix for a configured model role selector. */
 export const MODEL_ROLE_ALIAS_PREFIX = "@";
 
@@ -120,9 +122,9 @@ export function getKnownRoleIds(settings: Settings): string[] {
 		roles.push(role);
 	};
 
-	for (const role of settings.get("cycleOrder")) addRole(role);
+	for (const role of cfgCycleOrder.get(settings)) addRole(role);
 	for (const role in settings.getModelRoles()) addRole(role);
-	for (const role in settings.get("modelTags")) addRole(role);
+	for (const role in cfgModelTags.get(settings)) addRole(role);
 
 	return roles;
 }
@@ -133,7 +135,7 @@ export function getKnownRoleIds(settings: Settings): string[] {
  */
 export function getRoleInfo(role: string, settings: Settings): RoleInfo {
 	const builtIn = isModelRole(role) ? MODEL_ROLES[role] : undefined;
-	const configuredTags = settings.get("modelTags");
+	const configuredTags = cfgModelTags.get(settings);
 	const configured = Object.hasOwn(configuredTags, role) ? configuredTags[role] : undefined;
 
 	if (configured) {
@@ -164,12 +166,12 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
  * already surfaces when you switch to it.
  */
 export function validateModelProfiles(settings: Settings, warn: (message: string) => void): void {
-	const active = settings.get("modelProfile")?.trim();
+	const active = cfgModelProfile.get(settings)?.trim();
 	if (active && !Object.hasOwn(settings.getModelProfiles(), active)) {
 		warn(`modelProfile '${active}' names no bundle in modelProfiles; ignoring it.`);
 	}
 
-	const profiles: unknown = settings.get("modelProfiles");
+	const profiles: unknown = cfgModelProfiles.get(settings);
 	if (profiles === undefined) return;
 	if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) {
 		warn("modelProfiles must be a mapping of profile names to role bundles.");

@@ -1405,7 +1405,6 @@ describe("Editor component", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.setBorderVisible(false);
 			editor.cursorOverride = "\x1b[35m~\x1b[0m";
-			editor.cursorOverrideWidth = 1;
 			editor.focused = true;
 			const width = 20;
 
@@ -1422,7 +1421,6 @@ describe("Editor component", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.setBorderVisible(false);
 			editor.cursorOverride = "\x1b[35m~\x1b[0m";
-			editor.cursorOverrideWidth = 1;
 			editor.focused = true;
 			const width = 20;
 
@@ -1439,7 +1437,6 @@ describe("Editor component", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.setBorderVisible(false);
 			editor.cursorOverride = "好";
-			editor.cursorOverrideWidth = 2;
 			editor.focused = true;
 			const width = 1;
 			editor.setText("a");
@@ -1471,7 +1468,6 @@ describe("Editor component", () => {
 			editor.setBorderVisible(false);
 			editor.setPromptGutter("> ");
 			editor.cursorOverride = "\x1b[35m~\x1b[0m";
-			editor.cursorOverrideWidth = 1;
 			editor.focused = true;
 			const width = 2;
 
@@ -1504,7 +1500,6 @@ describe("Editor component", () => {
 			editor.setBorderVisible(false);
 			editor.setPromptGutter("> ");
 			editor.cursorOverride = "好";
-			editor.cursorOverrideWidth = 2;
 			editor.focused = true;
 			const width = 2;
 
@@ -1522,7 +1517,6 @@ describe("Editor component", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.setBorderVisible(false);
 			editor.cursorOverride = "好";
-			editor.cursorOverrideWidth = 2;
 			editor.focused = true;
 			const width = 1;
 

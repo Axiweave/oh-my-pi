@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgTerminalReportCwd } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { startTerminalDirectoryReporting } from "@oh-my-pi/pi-coding-agent/utils/terminal-directory";
 import { getProjectDir, logger, setProjectDir, setTerminalHeadless } from "@oh-my-pi/pi-utils";
 
@@ -111,12 +112,12 @@ describe("terminal directory reporting", () => {
 	it("applies live enable and disable transitions", () => {
 		const settings = Settings.isolated();
 		start(settings);
-		settings.set("terminal.reportCwd", true);
+		cfgTerminalReportCwd.set(settings, true);
 		expect(output.map(decodeReport)).toEqual([protocolPath(source)]);
-		settings.set("terminal.reportCwd", false);
+		cfgTerminalReportCwd.set(settings, false);
 		setProjectDir(destination);
 		expect(output).toHaveLength(1);
-		settings.set("terminal.reportCwd", true);
+		cfgTerminalReportCwd.set(settings, true);
 		expect(output.map(decodeReport)).toEqual([protocolPath(source), protocolPath(getProjectDir())]);
 	});
 
@@ -125,8 +126,8 @@ describe("terminal directory reporting", () => {
 		const dispose = start(settings);
 		dispose();
 		setProjectDir(destination);
-		settings.set("terminal.reportCwd", false);
-		settings.set("terminal.reportCwd", true);
+		cfgTerminalReportCwd.set(settings, false);
+		cfgTerminalReportCwd.set(settings, true);
 		expect(output.map(decodeReport)).toEqual([protocolPath(source)]);
 	});
 

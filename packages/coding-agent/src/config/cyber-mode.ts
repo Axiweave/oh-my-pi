@@ -22,6 +22,7 @@ import {
 	resolveModelRoleValue,
 } from "./model-resolver";
 import type { Settings } from "./settings";
+import { cfgCyberMode, cfgCyberModels } from "./model-settings";
 
 /**
  * Owner recorded for protection installed from configuration rather than by a
@@ -159,14 +160,14 @@ export function resolveCyberAllowlist(
 	settings: Settings,
 	availableModels: Model<Api>[],
 ): ResolvedCyberAllowlist | undefined {
-	const findings = inspectCyberModels(settings.get("cyberModels"), availableModels, settings);
+	const findings = inspectCyberModels(cfgCyberModels.get(settings), availableModels, settings);
 	if (findings.notAList || findings.declared.length === 0) return undefined;
 	return resolveAllowlistFrom(findings, availableModels, settings);
 }
 
 /** Prepare an enable, naming the refusal when the configuration cannot support one. */
 export function prepareCyberMode(settings: Settings, availableModels: Model<Api>[]): CyberEnableResult {
-	const findings = inspectCyberModels(settings.get("cyberModels"), availableModels, settings);
+	const findings = inspectCyberModels(cfgCyberModels.get(settings), availableModels, settings);
 	if (findings.declared.length === 0) return { ok: false, refusal: { reason: "empty" } };
 
 	const allowlist = resolveAllowlistFrom(findings, availableModels, settings);
@@ -377,7 +378,7 @@ export function validateCyberMode(
 	availableModels: Model<Api>[],
 	warn: (message: string) => void,
 ): void {
-	const findings = inspectCyberModels(settings.get("cyberModels"), availableModels, settings);
+	const findings = inspectCyberModels(cfgCyberModels.get(settings), availableModels, settings);
 	if (findings.notAList) warn("cyberModels must be a list of model selectors; ignoring it.");
 	for (const entry of findings.duplicates) {
 		warn(`cyberModels lists '${entry}' more than once; the repeat is ignored.`);
@@ -385,7 +386,7 @@ export function validateCyberMode(
 	for (const entry of findings.unresolved) {
 		warn(`cyberModels entry '${entry}' matches no available model; ignoring it.`);
 	}
-	if (settings.get("cyberMode") === true && !resolveCyberAllowlist(settings, availableModels)) {
+	if (cfgCyberMode.get(settings) === true && !resolveCyberAllowlist(settings, availableModels)) {
 		warn("cyberMode is on but no cyberModels entry resolves to an available model; starting with cyber mode off.");
 	}
 }
@@ -409,7 +410,7 @@ export function cyberRefusalMessage(refusal: CyberEnableRefusal): string {
  * Either way the caller leaves the recorded state off.
  */
 export function installStartupCyberMode(settings: Settings, availableModels: Model<Api>[]): CyberStartupStatus {
-	if (settings.get("cyberMode") !== true) return "off";
+	if (cfgCyberMode.get(settings) !== true) return "off";
 	const prepared = prepareCyberMode(settings, availableModels);
 	if (!prepared.ok) return "degraded";
 	settings.applyCyberRoles(CYBER_CONFIG_OWNER, prepared.allowlist);

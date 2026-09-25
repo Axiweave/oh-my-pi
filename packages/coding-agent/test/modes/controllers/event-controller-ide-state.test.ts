@@ -19,6 +19,8 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 
+import { cfgCompletionNotify, cfgErrorNotify } from "@oh-my-pi/pi-coding-agent/modes/settings";
+
 /** Shared fake `ide` MCP connection: `sent` collects `params.state` in call order. */
 function fakeIdeManager({
 	connected = true,
@@ -151,6 +153,7 @@ function makeTurnEndContext(
 		session,
 		viewSession,
 		mcpManager,
+		settings: Settings.instance,
 	} as unknown as InteractiveModeContext;
 }
 
@@ -233,8 +236,8 @@ describe("EventController IDE session-state publishing", () => {
 	});
 
 	it("publishes done regardless of desktop notification settings and the Warp CLI protocol gate", async () => {
-		settings.override("completion.notify", "off");
-		settings.override("error.notify", "off");
+		cfgCompletionNotify.override(settings, "off");
+		cfgErrorNotify.override(settings, "off");
 		process.env.WARP_CLI_AGENT_PROTOCOL_VERSION = "1";
 		const fake = fakeIdeManager();
 		const controller = new EventController(makeTurnEndContext(fake.manager));

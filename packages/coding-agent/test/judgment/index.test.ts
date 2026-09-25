@@ -3,6 +3,7 @@ import type { Api, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { resolveCyberAllowlist } from "../../src/config/cyber-mode";
 import type { ModelRegistry } from "../../src/config/model-registry";
+import { cfgCyberMode, cfgCyberModels } from "../../src/config/model-settings";
 import { Settings } from "../../src/config/settings";
 import { resolveJudge, type JudgeDeps } from "../../src/judgment";
 
@@ -22,7 +23,7 @@ function makeModel(provider: string, id: string): Model<Api> {
 }
 
 function installCyberAllowlist(settings: Settings, allowedSelectors: string[], catalog: Model<Api>[]): void {
-	settings.set("cyberModels", allowedSelectors);
+	cfgCyberModels.set(settings, allowedSelectors);
 	const allowlist = resolveCyberAllowlist(settings, catalog);
 	if (!allowlist) throw new Error("test setup: cyberModels did not resolve to an allowlist");
 	// Installed the way a sibling session or shared configuration would; this
@@ -37,7 +38,7 @@ describe("resolveJudge online fallback under cyber mode protection", () => {
 		const allowedOther = makeModel("p", "allowed-other");
 		const settings = Settings.isolated();
 		installCyberAllowlist(settings, ["p/allowed-other"], [excludedSession, allowedOther]);
-		expect(settings.get("cyberMode")).not.toBe(true);
+		expect(cfgCyberMode.get(settings)).not.toBe(true);
 		const apiKeySpy = vi.fn(async () => undefined);
 		const deps: JudgeDeps = {
 			settings,

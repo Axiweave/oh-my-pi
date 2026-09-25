@@ -9,6 +9,13 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
 import * as sessionColor from "@oh-my-pi/pi-tui/theme/session-color";
 import { adjustHsv, TempDir } from "@oh-my-pi/pi-utils";
 
+import {
+	cfgComposerStyleFooterMode,
+	cfgStatusLineSessionAccent,
+	cfgTuiWorkingTimer,
+	cfgTuiWorkingTimerMinSeconds,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
+
 type Harness = {
 	mode: InteractiveMode;
 	sessionManager: SessionManager;
@@ -103,7 +110,7 @@ afterAll(() => {
 describe("InteractiveMode working-message session accent cache", () => {
 	it("uses the loader spinner when the claude footer hides the status brand", async () => {
 		const { mode } = await createHarness("Claude footer session");
-		settings.override("composerStyle.footerMode", "claude3");
+		cfgComposerStyleFooterMode.override(settings, "claude3");
 		try {
 			mode.syncComposerShape();
 			startStableLoader(mode);
@@ -111,7 +118,7 @@ describe("InteractiveMode working-message session accent cache", () => {
 			expect(rendered.startsWith(`${theme.getSpinnerFrames()[0]}  `)).toBe(true);
 			expect(rendered).not.toContain(theme.icon.esc);
 		} finally {
-			settings.clearOverride("composerStyle.footerMode");
+			cfgComposerStyleFooterMode.clearOverride(settings);
 			mode.syncComposerShape();
 		}
 	});
@@ -195,12 +202,12 @@ describe("InteractiveMode working-message session accent cache", () => {
 		expect(renderLoader(mode)).toContain(accentAnsi);
 		expect(getHex).toHaveBeenCalledTimes(1);
 
-		settings.set("statusLine.sessionAccent", false);
+		cfgStatusLineSessionAccent.set(settings, false);
 		mode.loadingAnimation?.setMessage("Accent disabled");
 		expect(renderLoader(mode)).not.toContain(accentAnsi);
 		expect(getHex).toHaveBeenCalledTimes(1);
 
-		settings.set("statusLine.sessionAccent", true);
+		cfgStatusLineSessionAccent.set(settings, true);
 		mode.loadingAnimation?.setMessage("Accent enabled");
 		expect(renderLoader(mode)).toContain(accentAnsi);
 		expect(getHex).toHaveBeenCalledTimes(2);
@@ -228,7 +235,7 @@ describe("InteractiveMode working activity", () => {
 
 	it("docks the exact turn elapsed clock on the working row and hides it when the setting is off", async () => {
 		const { mode } = await createHarness("Timer session");
-		settings.override("composerStyle.footerMode", "claude3");
+		cfgComposerStyleFooterMode.override(settings, "claude3");
 		const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
 		try {
 			mode.syncComposerShape();
@@ -244,12 +251,12 @@ describe("InteractiveMode working activity", () => {
 			expect(row.endsWith("1h1m30s")).toBe(true);
 			expect(Bun.stringWidth(row)).toBe(120);
 
-			settings.override("tui.workingTimer", false);
+			cfgTuiWorkingTimer.override(settings, false);
 			mode.loadingAnimation?.setMessage("Timer off");
 			expect(Bun.stripANSI(renderLoader(mode))).not.toContain("1h1m30s");
 
-			settings.clearOverride("tui.workingTimer");
-			settings.override("tui.workingTimerMinSeconds", 30);
+			cfgTuiWorkingTimer.clearOverride(settings);
+			cfgTuiWorkingTimerMinSeconds.override(settings, 30);
 			now.mockReturnValue(1_000_000 + 29_000);
 			mode.loadingAnimation?.setMessage("Timer pending");
 			expect(Bun.stripANSI(renderLoader(mode))).not.toContain("29s");
@@ -258,9 +265,9 @@ describe("InteractiveMode working activity", () => {
 			expect(Bun.stripANSI(renderLoader(mode))).toContain("30s");
 		} finally {
 			mode.statusLine.markActivityEnd();
-			settings.clearOverride("tui.workingTimer");
-			settings.clearOverride("tui.workingTimerMinSeconds");
-			settings.clearOverride("composerStyle.footerMode");
+			cfgTuiWorkingTimer.clearOverride(settings);
+			cfgTuiWorkingTimerMinSeconds.clearOverride(settings);
+			cfgComposerStyleFooterMode.clearOverride(settings);
 			mode.syncComposerShape();
 		}
 	});

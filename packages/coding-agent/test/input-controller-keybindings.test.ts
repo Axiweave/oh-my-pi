@@ -1,11 +1,12 @@
 import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { SettingValue } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { cfgPlanKeybindingWorkflow } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { PlanWorkflow } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
@@ -38,6 +39,7 @@ type FakeEditor = {
 	setActionKeys(action: string, keys: string[]): void;
 	setCustomKeyHandler(key: string, handler: () => void): void;
 	clearCustomKeyHandlers(): void;
+	spaceHold: SpaceHoldGesture;
 	pasteText(text: string): void;
 	imageLinks?: (string | undefined)[];
 	pendingImages: ImageContent[];
@@ -49,7 +51,7 @@ type InputListenerResult = { consume: boolean } | undefined;
 type InputListener = (data: string) => InputListenerResult;
 
 interface CreateContextOptions {
-	planKeybindingWorkflow?: SettingValue<"plan.keybindingWorkflow">;
+	planKeybindingWorkflow?: typeof cfgPlanKeybindingWorkflow.default;
 	planModeEnabled?: boolean;
 	planModePaused?: boolean;
 	activePlanWorkflow?: PlanWorkflow;
@@ -71,9 +73,8 @@ async function createContext(options: CreateContextOptions = {}) {
 	let editorText = "";
 	const settings = Settings.isolated();
 	if (options.planKeybindingWorkflow !== undefined) {
-		settings.set("plan.keybindingWorkflow", options.planKeybindingWorkflow);
+		cfgPlanKeybindingWorkflow.set(settings, options.planKeybindingWorkflow);
 	}
-	vi.spyOn(settings, "set");
 	const keyMap: Record<string, KeyId[]> = {
 		"app.plan.toggle": ["alt+shift+p"],
 		"app.display.reset": ["alt+l"],
@@ -161,6 +162,7 @@ async function createContext(options: CreateContextOptions = {}) {
 		setActionKeys,
 		setCustomKeyHandler,
 		clearCustomKeyHandlers,
+		spaceHold: new SpaceHoldGesture(() => {}),
 		pendingImages: [],
 		pendingImageLinks: [],
 		clearDraft(historyText?: string) {
@@ -243,6 +245,7 @@ async function createContext(options: CreateContextOptions = {}) {
 		showUserMessageSelector: vi.fn(),
 		showSessionSelector: vi.fn(),
 		handleSTTToggle: vi.fn(),
+		dictationSpaceHold: vi.fn(),
 		showDebugSelector: vi.fn(),
 		showHistorySearch: vi.fn(),
 		toggleThinkingBlockVisibility: vi.fn(),

@@ -410,44 +410,7 @@ export class Composer implements TerminalFrameProvider {
 		const after: string[] = [];
 		const afterSpans: ViewportClickSpan[] = [];
 		for (const root of afterRoots) {
-			const start = after.length;
-			// Row targets usually nest one level down: chrome roots are plain
-			// containers (the HUD lives inside `subagentContainer`), and
-			// `Container.render` is a pure concatenation, so child spans tile
-			// the root span exactly. Render those children once and share the
-			// rows for composition and measurement — a second render per frame
-			// would duplicate render-time side effects (image placement
-			// registration). Roots with a custom render keep the composed
-			// output as the source of truth and measure up to the last target.
-			const plainContainer = root instanceof Container && root.render === Container.prototype.render;
-			const targets = root instanceof Container ? root.children : [root];
-			const resolves = targets.map(rowTargetCandidates);
-			const lastTarget = resolves.findLastIndex(resolve => resolve !== undefined);
-			if (plainContainer) {
-				let offset = start;
-				for (let index = 0; index < targets.length; index++) {
-					const childLines = targets[index]!.render(width);
-					after.push(...childLines);
-					if (index > lastTarget) continue;
-					const resolve = resolves[index];
-					if (resolve !== undefined && childLines.length > 0) {
-						afterSpans.push({ start: offset, end: offset + childLines.length, candidates: resolve });
-					}
-					offset += childLines.length;
-				}
-				continue;
-			}
-			after.push(...root.render(width));
-			if (lastTarget === -1) continue;
-			let offset = start;
-			for (let index = 0; index <= lastTarget; index++) {
-				const childLines = targets[index] === root ? after.length - start : targets[index]!.render(width).length;
-				const resolve = resolves[index];
-				if (resolve !== undefined && childLines > 0) {
-					afterSpans.push({ start: offset, end: offset + childLines, candidates: resolve });
-				}
-				offset += childLines;
-			}
+			this.#renderBelowRoot(root, width, after, afterSpans);
 		}
 		if (this.#preferences.streamingScrollback) {
 			const history = this.#streamingOffer
@@ -537,6 +500,52 @@ export class Composer implements TerminalFrameProvider {
 		for (const span of after) shift(span, afterBase);
 		this.#lastClickSpans = spans;
 		return spans;
+	}
+
+	/**
+	 * Append one below-transcript root's rows to `after`, recording click spans
+	 * for its row targets in `after` coordinates.
+	 *
+	 * Row targets usually nest one level down: chrome roots are plain
+	 * containers (the HUD lives inside `subagentContainer`), and
+	 * `Container.render` is a pure concatenation, so child spans tile the root
+	 * span exactly. Render those children once and share the rows for
+	 * composition and measurement — a second render per frame would duplicate
+	 * render-time side effects (image placement registration). Roots with a
+	 * custom render keep the composed output as the source of truth and measure
+	 * up to the last target.
+	 */
+	#renderBelowRoot(root: Component, width: number, after: string[], spans: ViewportClickSpan[]): void {
+		const start = after.length;
+		const plainContainer = root instanceof Container && root.render === Container.prototype.render;
+		const targets = root instanceof Container ? root.children : [root];
+		const resolves = targets.map(rowTargetCandidates);
+		const lastTarget = resolves.findLastIndex(resolve => resolve !== undefined);
+		if (plainContainer) {
+			let offset = start;
+			for (let index = 0; index < targets.length; index++) {
+				const childLines = targets[index]!.render(width);
+				after.push(...childLines);
+				if (index > lastTarget) continue;
+				const resolve = resolves[index];
+				if (resolve !== undefined && childLines.length > 0) {
+					spans.push({ start: offset, end: offset + childLines.length, candidates: resolve });
+				}
+				offset += childLines.length;
+			}
+			return;
+		}
+		after.push(...root.render(width));
+		if (lastTarget === -1) return;
+		let offset = start;
+		for (let index = 0; index <= lastTarget; index++) {
+			const childLines = targets[index] === root ? after.length - start : targets[index]!.render(width).length;
+			const resolve = resolves[index];
+			if (resolve !== undefined && childLines > 0) {
+				spans.push({ start: offset, end: offset + childLines, candidates: resolve });
+			}
+			offset += childLines;
+		}
 	}
 
 	/**

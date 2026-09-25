@@ -3,6 +3,8 @@ import type { CyberModeResult } from "@oh-my-pi/pi-coding-agent/session/agent-se
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { cfgCyberMode } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 beforeAll(async () => {
 	await initTheme(false);
@@ -20,8 +22,7 @@ function createRuntime(options?: {
 	const showError = vi.fn();
 	const invalidate = vi.fn();
 	const updateEditorBorderColor = vi.fn();
-	const set = vi.fn();
-	const setProjectCyberMode = vi.fn();
+	const settings = Settings.isolated({});
 	const allowed = options?.allowed ?? [];
 
 	let enabled = options?.enabled ?? false;
@@ -43,8 +44,7 @@ function createRuntime(options?: {
 		showStatus,
 		showError,
 		invalidate,
-		set,
-		setProjectCyberMode,
+		settings,
 		setCyberMode,
 		runtime: {
 			ctx: {
@@ -55,7 +55,7 @@ function createRuntime(options?: {
 				updateEditorBorderColor,
 				focusedAgentId: undefined,
 				ui: { requestRender: vi.fn() },
-				settings: { set, setProjectCyberMode },
+				settings,
 				session,
 			} as unknown as InteractiveModeContext,
 		},
@@ -74,8 +74,8 @@ describe("/cyber slash command", () => {
 				const output = h.showStatus.mock.lastCall?.[0];
 				for (const model of allowed) expect(output).toContain(model);
 			}
-			expect(h.set).not.toHaveBeenCalled();
-			expect(h.setProjectCyberMode).not.toHaveBeenCalled();
+			expect(cfgCyberMode.get(h.settings)).toBe(false);
+			expect(cfgCyberMode.provenance(h.settings)).toBe("default");
 		}
 	});
 
@@ -89,17 +89,14 @@ describe("/cyber slash command", () => {
 		expect(off.setCyberMode).toHaveBeenCalledWith(false);
 	});
 
-	it("persists the startup value to the requested scope", async () => {
-		const global = createRuntime();
-		await executeBuiltinSlashCommand("/cyber on global", global.runtime);
-		expect(global.setCyberMode).toHaveBeenCalledWith(true);
-		expect(global.set).toHaveBeenCalledWith("cyberMode", true);
-		expect(global.setProjectCyberMode).not.toHaveBeenCalled();
-
-		const project = createRuntime();
-		await executeBuiltinSlashCommand("/cyber on project", project.runtime);
-		expect(project.setProjectCyberMode).toHaveBeenCalledWith(true);
-		expect(project.set).not.toHaveBeenCalled();
+	it("stores the startup value in the requested settings layer", async () => {
+		for (const scope of ["global", "project"] as const) {
+			const h = createRuntime();
+			await executeBuiltinSlashCommand(`/cyber on ${scope}`, h.runtime);
+			expect(h.runtime.ctx.session.cyberMode).toBe(true);
+			expect(cfgCyberMode.get(h.settings)).toBe(true);
+			expect(cfgCyberMode.provenance(h.settings)).toBe(scope);
+		}
 	});
 
 	it("refuses an argument form the contract does not take, leaving the state alone", async () => {

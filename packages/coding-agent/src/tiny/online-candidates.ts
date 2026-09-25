@@ -10,6 +10,8 @@ import {
 	resolveRetryFallbackChainKey,
 } from "../session/retry-fallback-chains";
 
+import { cfgRetryFallbackChains, cfgRetryModelFallback } from "../session/settings";
+
 /** Role-resolved model used by online tiny tasks (auto-thinking, titles). */
 export interface OnlineTinyCandidate {
 	role: string;
@@ -132,7 +134,7 @@ export function collectOnlineTinyCandidates(
 	};
 
 	// Retain every role even if primaries coincide: their fallback chains can differ.
-	const fallbackEnabled = settings.get("retry.modelFallback") !== false;
+	const fallbackEnabled = cfgRetryModelFallback.get(settings) !== false;
 	const primaries: OnlineTinyCandidate[] = [];
 	for (const role of roles) {
 		const resolved = resolveRoleSelection([role], settings, availableModels);
@@ -143,7 +145,7 @@ export function collectOnlineTinyCandidates(
 	}
 	if (!fallbackEnabled) return out;
 
-	const configuredChains = settings.get("retry.fallbackChains");
+	const configuredChains = cfgRetryFallbackChains.get(settings);
 	if (!configuredChains || typeof configuredChains !== "object") return out;
 
 	const context = createFallbackContext(
@@ -184,9 +186,9 @@ export function expandOnlineTinyModelFallbacks(
 	const seen = new Set<string>([candidateKey(model)]);
 	const allowed = cyberAllowsModel(settings, model);
 	const out: OnlineTinyCandidate[] = allowed ? [{ role: "current", model }] : [];
-	if (settings.get("retry.modelFallback") === false) return allowed ? [model] : [];
+	if (cfgRetryModelFallback.get(settings) === false) return allowed ? [model] : [];
 
-	const configuredChains = settings.get("retry.fallbackChains");
+	const configuredChains = cfgRetryFallbackChains.get(settings);
 	if (!configuredChains || typeof configuredChains !== "object") return allowed ? [model] : [];
 
 	const context = createFallbackContext(configuredChains, settings, availableModels);

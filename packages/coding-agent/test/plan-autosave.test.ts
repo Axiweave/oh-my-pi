@@ -18,6 +18,8 @@ import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-m
 import type { PlanProposalHandler } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
+import { cfgPlanAutosave, cfgPlanEnabled } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
+
 let tempDir: TempDir | undefined;
 
 beforeEach(async () => {
@@ -48,10 +50,10 @@ describe("plan autosave settings UI", () => {
 		expect(autosave.condition()).toBe(true);
 		expect(autosaveDir.condition()).toBe(false);
 
-		Settings.instance.set("plan.autosave", true);
+		cfgPlanAutosave.set(Settings.instance, true);
 		expect(autosaveDir.condition()).toBe(true);
 
-		Settings.instance.set("plan.enabled", false);
+		cfgPlanEnabled.set(Settings.instance, false);
 		expect(autosave.condition()).toBe(false);
 		expect(autosaveDir.condition()).toBe(false);
 	});

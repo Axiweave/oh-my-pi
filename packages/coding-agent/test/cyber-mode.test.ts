@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { type Api, Effort, type Model, type ModelSpec } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
@@ -19,7 +21,10 @@ import {
 	resolveModelFromSettings,
 	resolveModelRoleValue,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { cfgModelProviderOrder, cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
 
 function makeModel(provider: string, id: string): Model<Api> {
 	const spec: ModelSpec<Api> = {
@@ -233,7 +238,7 @@ describe("cyber model identity boundaries", () => {
 				expect(primary && allowlist.keys.has(formatModelString(primary)), label).toBe(true);
 				settings.applyCyberRoles("identity-test", allowlist);
 				for (const order of [providerOrder, [...providerOrder].reverse()]) {
-					settings.override("modelProviderOrder", order);
+					cfgModelProviderOrder.override(settings, order);
 					const unfiltered = resolveModelRoleValue("shared-model:high", catalog, { settings });
 					if (unfiltered.model && allowlist.keys.has(formatModelString(unfiltered.model))) {
 						const filtered = resolveModelRoleValue(settings.getModelRole("candidate"), catalog, { settings });
@@ -305,9 +310,27 @@ describe("cyber allowlist inspection", () => {
 		expect(findings.unresolved).toEqual([UNKNOWN]);
 	});
 
-	test("reports a malformed value instead of coercing it", () => {
+	test("reports a malformed value instead of coercing it", async () => {
 		expect(inspectCyberModels("anthropic/claude-sonnet-5", MODELS).notAList).toBe(true);
-		expect(resolveCyberAllowlist(cyberSettings({ cyberModels: "not-a-list" }), MODELS)).toBeUndefined();
+
+		// A non-array `cyberModels` can no longer reach a live `Settings` instance
+		// through the typed registry (a constructor override or a handle write
+		// both reject it) — only a hand-edited config.yml lands one, so that is
+		// what this proves: the loader falls back to the default gracefully
+		// (compute()'s warn-once path) instead of crashing or coercing, and
+		// `resolveCyberAllowlist` reports nothing usable rather than the string.
+		const tempDir = TempDir.createSync("@pi-cyber-malformed-");
+		try {
+			const agentDir = tempDir.join("agent");
+			const cwd = tempDir.join("project");
+			fs.mkdirSync(agentDir, { recursive: true });
+			fs.mkdirSync(cwd, { recursive: true });
+			await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ cyberModels: "not-a-list" }));
+			const settings = await Settings.loadReadOnly({ cwd, agentDir });
+			expect(resolveCyberAllowlist(settings, MODELS)).toBeUndefined();
+		} finally {
+			tempDir.removeSync();
+		}
 	});
 
 	test("re-derives a chain whose alias target a later role layer repoints", () => {
@@ -441,7 +464,7 @@ describe("cyber role overlay on Settings", () => {
 		const settings = cyberSettings({ modelRoles: { default: "xai/grok-5" } });
 		settings.applyCyberRoles("session-1", allowlistOf(cyberSettings({ cyberModels: ["google/gemini-4"] })));
 
-		settings.override("modelRoles", { default: "openai/gpt-6,google/gemini-4" });
+		cfgModelRoles.override(settings, { default: "openai/gpt-6,google/gemini-4" });
 		expect(settings.getModelRoles().default).toBe("google/gemini-4");
 	});
 

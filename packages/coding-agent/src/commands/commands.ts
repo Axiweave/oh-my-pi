@@ -11,6 +11,7 @@ import { commandsHelp as commandHelp } from "../cli/command-help";
 import { loadPromptTemplates } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { setInvocationConfiguredExtensions } from "../discovery/omp-extension-roots";
+import { cfgDisabledExtensions, cfgExtensions, cfgSkills } from "../extensibility/settings";
 import { getSkillSlashCommandName, loadSkills } from "../extensibility/skills";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 
@@ -26,10 +27,10 @@ export async function discoverCommands(cwd: string, configFiles?: string[]): Pro
 	const agentDir = getAgentDir();
 	const settings = await Settings.init({ cwd, agentDir, configFiles });
 	initializeWithSettings(settings);
-	setInvocationConfiguredExtensions(settings.get("extensions") ?? [], settings.extensionsSourceLevel());
+	setInvocationConfiguredExtensions(cfgExtensions.get(settings), settings.extensionsSourceLevel());
 
-	const skillsSettings = settings.getGroup("skills");
-	const disabledExtensions = settings.get("disabledExtensions") ?? [];
+	const skillsSettings = cfgSkills.get(settings);
+	const disabledExtensions = cfgDisabledExtensions.get(settings);
 	const [skills, prompts, files] = await Promise.all([
 		skillsSettings.enabled !== false && skillsSettings.enableSkillCommands
 			? loadSkills({ ...skillsSettings, cwd, disabledExtensions }).then(r => r.skills)

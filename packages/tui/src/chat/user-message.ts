@@ -38,6 +38,8 @@ export interface UserBubbleOptions {
 	imageLinks?: readonly (string | undefined)[];
 	/** Agent-attributed input: dim, flat prose, and no OSC 133 prompt zone. */
 	synthetic?: boolean;
+	/** Delivered into the response that was streaming; marked `*` at the bubble's top-left. */
+	liveSteered?: boolean;
 	/** SKILL.md path for a skill chip by name; `undefined` leaves the chip unlinked. */
 	skillPath?: (name: string) => string | undefined;
 }
@@ -92,7 +94,8 @@ export function userBubbleColor(
 
 /**
  * Component that renders a user message. Accepts an agent reaction badge
- * (see {@link ReactionTarget}) drawn right-aligned in the bubble's top padding row.
+ * (see {@link ReactionTarget}) drawn right-aligned in the bubble's top padding row;
+ * a live-steered message carries a `*` marker left-aligned in the same row.
  */
 export class UserMessageComponent extends Container implements ReactionTarget {
 	// Memoized OSC 133 zone wrapping keyed on the underlying container render
@@ -102,6 +105,7 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 	#zoneSource: readonly string[] | undefined;
 	#zoneLines: string[] | undefined;
 	readonly #bgColor: (value: string) => string;
+	readonly #liveSteered: boolean;
 	#reaction: string | undefined;
 	readonly #synthetic: boolean;
 
@@ -122,6 +126,7 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 		});
 		const bgColor = (value: string) => theme.bg("userMessageBg", value);
 		this.#bgColor = bgColor;
+		this.#liveSteered = options.liveSteered === true;
 		const md = new Markdown(text, 1, 1, getMarkdownTheme(), {
 			bgColor,
 			color: userBubbleColor(options, composerTokenRegex(mentionLabels)),
@@ -136,10 +141,15 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 		this.#zoneLines = undefined;
 	}
 
-	/** The top padding row with the reaction badge right-aligned inside the horizontal padding. */
-	#reactionRow(width: number): string {
-		const emoji = this.#reaction!;
-		return applyBackgroundToLine(padding(width - 1 - visibleWidth(emoji)) + emoji, width, this.#bgColor);
+	/**
+	 * The top padding row: the live-steering marker left-aligned and the reaction
+	 * badge right-aligned, both inside the horizontal padding.
+	 */
+	#badgeRow(width: number): string {
+		const marker = this.#liveSteered ? theme.fg("accent", "*") : "";
+		const emoji = this.#reaction ?? "";
+		const gap = Math.max(0, width - 2 - visibleWidth(marker) - visibleWidth(emoji));
+		return applyBackgroundToLine(` ${marker}${padding(gap)}${emoji}`, width, this.#bgColor);
 	}
 
 	override render(width: number): readonly string[] {
@@ -151,7 +161,7 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 			return this.#zoneLines;
 		}
 		const wrapped = lines.slice();
-		if (this.#reaction !== undefined) wrapped[0] = this.#reactionRow(width);
+		if (this.#reaction !== undefined || this.#liveSteered) wrapped[0] = this.#badgeRow(width);
 		// Markdown has one padding row above and below, independent of reactions.
 		const firstContent = 1;
 		const lastContent = wrapped.length - 2;

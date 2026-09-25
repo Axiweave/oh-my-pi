@@ -29,6 +29,9 @@ import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import { setKeybindings, TERMINAL } from "@oh-my-pi/pi-tui";
 import { formatNumber, TempDir } from "@oh-my-pi/pi-utils";
 
+import { cfgPlanAutosave, cfgPlanAutosaveDir } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
+import { cfgAskNotify } from "@oh-my-pi/pi-coding-agent/modes/settings";
+
 /**
  * Matches the plan-approved synthetic-prompt dispatch. `#approvePlan` calls
  * `session.prompt(rendered, { synthetic: true })` exclusively for that case,
@@ -569,7 +572,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 	it("does not notify when ask.notify is off", async () => {
 		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
-		mode.session.settings.override("ask.notify", "off");
+		cfgAskNotify.override(mode.session.settings, "off");
 		try {
 			const choice = mode.showPlanReview("# Plan\n\nReady.", "Plan mode - next step", ["Approve"]);
 			expect(spy).not.toHaveBeenCalled();
@@ -1766,7 +1769,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await Bun.write(resolvedPlanPath, "# Plan\n\nAutosave me.");
 
 		await mode.handlePlanModeCommand();
-		session.settings.set("plan.autosave", true);
+		cfgPlanAutosave.set(session.settings, true);
 
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and execute");
 		vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
@@ -1793,10 +1796,10 @@ describe("InteractiveMode plan review rendering", () => {
 		await Bun.write(resolvedPlanPath, "# Plan\n\nAutosave me.");
 
 		await mode.handlePlanModeCommand();
-		session.settings.set("plan.autosave", true);
+		cfgPlanAutosave.set(session.settings, true);
 		const blocker = path.join(tempDir.path(), "blocker");
 		await Bun.write(blocker, "x");
-		session.settings.set("plan.autosaveDir", path.join(blocker, "sub"));
+		cfgPlanAutosaveDir.set(session.settings, path.join(blocker, "sub"));
 
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and execute");
 		vi.spyOn(mode, "handleClearCommand").mockResolvedValue();

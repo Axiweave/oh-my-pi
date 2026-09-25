@@ -32,6 +32,8 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
+import { cfgPlanImplReview } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
+
 function stubTool(name: string): AgentTool {
 	return {
 		name,
@@ -172,7 +174,7 @@ describe("InteractiveMode implementation review", () => {
 	});
 
 	it("a disabled plan.implReview keeps debate approval review-free", async () => {
-		session.settings.set("plan.implReview", false);
+		cfgPlanImplReview.set(session.settings, false);
 		const { executionPrompt } = await approveDebatePlan("local://toggle-plan.md", "# Toggle\n\nReviewed bytes.");
 
 		expect(session.getImplReviewState()).toBeUndefined();

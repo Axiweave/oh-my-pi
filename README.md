@@ -313,7 +313,7 @@ They trigger only in prose, not inside code spans, fenced code blocks, XML/HTML 
 Slash commands shift how a whole session runs:
 
 - `/vibe` — enter [Vibe mode](docs/vibe-mode.md): act as a director driving persistent `fast`/`good` worker sessions with a `read`-only toolset.
-- `/cyber` — toggle [Cyber mode](docs/cyber-mode.md): keep the session on the models your providers will not block for security work, resolve every role inside that list, and refuse switches outside it.
+- `/cyber` — toggle [Cyber mode](docs/cyber-mode.md): restrict cyber work to operator-approved models. Every role resolves inside the allowlist, and the session refuses switches outside it.
 - `/fresh` — reset the provider stream state (stale prompt cache, wedged stream) without changing the local transcript. See [Session operations](docs/session-operations-export-share-fork-resume.md#fresh).
 
 ## Sixty-plus providers, a thousand models, _one /model away_.
@@ -522,7 +522,7 @@ await session.prompt("list .ts files");
 
 `omp --mode rpc`
 
-For non-Node embedders, or when you want process isolation. NDJSON commands in, response and event frames out. `--mode rpc-ui` adds tool cards, selectors, and dialogs as `extension_ui_request` frames the host must answer.
+For non-Node embedders, or when you want process isolation. NDJSON commands in, response and event frames out; each prompt ends with its own `prompt_result`. `--mode rpc-ui` adds tool cards, selectors, and dialogs as `extension_ui_request` frames the host must answer; `--no-ui` keeps even extension dialogs off the wire for hosts with no UI.
 
 ```
 $ omp --mode rpc --no-session

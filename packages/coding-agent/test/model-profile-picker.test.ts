@@ -2,8 +2,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import {
+	cfgModelProfile,
+	cfgModelProfiles,
+	cfgModelProfileSwitchStyle,
+} from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let settingsState: SettingsTestState | undefined;
@@ -20,7 +26,7 @@ afterEach(() => {
 
 function harness(names = ["base", "work", "review"]) {
 	const settings = Settings.instance;
-	settings.override("modelProfiles", Object.fromEntries(names.map(name => [name, { default: `test/${name}` }])));
+	cfgModelProfiles.override(settings, Object.fromEntries(names.map(name => [name, { default: `test/${name}` }])));
 	const state = { activeModelProfile: names[0] as string | undefined };
 	const overlays: Array<{ title: string; handleInput(key: string): void; renderContent(width: number): string[] }> =
 		[];
@@ -32,6 +38,7 @@ function harness(names = ["base", "work", "review"]) {
 		setActionKeys: vi.fn(),
 		setCustomKeyHandler: vi.fn(),
 		clearCustomKeyHandlers: vi.fn(),
+		spaceHold: new SpaceHoldGesture(() => {}),
 		onCycleModelProfileForward: undefined as undefined | (() => Promise<void>),
 		onCycleModelProfileBackward: undefined as undefined | (() => Promise<void>),
 	};
@@ -83,6 +90,7 @@ function harness(names = ["base", "work", "review"]) {
 		showStatus,
 		showError: vi.fn(),
 		showModelCycleTrack: vi.fn(),
+		dictationSpaceHold: vi.fn(),
 	} as unknown as InteractiveModeContext;
 	const selector = new SelectorController(ctx);
 	ctx.showModelProfilePicker = () => selector.showModelProfilePicker();
@@ -116,7 +124,7 @@ describe("model profile keys", () => {
 		await h.closed[1];
 		expect(h.state.activeModelProfile).toBe("work");
 		expect(h.hide).toHaveBeenCalledTimes(2);
-		expect(h.settings.get("modelProfile")).toBe("");
+		expect(cfgModelProfile.get(h.settings)).toBe("");
 	});
 
 	it("cycles choices only with an empty search field", async () => {
@@ -203,7 +211,7 @@ describe("model profile keys", () => {
 
 	it("keeps the original forward and backward transitions in cycling style", async () => {
 		const h = harness();
-		h.settings.override("modelProfileSwitchStyle", "cycling");
+		cfgModelProfileSwitchStyle.override(h.settings, "cycling");
 		await h.editor.onCycleModelProfileForward!();
 		expect(h.state.activeModelProfile).toBe("work");
 		await h.editor.onCycleModelProfileBackward!();

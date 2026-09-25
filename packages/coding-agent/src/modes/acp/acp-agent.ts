@@ -43,7 +43,7 @@ import {
 	type SetSessionModeResponse,
 	type Usage,
 } from "@oh-my-pi/pi-utils/acp";
-import { disableProvider, enableProvider, reset as resetCapabilities } from "../../capability";
+import { disableProvider, enableProvider } from "../../capability";
 import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
@@ -54,8 +54,6 @@ import {
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
-import { loadSlashCommands } from "../../extensibility/slash-commands";
-import { resolveLocalUrlToPath } from "../../internal-urls";
 import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
@@ -82,7 +80,7 @@ import { DEFAULT_STT_MODEL_KEY, STT_MODELS } from "../../stt/models";
 import { refreshAgentDiscovery } from "../../task";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { OTHER_OPTION } from "../../tools/ask";
-import { normalizeLocalScheme } from "../../tools/path-utils";
+import { resolvePlanFilePath } from "../../plan-mode/plan-files";
 import type { PlanProposalContext } from "../../tools/resolve";
 import { DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS, TTS_LOCAL_VOICE_OPTIONS } from "../../tts/models";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
@@ -93,6 +91,9 @@ import {
 	normalizeReplayToolArguments,
 } from "./acp-event-mapper";
 import { ACP_TERMINAL_AUTH_FLAG } from "./terminal-auth";
+
+import { cfgDisabledExtensions } from "../../extensibility/settings";
+import { cfgPlanEnabled, cfgPlanImplReview } from "../../plan-mode/settings";
 
 const ACP_DEFAULT_MODE_ID = "default";
 const ACP_PLAN_MODE_ID = "plan";
@@ -1199,7 +1200,7 @@ export class AcpAgent implements Agent {
 			case "_omp/extensions": {
 				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
 				const sm = await Settings.init();
-				const disabledIds = (sm.get("disabledExtensions") as string[] | undefined) ?? [];
+				const disabledIds = cfgDisabledExtensions.get(sm);
 				const extensions = await loadAllExtensions(cwd, disabledIds);
 				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
 			}
@@ -1363,7 +1364,7 @@ export class AcpAgent implements Agent {
 	async #reconcileImplReview(session: AgentSession): Promise<void> {
 		const ctx = session.sessionManager.buildSessionContext();
 		if (ctx.mode !== "impl_review") return;
-		if (!session.settings.get("plan.enabled") || !session.settings.get("plan.implReview")) {
+		if (!cfgPlanEnabled.get(session.settings) || !cfgPlanImplReview.get(session.settings)) {
 			// The feature was toggled off: drop the stale contract instead of
 			// restoring an enforcement loop the user disabled.
 			session.sessionManager.appendModeChange("none");
@@ -1394,7 +1395,7 @@ export class AcpAgent implements Agent {
 		const ctx = session.sessionManager.buildSessionContext();
 		if (ctx.mode !== "plan" && ctx.mode !== "plan_paused") return;
 		const enabled = ctx.mode === "plan";
-		const restored = session.settings.get("plan.enabled") ? parsePlanModeState(ctx.modeData, enabled) : undefined;
+		const restored = cfgPlanEnabled.get(session.settings) ? parsePlanModeState(ctx.modeData, enabled) : undefined;
 		if (!restored) {
 			session.sessionManager.appendModeChange("none");
 			return;
@@ -1896,7 +1897,7 @@ export class AcpAgent implements Agent {
 
 	#getAvailableModes(session: AgentSession): Array<{ id: string; name: string; description: string }> {
 		const modes = [{ id: ACP_DEFAULT_MODE_ID, name: "Default", description: "Standard ACP headless mode" }];
-		if (session.settings.get("plan.enabled")) {
+		if (cfgPlanEnabled.get(session.settings)) {
 			modes.push(
 				{
 					id: ACP_PLAN_MODE_ID,
@@ -2069,7 +2070,7 @@ export class AcpAgent implements Agent {
 		session.setPlanModeState(undefined);
 		session.sessionManager.appendModeChange("none");
 		let implReviewStarted = false;
-		if (wasDebate && approval.consensusHash && session.settings.get("plan.implReview")) {
+		if (wasDebate && approval.consensusHash && cfgPlanImplReview.get(session.settings)) {
 			// The consensus hash was byte-validated moments earlier. Augment the
 			// execution toolset with the built-in `write` transport when missing so
 			// the implementation can be submitted; restoreTools returns the toolset
@@ -2158,14 +2159,13 @@ export class AcpAgent implements Agent {
 	}
 
 	#resolveAcpPlanFilePath(session: AgentSession, planFilePath: string): string {
-		if (planFilePath.startsWith("local:")) {
-			const normalized = normalizeLocalScheme(planFilePath);
-			return resolveLocalUrlToPath(normalized, {
+		return resolvePlanFilePath(planFilePath, {
+			localProtocolOptions: {
 				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 				getSessionId: () => session.sessionManager.getSessionId(),
-			});
-		}
-		return path.resolve(session.sessionManager.getCwd(), planFilePath);
+			},
+			cwd: session.sessionManager.getCwd(),
+		});
 	}
 
 	async #readAcpPlanFile(session: AgentSession, planFilePath: string): Promise<string | null> {
@@ -2282,9 +2282,20 @@ export class AcpAgent implements Agent {
 				return;
 			}
 			if (!record.lifetimeUnsubscribe) {
-				record.lifetimeUnsubscribe = record.session.subscribe(event => {
+				const unsubscribeEvents = record.session.subscribe(event => {
 					void this.#handleLifetimeEvent(record, event);
 				});
+				// Skills/commands rediscovery (live `skills.*`/`commands.*` edits, MCP
+				// prompts, manage_skill) re-advertises the palette.
+				const unsubscribeCommands = record.session.subscribeCommandMetadataChanged(() => {
+					void this.#emitAvailableCommandsUpdate(record).catch(error => {
+						logger.warn("Failed to emit ACP available commands update", { error: String(error) });
+					});
+				});
+				record.lifetimeUnsubscribe = () => {
+					unsubscribeEvents();
+					unsubscribeCommands();
+				};
 			}
 			void this.#emitBootstrapUpdates(sessionId, record);
 		}, ACP_BOOTSTRAP_RACE_GUARD_MS);
@@ -2333,13 +2344,7 @@ export class AcpAgent implements Agent {
 		const projectPath = await resolveActiveProjectRegistryPath(cwd);
 		clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 		await refreshAgentDiscovery(cwd, record.session.effectiveExtensionRoots);
-		resetCapabilities();
-		await record.session.refreshSkills();
-		const fileCommands = await loadSlashCommands({
-			cwd,
-			extensionRoots: record.session.effectiveExtensionRoots,
-		});
-		record.session.setSlashCommands(fileCommands);
+		await record.session.refreshSkillsAndCommands();
 		await this.#emitAvailableCommandsUpdate(record);
 	}
 

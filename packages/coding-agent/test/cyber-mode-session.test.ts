@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgCyberModels, cfgModelProviderOrder } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -468,7 +469,7 @@ describe("cyber mode across session startup", () => {
 			const created = await start({ settings, model: haiku });
 			const notices = subscribeCyberNotices(created.session);
 
-			settings.override("modelProviderOrder", ["openai", "anthropic"]);
+			cfgModelProviderOrder.override(settings, ["openai", "anthropic"]);
 
 			expect(settings.getModelRole("task")).toBe(`${haiku.provider}/${haiku.id}`);
 			expect(notices.some(message => message.includes("task") && message.includes(haiku.id))).toBe(true);
@@ -640,7 +641,7 @@ describe("cyber mode across session startup", () => {
 			const created = await start({ settings, model: haiku });
 			expect(created.session.cyberMode).toBe(true);
 
-			settings.override("cyberModels", declaration);
+			cfgCyberModels.override(settings, declaration);
 			const notices = subscribeCyberNotices(created.session);
 
 			await created.session.newSession();
@@ -664,7 +665,7 @@ describe("cyber mode across session startup", () => {
 		expect(created.session.model?.id).toBe(haiku.id);
 
 		// The declaration now allows only Sonnet: the previous allowlist member is excluded.
-		settings.override("cyberModels", [`${sonnet.provider}/${sonnet.id}`]);
+		cfgCyberModels.override(settings, [`${sonnet.provider}/${sonnet.id}`]);
 		const notices = subscribeCyberNotices(created.session);
 
 		await created.session.newSession();
@@ -767,7 +768,7 @@ describe("cyber mode across session startup", () => {
 				await created.session.setCyberMode(true);
 				const { modelChangeId, childMessageId } = appendCyberCheckpoint(created.session.sessionManager, true);
 				const declaration = configuredOwner ? ["anthropic/does-not-exist"] : [];
-				settings.override("cyberModels", declaration);
+				cfgCyberModels.override(settings, declaration);
 				const notices = subscribeCyberNotices(created.session);
 
 				if (method === "branch") await created.session.branch(childMessageId);
@@ -782,7 +783,7 @@ describe("cyber mode across session startup", () => {
 				if (!file) throw new Error("Expected the adopted branch to have a session file");
 				await created.session.dispose();
 				session = undefined;
-				settings.override("cyberModels", cyberModels);
+				cfgCyberModels.override(settings, cyberModels);
 				const reopened = await SessionManager.open(file, sessionDir);
 				expect(reopened.getLastCyberMode()).toBe(false);
 				const resumed = await start({ settings, sessionManager: reopened });
@@ -879,7 +880,7 @@ describe("cyber mode across session startup", () => {
 					const created = await start({ settings, sessionManager });
 					const previousId = sessionManager.getSessionId();
 					const notices = subscribeCyberNotices(created.session);
-					settings.override("cyberModels", declaration.models);
+					cfgCyberModels.override(settings, declaration.models);
 					await adoptTranscript(created.session, method);
 					expect(sessionManager.getSessionId()).not.toBe(previousId);
 					expect(created.session.cyberMode).toBe(declaration.enabled);

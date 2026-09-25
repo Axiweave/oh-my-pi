@@ -52,6 +52,13 @@ import {
 } from "@oh-my-pi/pi-utils/acp";
 import { TOOL_NAME as DELAYED_MCP_TOOL_NAME } from "./fixtures/delayed-tool-mcp";
 
+import {
+	cfgPlanAutosave,
+	cfgPlanAutosaveDir,
+	cfgPlanEnabled,
+	cfgPlanImplReview,
+} from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
+
 /** Validates an ACP wire payload against the in-house protocol schemas. */
 function expectAcpStructure(schema: Validator<unknown>, value: unknown): void {
 	const result = schema.safeParse(value);
@@ -147,9 +154,9 @@ class FakeAgentSession {
 	customMessageOptions: Array<{ streamingBehavior?: "steer" | "followUp"; queueChipText?: string } | undefined> = [];
 	skillsSettings = { enableSkillCommands: true };
 	skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
-	refreshSkillsCalls = 0;
-	async refreshSkills(): Promise<void> {
-		this.refreshSkillsCalls++;
+	async refreshSkillsAndCommands(): Promise<void> {}
+	subscribeCommandMetadataChanged(_listener: () => void): () => void {
+		return () => {};
 	}
 	planModeState: PlanModeState | undefined;
 	waitForIdleCalls = 0;
@@ -727,7 +734,7 @@ describe("ACP agent", () => {
 
 	it("advertises plan mode and emits schema-valid mode updates", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		expectAcpStructure(zNewSessionResponse, created);
@@ -802,7 +809,7 @@ describe("ACP agent", () => {
 
 	it("plan-proposal handler errors when the plan file is missing", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
@@ -823,7 +830,7 @@ describe("ACP agent", () => {
 
 	it("plan-proposal handler approves the agent-named plan and exits plan mode on submit", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
@@ -883,8 +890,8 @@ describe("ACP agent", () => {
 	});
 	it("plan-proposal handler autosaves the approved plan without leaking the path", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
-		Settings.instance.set("plan.autosave", true);
+		cfgPlanEnabled.set(Settings.instance, true);
+		cfgPlanAutosave.set(Settings.instance, true);
 
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
@@ -918,11 +925,11 @@ describe("ACP agent", () => {
 
 	it("plan-proposal handler approves and notes autosave failure without the path", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const blocker = path.join(harness.cwdA, "blocker");
 		await Bun.write(blocker, "x");
-		Settings.instance.set("plan.autosave", true);
-		Settings.instance.set("plan.autosaveDir", path.join(blocker, "sub"));
+		cfgPlanAutosave.set(Settings.instance, true);
+		cfgPlanAutosaveDir.set(Settings.instance, path.join(blocker, "sub"));
 
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
@@ -962,7 +969,7 @@ describe("ACP agent", () => {
 		const harness = await createHarness({
 			elicitationHandler: async () => ({ action: "cancel" }),
 		});
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
@@ -1010,7 +1017,7 @@ describe("ACP agent", () => {
 			content: { value: "Approve and execute" },
 		}));
 		const harness = await createHarness({ elicitationHandler: elicit });
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
@@ -1048,7 +1055,7 @@ describe("ACP agent", () => {
 				return { action: "accept", content: { value: "Approve and execute" } };
 			},
 		});
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
@@ -1103,7 +1110,7 @@ describe("ACP agent", () => {
 				return { action: "accept", content: { value: "Approve and execute" } };
 			},
 		});
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
@@ -1149,8 +1156,8 @@ describe("ACP agent", () => {
 		const harness = await createHarness({
 			elicitationHandler: async () => ({ action: "accept", content: { value: "Approve and execute" } }),
 		});
-		Settings.instance.set("plan.enabled", true);
-		if (options?.implReview === false) Settings.instance.set("plan.implReview", false);
+		cfgPlanEnabled.set(Settings.instance, true);
+		if (options?.implReview === false) cfgPlanImplReview.set(Settings.instance, false);
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "debate" });
@@ -1238,7 +1245,7 @@ describe("ACP agent", () => {
 
 	it("load rehydrates a persisted impl_review entry with the write transport", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "implement", timestamp: Date.now() });
@@ -1273,7 +1280,7 @@ describe("ACP agent", () => {
 
 	it("load discards an invalid impl_review entry", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "implement", timestamp: Date.now() });
@@ -1292,7 +1299,7 @@ describe("ACP agent", () => {
 
 	it("load discards a persisted impl_review entry when plan mode is disabled", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", false);
+		cfgPlanEnabled.set(Settings.instance, false);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "implement", timestamp: Date.now() });
@@ -1321,7 +1328,7 @@ describe("ACP agent", () => {
 
 	it("load restores a persisted plan entry and reports plan as the current mode", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
@@ -1350,7 +1357,7 @@ describe("ACP agent", () => {
 
 	it("load restores a persisted debate consensus and reports debate as the current mode", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
@@ -1383,7 +1390,7 @@ describe("ACP agent", () => {
 
 	it("load converts an interrupted debate review phase to failed instead of dropping the plan", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
@@ -1414,7 +1421,7 @@ describe("ACP agent", () => {
 
 	it("load discards an invalid plan entry", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
@@ -1438,7 +1445,7 @@ describe("ACP agent", () => {
 
 	it("load discards a persisted plan entry when plan mode is disabled", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", false);
+		cfgPlanEnabled.set(Settings.instance, false);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });
@@ -1465,7 +1472,7 @@ describe("ACP agent", () => {
 
 	it("load installs a persisted plan_paused entry into memory with enabled:false, keeping the default mode and inactive tool gates", async () => {
 		const harness = await createHarness();
-		Settings.instance.set("plan.enabled", true);
+		cfgPlanEnabled.set(Settings.instance, true);
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({ role: "user", content: "draft", timestamp: Date.now() });

@@ -2,11 +2,12 @@ import * as os from "node:os";
 import { isInsideTmux, type Terminal, wrapTmuxPassthrough } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isTerminalHeadless, logger, onProjectDirChanged } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
+import { cfgTerminalReportCwd } from "../modes/settings";
 
 /** Report the active directory while the interactive terminal owns its output. */
 export function startTerminalDirectoryReporting(settings: Settings, terminal: Pick<Terminal, "write">): () => void {
 	const report = (cwd: string): void => {
-		if (!settings.get("terminal.reportCwd") || isTerminalHeadless() || !process.stdout.isTTY) return;
+		if (!cfgTerminalReportCwd.get(settings) || isTerminalHeadless() || !process.stdout.isTTY) return;
 		try {
 			const normalizedPath = process.platform === "win32" ? cwd.replaceAll("\\", "/") : cwd;
 			const encodedPath = encodeURI(normalizedPath).replaceAll("#", "%23").replaceAll("?", "%3F");
@@ -20,8 +21,8 @@ export function startTerminalDirectoryReporting(settings: Settings, terminal: Pi
 
 	report(getProjectDir());
 	const unsubscribeDirectory = onProjectDirChanged(report);
-	const unsubscribeSettings = settings.onEffectiveChange((path, value) => {
-		if (path === "terminal.reportCwd" && value === true) report(getProjectDir());
+	const unsubscribeSettings = settings.onEffectiveChange([cfgTerminalReportCwd], () => {
+		if (cfgTerminalReportCwd.get(settings)) report(getProjectDir());
 	});
 	return () => {
 		unsubscribeDirectory();

@@ -2,6 +2,8 @@ import { beforeAll, describe, expect, it, vi } from "bun:test";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { cfgModelProfile } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 beforeAll(async () => {
 	// The segment track rendered after a session-only switch reads the theme singleton.
@@ -20,8 +22,7 @@ function createRuntime(options?: {
 	const showModelCycleTrack = vi.fn();
 	const invalidate = vi.fn();
 	const updateEditorBorderColor = vi.fn();
-	const set = vi.fn();
-	const setProjectModelProfile = vi.fn();
+	const settings = Settings.isolated({ modelProfiles: profiles });
 	const applyModelProfile = vi.fn(async (name: string, role: string) => ({
 		profile: name,
 		model: { provider: "a", id: "b" },
@@ -34,8 +35,7 @@ function createRuntime(options?: {
 		showModelCycleTrack,
 		invalidate,
 		updateEditorBorderColor,
-		set,
-		setProjectModelProfile,
+		settings,
 		applyModelProfile,
 		runtime: {
 			ctx: {
@@ -46,7 +46,7 @@ function createRuntime(options?: {
 				statusLine: { invalidate },
 				updateEditorBorderColor,
 				focusedAgentId: undefined,
-				settings: { getModelProfiles: () => profiles, set, setProjectModelProfile },
+				settings,
 				session: {
 					activeModelProfile: options?.activeModelProfile,
 					getPlanModeState: () => ({ enabled: options?.planMode ?? false }),
@@ -67,8 +67,8 @@ describe("/model-profile slash command", () => {
 		expect(h.setText).toHaveBeenCalledWith("");
 		expect(h.applyModelProfile).toHaveBeenCalledWith("work", "default");
 		expect(h.showModelCycleTrack).toHaveBeenCalled();
-		expect(h.set).not.toHaveBeenCalled();
-		expect(h.setProjectModelProfile).not.toHaveBeenCalled();
+		expect(cfgModelProfile.get(h.settings)).toBe("");
+		expect(cfgModelProfile.provenance(h.settings)).toBe("default");
 	});
 
 	it("activates the plan role when plan mode is on", async () => {
@@ -79,25 +79,13 @@ describe("/model-profile slash command", () => {
 		expect(h.applyModelProfile).toHaveBeenCalledWith("work", "plan");
 	});
 
-	it("persists to the global config with the global scope", async () => {
-		const h = createRuntime();
-
-		await executeBuiltinSlashCommand("/model-profile work global", h.runtime);
-
-		expect(h.applyModelProfile).toHaveBeenCalledWith("work", "default");
-		expect(h.set).toHaveBeenCalledWith("modelProfile", "work");
-		expect(h.setProjectModelProfile).not.toHaveBeenCalled();
-		expect(h.showStatus).toHaveBeenCalledWith(expect.stringContaining("saved as startup profile (global config)"));
-		expect(h.showModelCycleTrack).not.toHaveBeenCalled();
-	});
-
-	it("persists to the project config with the project scope", async () => {
-		const h = createRuntime();
-
-		await executeBuiltinSlashCommand("/model-profile work project", h.runtime);
-
-		expect(h.setProjectModelProfile).toHaveBeenCalledWith("work");
-		expect(h.set).not.toHaveBeenCalled();
+	it("stores the startup profile in the requested settings layer", async () => {
+		for (const scope of ["global", "project"] as const) {
+			const h = createRuntime();
+			await executeBuiltinSlashCommand(`/model-profile work ${scope}`, h.runtime);
+			expect(cfgModelProfile.get(h.settings)).toBe("work");
+			expect(cfgModelProfile.provenance(h.settings)).toBe(scope);
+		}
 	});
 
 	it("rejects an unknown scope with a usage message", async () => {
@@ -106,8 +94,8 @@ describe("/model-profile slash command", () => {
 		await executeBuiltinSlashCommand("/model-profile work everywhere", h.runtime);
 
 		expect(h.applyModelProfile).not.toHaveBeenCalled();
-		expect(h.set).not.toHaveBeenCalled();
-		expect(h.setProjectModelProfile).not.toHaveBeenCalled();
+		expect(cfgModelProfile.get(h.settings)).toBe("");
+		expect(cfgModelProfile.provenance(h.settings)).toBe("default");
 		expect(h.showStatus).toHaveBeenCalledWith("Usage: /model-profile [name] [global|project]");
 	});
 

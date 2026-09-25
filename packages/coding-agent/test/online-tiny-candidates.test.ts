@@ -4,6 +4,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { getRoleInfo } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { cfgCyberModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	collectOnlineTinyCandidates,
@@ -217,7 +218,7 @@ describe("online tiny fallback candidates", () => {
 });
 
 function installCyberAllowlist(settings: Settings, allowedSelectors: string[], catalog: Model<Api>[]): void {
-	settings.set("cyberModels", allowedSelectors);
+	cfgCyberModels.set(settings, allowedSelectors);
 	const allowlist = resolveCyberAllowlist(settings, catalog);
 	if (!allowlist) throw new Error("test setup: cyberModels did not resolve to an allowlist");
 	// Installed the way a sibling session or shared configuration would; this

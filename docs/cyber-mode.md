@@ -1,6 +1,6 @@
 # Cyber mode
 
-Cyber mode keeps a session on models your upstream providers will not block for security work. It is an allowlist of models you declare safe for that work, and it makes every model resolution route through the list.
+Cyber mode restricts cyber work to an operator-approved model allowlist. It applies that allowlist to every model resolution. It does not bypass provider safety restrictions.
 
 ## Declaring the allowlist
 

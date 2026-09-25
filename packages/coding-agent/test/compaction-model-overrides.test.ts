@@ -2,8 +2,12 @@ import { describe, expect, it } from "bun:test";
 import { resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { resolveCompactionSettings } from "@oh-my-pi/pi-coding-agent/session/compaction-methods";
 import { createSubagentSettings } from "@oh-my-pi/pi-coding-agent/task/executor";
+import {
+	cfgCompaction,
+	cfgCompactionModelOverrides,
+	resolveCompactionSettings,
+} from "@oh-my-pi/pi-coding-agent/session/context-settings";
 
 const sonnet = getBundledModel("anthropic", "claude-sonnet-4-5");
 const gpt = getBundledModel("openai", "gpt-4o");
@@ -12,7 +16,7 @@ if (!sonnet || !gpt) throw new Error("Expected bundled anthropic and openai mode
 describe("resolveCompactionSettings", () => {
 	it("returns the global group when no overrides are configured", () => {
 		const settings = Settings.isolated({ "compaction.thresholdTokens": 200_000 });
-		expect(resolveCompactionSettings(settings, sonnet)).toEqual(settings.getGroup("compaction"));
+		expect(resolveCompactionSettings(settings, sonnet)).toEqual(cfgCompaction.get(settings));
 	});
 
 	it("applies a provider wildcard only to matching models", () => {
@@ -51,12 +55,12 @@ describe("resolveCompactionSettings", () => {
 			"compaction.thresholdTokens": 200_000,
 			"compaction.modelOverrides": { "anthropic/*": "nope" },
 		});
-		expect(resolveCompactionSettings(settings, sonnet)).toEqual(settings.getGroup("compaction"));
+		expect(resolveCompactionSettings(settings, sonnet)).toEqual(cfgCompaction.get(settings));
 	});
 
 	it("is inherited by subagent settings", () => {
 		const overrides = { "openai/*": { thresholdTokens: 250_000 } };
 		const child = createSubagentSettings(Settings.isolated({ "compaction.modelOverrides": overrides }));
-		expect(child.get("compaction.modelOverrides")).toEqual(overrides);
+		expect(cfgCompactionModelOverrides.get(child)).toEqual(overrides);
 	});
 });

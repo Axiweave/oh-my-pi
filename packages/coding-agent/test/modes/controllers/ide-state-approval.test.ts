@@ -11,6 +11,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRuntime, ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
@@ -215,10 +216,10 @@ function context(extra: Record<string, unknown> & { approval?: Record<string, un
 		isIdle: () => true,
 		hasQueuedMessages: () => false,
 		abort: () => {},
-		settings: {
-			get: (key: string) =>
-				key === "tools.approvalMode" ? "always-ask" : key === "tools.approval" ? (extra.approval ?? {}) : {},
-		} as never,
+		settings: Settings.isolated({
+			"tools.approvalMode": "always-ask",
+			"tools.approval": extra.approval ?? {},
+		}),
 		...extra,
 	} as unknown as AgentToolContext;
 }
@@ -257,7 +258,7 @@ describe("Approval flow IDE session-state publishing", () => {
 		const wrapper = new ExtensionToolWrapper(tool, runner) as ExtensionToolWrapper<any>;
 
 		const toolContext = context({
-			settings: { get: (key: string) => (key === "tools.approvalMode" ? "yolo" : {}) },
+			settings: Settings.isolated({ "tools.approvalMode": "yolo" }),
 			toolCall: {
 				batchId: "b",
 				index: 0,

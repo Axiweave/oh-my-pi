@@ -4,7 +4,12 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { type ModelProfilesSettings, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	type ModelProfilesSettings,
+	cfgModelProfile,
+	cfgModelProfiles,
+} from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -82,8 +87,8 @@ describe("AgentSession model profiles", () => {
 			sessionSettings.setModelRole(role, value);
 		}
 		// Deliberately malformed fixtures: the validator's whole job is bad input.
-		sessionSettings.override("modelProfiles", options.modelProfiles as ModelProfilesSettings);
-		if (options.modelProfile !== undefined) sessionSettings.override("modelProfile", options.modelProfile);
+		cfgModelProfiles.override(sessionSettings, options.modelProfiles as ModelProfilesSettings);
+		if (options.modelProfile !== undefined) cfgModelProfile.override(sessionSettings, options.modelProfile);
 		// Mirrors `--smol` and friends: installed before the session exists, so
 		// the startup-profile layer has to land underneath it.
 		if (options.runtimeModelRoles) sessionSettings.overrideModelRoles(options.runtimeModelRoles);
