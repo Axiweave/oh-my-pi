@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `/wtmove` to select an existing worktree with branch/path completion while preserving session history and artifacts. It leaves checkout files and branches unchanged.
 - Model-profile keys now open a searchable picker by default. Set `modelProfileSwitchStyle: cycling` to keep forward and backward cycling; `/model-profile` remains unchanged.
 - Added `cyberModels` and `cyberMode` to constrain role selection, model switches, and recovery to an operator-defined allowlist. Startup and live notices identify substitutions. Session transitions restore and revalidate the recorded state.
 - Added `/cyber [on|off|status] [global|project]` and `app.model.toggleCyber` (`Alt+Shift+X`). Enable and status output list every allowed model. The scoped command forms persist the startup value.
@@ -26,6 +27,8 @@
 
 ### Fixed
 
+- Fixed ambiguous `/wtmove` completion rows across multiple sibling groups. Labels retain distinguishing path fragments near the start, including when long paths share both prefixes and endings.
+- Fixed `/wtmove` path identity for trailing and Unicode spaces, including native Git metadata pointers. Worktree paths remain distinguishable in completion and narrow pickers, and source-repository errors take precedence over missing targets.
 - Fixed cyber protection bypasses in background model selection and recovery. Background candidates, retained callbacks, and dispatch now check installed protection, so a session that shares another session's protection stays constrained.
 - Fixed missing cyber startup warnings in text, JSON, RPC, and ACP modes. Diagnostics now use stderr without changing protocol output.
 - Fixed duplicate and stale cyber startup warnings when ACP loads, resumes, or forks a saved session. Diagnostics now describe the requested transcript.

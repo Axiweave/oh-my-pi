@@ -13,6 +13,27 @@ Package-specific references:
 - [MCP server/tool authoring](../../docs/mcp-server-tool-authoring.md)
 - [DEVELOPMENT](./DEVELOPMENT.md)
 
+## Move between worktrees
+
+Use `/wtmove` in an interactive session to select an existing worktree of the current Git repository.
+Type a branch or path substring to filter the list. Press Enter to select a destination, or Escape to cancel.
+
+`/wtmove <path>` accepts absolute, relative, and home-relative worktree root paths, including paths with spaces.
+Tab completion matches branch labels and paths without case sensitivity.
+The list includes the primary checkout and worktrees outside `~/.omp/wt`, but excludes the current checkout and unavailable directories.
+
+The picker keeps path details visible in narrow terminals.
+Ambiguous whitespace and control characters use visible escapes, such as `\u0020` for repeated or trailing spaces.
+Completion labels retain distinguishing path fragments across sibling groups. An ellipsis marks shared or omitted path text.
+These display changes do not change the selected path. Completion quotes paths with trailing whitespace so the command preserves their identity.
+
+The move keeps the active session identity, history, and artifacts. Use `/resume` from the destination to continue that session later.
+It does not change branches, copy checkout changes, clean the source, or resume another saved session.
+Invalid paths and paths inside a worktree rather than at its root produce an error without moving the session.
+Finish or abort an active response before moving.
+
+Use `/move` for any directory. Use `/wt` to create a new worktree and carry checkout changes into it.
+
 ## Memory backends
 
 The agent supports three mutually-exclusive memory backends, selected via the `memory.backend` setting (Settings → Memory tab, or `~/.omp/config.yml`):

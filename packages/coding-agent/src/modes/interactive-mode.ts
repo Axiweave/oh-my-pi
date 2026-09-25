@@ -6921,6 +6921,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#commandController.handleWorktreeCommand(branch);
 	}
 
+	async handleWorktreeMoveCommand(targetPath?: string): Promise<void> {
+		if (this.#vibeSessionTransitionBlocked()) return;
+		await this.#commandController.handleWorktreeMoveCommand(targetPath);
+	}
+
 	withBtwSessionMove(operation: () => Promise<boolean>): Promise<boolean> {
 		return this.#btwController.withSessionMove(operation);
 	}

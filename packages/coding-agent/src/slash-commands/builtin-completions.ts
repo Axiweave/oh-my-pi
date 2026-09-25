@@ -2,11 +2,17 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { formatWorktreePathForDisplay } from "@oh-my-pi/pi-tui/overlays/worktree-selector";
 import { getMCPConfigPath, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { formatModelRoleAlias, getKnownRoleIds } from "../config/model-roles";
 import { readMCPConfigFile } from "../mcp/config-writer";
 import { collectMcpServerNames } from "../modes/controllers/mcp-command-controller";
 import { expandTilde } from "../tools/path-utils";
+import {
+	listSessionWorktrees,
+	matchesWorktreeDestination,
+	type WorktreeDestination,
+} from "../session/session-worktree";
 import type { SubcommandDef, TuiSlashCommandRuntime } from "./types";
 
 /**
@@ -223,6 +229,76 @@ export function buildModelSelectorCompletions(
 			matches.push({ value: `${selector}${suffix} `, label: selector, description: model.name });
 		}
 		return matches.length > 0 ? matches : null;
+	};
+}
+
+/**
+ * Compact shared runs within each path group, retaining every branching character.
+ * Unlike independent tails, labels preserve distinctions between sibling groups.
+ */
+function worktreeCompletionLabels(displayPaths: readonly string[]): string[] {
+	// Reserve the omission marker. Literal ellipses remain distinct from omitted text.
+	const paths = displayPaths.map(displayPath => Array.from(displayPath.replaceAll("…", "\\u2026")));
+	const labels: string[] = [];
+	const visit = (indices: number[], start: number, prefix: string): void => {
+		const first = paths[indices[0]!]!;
+		if (indices.length === 1) {
+			const tailStart = Math.max(start, first.length - 12);
+			labels[indices[0]!] = prefix + (tailStart > start ? "…" : "") + first.slice(tailStart).join("");
+			return;
+		}
+		let end = start;
+		while (end < first.length && indices.every(index => paths[index]![end] === first[end])) end++;
+		const stem = prefix + (end > start ? "…" : "");
+		const groups = new Map<string, number[]>();
+		for (const index of indices) {
+			const character = paths[index]![end];
+			if (character === undefined) {
+				labels[index] = stem;
+				continue;
+			}
+			const group = groups.get(character);
+			if (group) group.push(index);
+			else groups.set(character, [index]);
+		}
+		for (const [character, group] of groups) visit(group, end + 1, stem + character);
+	};
+	visit(
+		paths.map((_, index) => index),
+		0,
+		"",
+	);
+	return labels;
+}
+
+/**
+ * Complete registered roots from live cwd. Group-aware labels keep path
+ * distinctions near the rendered start. Full paths remain in descriptions,
+ * and insertion values preserve literal whitespace with outer quotes.
+ */
+export function buildWorktreeMoveArgumentCompletions(
+	runtime: TuiSlashCommandRuntime,
+): (argumentPrefix: string) => Promise<AutocompleteItem[] | null> {
+	return async (argumentPrefix: string) => {
+		const cwd = runtime.ctx.sessionManager.getCwd();
+		let destinations: WorktreeDestination[];
+		try {
+			({ destinations } = await listSessionWorktrees(cwd));
+		} catch {
+			return null;
+		}
+		const matches = destinations.filter(destination => matchesWorktreeDestination(destination, argumentPrefix));
+		if (matches.length === 0) return null;
+		const descriptions = matches.map(destination => formatWorktreePathForDisplay(destination.path));
+		const labels = worktreeCompletionLabels(descriptions);
+		return matches.map((destination, index) => {
+			const value = destination.path !== destination.path.trim() ? `"${destination.path}"` : destination.path;
+			return {
+				value,
+				label: `${labels[index]} (${destination.label})`,
+				description: descriptions[index],
+			};
+		});
 	};
 }
 

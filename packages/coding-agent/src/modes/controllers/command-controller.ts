@@ -34,6 +34,7 @@ import { BorderedLoader } from "@oh-my-pi/pi-tui/overlays/bordered-loader";
 import { DynamicBorder } from "@oh-my-pi/pi-tui/chrome/dynamic-border";
 import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
 import { MoveOverlay, type MoveOverlayResult } from "@oh-my-pi/pi-tui/overlays/move-overlay";
+import { WorktreeSelector } from "@oh-my-pi/pi-tui/overlays/worktree-selector";
 import { moveDirectorySource } from "../move-directory-source";
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { getMarkdownTheme, getSymbolTheme, theme, type Theme } from "@oh-my-pi/pi-tui/theme";
@@ -51,7 +52,12 @@ import {
 	createSessionWorktree,
 	defaultSessionWorktreeBranch,
 	formatSessionWorktreeSummary,
+	listSessionWorktrees,
+	matchesWorktreeDestination,
+	resolveSessionWorktree,
+	resolveSessionWorktreeRoot,
 	type SessionWorktree,
+	type WorktreeDestination,
 } from "../../session/session-worktree";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../session/shake-types";
 import { formatActiveAccountLabel, limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
@@ -1243,6 +1249,75 @@ export class CommandController {
 				new Text(`${theme.fg("accent", `${theme.status.success} Moved to ${resolvedPath}`)}`, 1, 1),
 			]);
 		}
+	}
+
+	async handleWorktreeMoveCommand(targetPath?: string): Promise<void> {
+		if (this.ctx.session.isStreaming) {
+			this.ctx.showWarning("Finish or abort the current response before moving to a worktree.");
+			return;
+		}
+		const session = this.ctx.session;
+		const cwd = this.ctx.sessionManager.getCwd();
+		let input = targetPath?.trim();
+		let fromPicker = false;
+		if (!input) {
+			this.ctx.statusContainer.disposeChildren();
+			const loader = new Loader(
+				this.ctx.ui,
+				spinner => theme.fg("accent", spinner),
+				text => theme.fg("muted", text),
+				"Finding existing worktrees...",
+				getSymbolTheme().spinnerFrames,
+			);
+			this.ctx.statusContainer.addChild(loader);
+			this.ctx.ui.requestRender();
+			let destinations: WorktreeDestination[];
+			try {
+				({ destinations } = await listSessionWorktrees(cwd));
+			} catch (error) {
+				this.ctx.showError(`Worktree discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			} finally {
+				loader.stop();
+				this.ctx.statusContainer.disposeChildren();
+				this.ctx.ui.requestRender();
+			}
+			if (destinations.length === 0) {
+				this.ctx.showStatus("No other available worktrees in this repository.");
+				return;
+			}
+			input = await this.ctx.showHookCustom<string | undefined>(
+				(_tui, _theme, _keybindings, done) => new WorktreeSelector(destinations, matchesWorktreeDestination, done),
+				{ overlay: true },
+			);
+			if (!input) return;
+			fromPicker = true;
+		}
+		const selectedPath = input;
+		await this.#withSessionMove(async () => {
+			if (this.ctx.session !== session || this.ctx.sessionManager.getCwd() !== cwd || session.isStreaming) {
+				this.ctx.showWarning("The session changed. Run /wtmove again after the response finishes.");
+				return false;
+			}
+			let destination: string | undefined;
+			try {
+				// Picker selections are already-canonical roots: validate them exactly, with
+				// no trim/quote/Unicode-space normalization, so their identity survives intact.
+				destination = fromPicker
+					? await resolveSessionWorktreeRoot(cwd, selectedPath)
+					: await resolveSessionWorktree(cwd, selectedPath);
+			} catch (error) {
+				this.ctx.showError(`Cannot move to worktree: ${error instanceof Error ? error.message : String(error)}`);
+				return false;
+			}
+			if (!destination) {
+				this.ctx.showStatus("This is the current worktree. The session did not move.");
+				return false;
+			}
+			if (!(await this.#relocateSession(destination))) return false;
+			this.ctx.showStatus(`Moved to worktree ${destination}.`);
+			return true;
+		});
 	}
 
 	/**

@@ -791,6 +791,22 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		},
 	},
 	{
+		name: "wtmove",
+		icon: "folderMove",
+		description: "Move the current session to an existing worktree",
+		acpDescription: "Move the current session to an existing worktree",
+		inlineHint: "[<path>]",
+		allowArgs: true,
+		handle: async (_command, runtime) => {
+			return usage("/wtmove is available in the interactive session only.", runtime);
+		},
+		handleTui: async (command, runtime) => {
+			runtime.ctx.editor.addToHistory(command.text);
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleWorktreeMoveCommand(command.args || undefined);
+		},
+	},
+	{
 		name: "add-dir",
 		icon: "folderPlus",
 		description: "Add a workspace directory to this session (multi-root)",

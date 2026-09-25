@@ -10,12 +10,13 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
+import type { IsoBackendKind, VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getWorktreeDir, hashPath, logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
 import { resolveAvailableWorktreePath } from "../tools/gh-pr-checkout";
+import { expandTilde, stripOuterDoubleQuotes } from "../tools/path-utils";
 
 export interface SessionWorktree {
 	/** Absolute, realpath'd worktree root. */
@@ -108,4 +109,117 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 		clonedWith: result.clonedWith ?? undefined,
 		cloneError: result.cloneError ?? undefined,
 	};
+}
+
+export interface WorktreeDestination {
+	path: string;
+	label: string;
+}
+
+/** Discover the repository that owns `cwd`, or throw when it is outside Git. */
+function requireSessionRepository(cwd: string): VcsGitRepo {
+	const repository = vcs.git(cwd);
+	if (!repository) throw new Error("Worktree selection requires a Git repository.");
+	return repository;
+}
+
+/** Enumerate `source`'s registered worktree roots, excluding the current checkout. */
+async function collectWorktreeDestinations(
+	source: VcsGitRepo,
+): Promise<{ currentRoot: string; destinations: WorktreeDestination[] }> {
+	const currentRoot = await fs.realpath(source.info().repoRoot);
+	const destinations: WorktreeDestination[] = [];
+	const seen = new Set<string>([currentRoot]);
+	for (const entry of await source.worktrees()) {
+		let root: string;
+		try {
+			root = await fs.realpath(entry.path);
+			if (!(await fs.stat(root)).isDirectory()) continue;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES") continue;
+			throw error;
+		}
+		if (seen.has(root)) continue;
+		seen.add(root);
+		destinations.push({
+			path: root,
+			label: entry.detached ? "Detached HEAD" : (entry.branch?.replace(/^refs\/heads\//, "") ?? "Detached HEAD"),
+		});
+	}
+	destinations.sort((a, b) => a.path.localeCompare(b.path));
+	return { currentRoot, destinations };
+}
+
+/** Discover registered destinations relative to the live session checkout. */
+export async function listSessionWorktrees(
+	cwd: string,
+): Promise<{ currentRoot: string; destinations: WorktreeDestination[] }> {
+	return collectWorktreeDestinations(requireSessionRepository(cwd));
+}
+
+export function matchesWorktreeDestination(destination: WorktreeDestination, query: string): boolean {
+	const search = stripOuterDoubleQuotes(query.trim()).toLowerCase();
+	return destination.label.toLowerCase().includes(search) || destination.path.toLowerCase().includes(search);
+}
+
+/**
+ * Validate a resolved `root` against `source`'s registered worktrees. Shared
+ * by the explicit-argument and exact-selection resolvers below; `label` is
+ * only used for error text and never re-parsed.
+ */
+async function validateWorktreeRoot(source: VcsGitRepo, root: string, label: string): Promise<string | undefined> {
+	const { currentRoot, destinations } = await collectWorktreeDestinations(source);
+	if (root === currentRoot) return undefined;
+	if (!destinations.some(destination => destination.path === root)) {
+		throw new Error(`Not an available worktree root of this repository: ${label}`);
+	}
+	const target = vcs.git(root);
+	if (
+		!target ||
+		(await fs.realpath(target.info().repoRoot)) !== root ||
+		(await fs.realpath(target.primaryRoot() ?? target.info().repoRoot)) !==
+			(await fs.realpath(source.primaryRoot() ?? source.info().repoRoot))
+	) {
+		throw new Error(`Worktree registration no longer matches the directory: ${label}`);
+	}
+	return root;
+}
+
+/**
+ * Parse an explicit `/wtmove <path>` argument (quotes, `~`, relative forms)
+ * and validate it. Returns a registered root, or `undefined` when the
+ * requested checkout is current. Check the source repository before resolving
+ * the target so a missing target cannot hide the repository requirement.
+ */
+export async function resolveSessionWorktree(cwd: string, input: string): Promise<string | undefined> {
+	const unquoted = stripOuterDoubleQuotes(input.trim());
+	if (!unquoted) throw new Error("Usage: /wtmove <path>");
+	const source = requireSessionRepository(cwd);
+	const requested = path.resolve(cwd, expandTilde(unquoted));
+	let root: string;
+	try {
+		root = await fs.realpath(requested);
+	} catch {
+		throw new Error(`Worktree directory is unavailable: ${requested}`);
+	}
+	return validateWorktreeRoot(source, root, requested);
+}
+
+/**
+ * Validate an already-canonical worktree root, such as a picker selection.
+ * Unlike {@link resolveSessionWorktree}, `root` is used exactly as given: no
+ * trim, quote-stripping, or Unicode-space normalization, so a root that
+ * differs from another registered root only by trailing or Unicode
+ * whitespace keeps its own identity instead of colliding with it.
+ */
+export async function resolveSessionWorktreeRoot(cwd: string, root: string): Promise<string | undefined> {
+	const source = requireSessionRepository(cwd);
+	let realRoot: string;
+	try {
+		realRoot = await fs.realpath(root);
+	} catch {
+		throw new Error(`Worktree directory is unavailable: ${root}`);
+	}
+	return validateWorktreeRoot(source, realRoot, root);
 }

@@ -12,6 +12,7 @@ import {
 	buildModelSelectorCompletions,
 	buildStaticInlineHint,
 	buildSubcommandInlineHint,
+	buildWorktreeMoveArgumentCompletions,
 } from "./builtin-completions";
 import { BUILTIN_CONTROL_SLASH_COMMANDS } from "./builtin-control";
 import { BUILTIN_LIFECYCLE_SLASH_COMMANDS } from "./builtin-lifecycle";
@@ -93,6 +94,9 @@ function materializeTuiBuiltinSlashCommand(
 		materialized.getInlineHint = buildModelProfileInlineHint();
 	} else if (cmd.name === "move") {
 		materialized.getArgumentCompletions = buildDirectoryArgumentCompletions();
+		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
+	} else if (cmd.name === "wtmove" && runtime) {
+		materialized.getArgumentCompletions = buildWorktreeMoveArgumentCompletions(runtime);
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
 	} else if (cmd.name === "switch" && runtime) {
 		materialized.getArgumentCompletions = buildModelSelectorCompletions(runtime);
