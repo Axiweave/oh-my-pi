@@ -21,6 +21,7 @@ import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -28,6 +29,7 @@ import type { AgentSessionConfig } from "@oh-my-pi/pi-coding-agent/session/agent
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 const COLLAB_PROMPT_TYPE = "collab-prompt";
@@ -402,6 +404,86 @@ describe("AgentSession queued steer delivery", () => {
 		expect(mock.calls.length).toBe(3);
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 		expect(session.getQueuedMessages().steering).toEqual([]);
+	});
+
+	// Invariant: a provider claim cannot disable empty-Enter interruption or lose the pending user message.
+	it.each([
+		{ focused: false, accepted: false },
+		{ focused: false, accepted: true },
+		{ focused: true, accepted: false },
+		{ focused: true, accepted: true },
+	])("interrupts live-claimed steering with empty Enter (%j)", async ({ focused, accepted }) => {
+		const { session, mock } = await createSession([
+			{ content: ["interrupted response"] },
+			{ content: ["ack queued"] },
+		]);
+		const started = Promise.withResolvers<void>();
+		const claimed = Promise.withResolvers<AbortSignal>();
+		const release = Promise.withResolvers<void>();
+		let first = true;
+		session.agent.streamFn = async (model, context, options) => {
+			if (first) {
+				first = false;
+				const live = options?.liveSteering;
+				const signal = options?.signal;
+				if (!live || !signal) throw new Error("Expected live steering and an abort signal");
+				started.resolve();
+				await live.wait(signal);
+				const claim = await live.claim(signal);
+				if (!claim) throw new Error("Expected a pending steering claim");
+				if (accepted) claim.accept();
+				else claim.reject();
+				claimed.resolve(signal);
+				await Promise.race([
+					release.promise,
+					new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true })),
+				]);
+			}
+			return mock.stream(model, context, options);
+		};
+		const editor = new CustomEditor({});
+		// The real editor's empty-submit path needs only these host services.
+		const ctx = {
+			editor,
+			session,
+			viewSession: session,
+			focusedAgentId: focused ? "child" : undefined,
+			updatePendingMessagesDisplay() {},
+			ui: { requestRender() {} },
+		} as unknown as InteractiveModeContext;
+		new InputController(ctx).setupEditorSubmitHandler();
+		const onSubmit = editor.onSubmit!;
+		let submitted = Promise.resolve();
+		editor.onSubmit = text => {
+			submitted = Promise.resolve(onSubmit(text));
+		};
+		const run = session.prompt("start");
+		try {
+			await started.promise;
+			await session.steer("123123");
+			const signal = await claimed.promise;
+			expect(session.getQueuedMessages().steering).toEqual([]);
+			editor.handleInput("\r");
+			expect(signal.aborted).toBe(true);
+			await submitted;
+			await run;
+			await session.waitForIdle();
+			const users = session.messages.filter(message => message.role === "user");
+			expect(users.map(message => message.content)).toEqual([
+				[{ type: "text", text: "start" }],
+				[{ type: "text", text: "123123" }],
+			]);
+			expect(session.messages.at(-1)).toMatchObject({
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "ack queued" }],
+			});
+			expect(session.queuedMessageCount).toBe(0);
+		} finally {
+			release.resolve();
+			await run;
+			await session.waitForIdle();
+		}
 	});
 
 	it("dequeuing an ultrathink prompt mid-stream restores the text and drops its companion notice", async () => {

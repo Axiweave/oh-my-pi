@@ -28,6 +28,7 @@
 
 ### Fixed
 
+- Fixed empty Enter ignoring a visible steering message after live steering claimed it. Pending counts now include unrecorded deliveries, so main and focused sessions interrupt and resume with the message.
 - Fixed ambiguous `/wtmove` completion rows across multiple sibling groups. Labels retain distinguishing path fragments near the start, including when long paths share both prefixes and endings.
 - Fixed `/wtmove` path identity for trailing and Unicode spaces, including native Git metadata pointers. Worktree paths remain distinguishable in completion and narrow pickers, and source-repository errors take precedence over missing targets.
 - Fixed cyber protection bypasses in background model selection and recovery. Background candidates, retained callbacks, and dispatch now check installed protection, so a session that shares another session's protection stays constrained.

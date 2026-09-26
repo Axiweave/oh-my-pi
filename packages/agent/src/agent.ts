@@ -1228,6 +1228,17 @@ export class Agent {
 		);
 	}
 
+	/** Count dequeued messages until the loop records their delivery, including provider live-steering claims. */
+	countUndeliveredQueuedMessages(predicate: (message: AgentMessage) => boolean): number {
+		let count = 0;
+		for (const delivery of this.#queuedMessageDeliveries) {
+			for (let i = delivery.next; i < delivery.messages.length; i++) {
+				if (predicate(delivery.messages[i])) count++;
+			}
+		}
+		return count;
+	}
+
 	/** Non-consuming view of the pending steering queue (insertion order, newest
 	 *  last). The session layer derives its queued-message display/count from
 	 *  this live view instead of a mirror, so the agent-core queue stays the

@@ -8613,13 +8613,14 @@ export class AgentSession implements SettingsScope {
 		return { steering, followUp };
 	}
 
-	/** Number of pending displayable messages (includes steering, follow-up, and next-turn messages).
-	 *  Reflects actual queued work (advisor cards included) — feeds hasPendingMessages()/RPC and the
-	 *  empty-submit abort gate. The user-restorable subset is surfaced by getQueuedMessages()/clearQueue(). */
+	/** Number of pending displayable messages, including live-steering claims not yet recorded.
+	 *  Feeds hasPendingMessages()/RPC and the empty-submit abort gate.
+	 *  The user-restorable subset is surfaced by getQueuedMessages()/clearQueue(). */
 	get queuedMessageCount(): number {
 		return (
 			this.agent.peekSteeringQueue().filter(isDisplayableQueuedMessage).length +
 			this.agent.peekFollowUpQueue().filter(isDisplayableQueuedMessage).length +
+			this.agent.countUndeliveredQueuedMessages(isDisplayableQueuedMessage) +
 			this.#pendingNextTurnMessages.length
 		);
 	}

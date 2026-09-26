@@ -15,6 +15,16 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 ## Divergences
 
+### Empty Enter with live-steering messages
+
+- **Decision:** Count displayable live-steering claims as pending until the agent loop records their delivery.
+- **Behavior:** Empty Enter interrupts the active response and resumes with the pending message in both main and focused sessions.
+- **Why:** Upstream commit `a969abf4d6` introduced live steering. A claimed message left the queue count at zero while the screen still showed `Steering · 1`, disabling empty-Enter interruption.
+- **Key paths:** `packages/agent/src/agent.ts` and `packages/coding-agent/src/session/agent-session.ts`.
+- **Check:** `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts` covers accepted and rejected claims in main and focused sessions.
+- **Retire when:** Upstream pending counts include unrecorded live-steering deliveries and the regression check passes.
+
+
 ### Local source installation
 
 - **Decision:** Use this fork's checkout and `bun run setup` for installation, repair, and updates.
