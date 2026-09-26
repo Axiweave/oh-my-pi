@@ -51,6 +51,35 @@ Argument handling:
 - `--` ends flag parsing; everything after it is literal message text, even if it
   looks like a flag.
 
+### Inline file mentions
+
+Inside a submitted prompt, `@file:N-M` attaches saved lines N through M before the
+first conversation model request. Bounds are one-based and inclusive. `@file:N`
+attaches one line. Plain `@file` keeps its existing whole-file behavior.
+
+```text
+Review @src/app.ts:20-40 and @src/config.ts:8
+Compare @"src/my file.ts:20-40" with @src/other.ts:5-12
+```
+
+Quote the entire path and selector when the path contains spaces.
+The attachment uses saved file content, not unsaved editor changes.
+This syntax applies to inline prompt text, not standalone launch arguments such
+as `omp @file`.
+
+An existing literal filename wins over selector syntax. For example, a file named
+`notes:2-3` attaches as that file. Unquoted `@file:` treats the final colon as
+punctuation. Quoted `@"file:"` refers only to the literal colon-suffixed filename.
+
+An end beyond EOF clips to the final saved line. An invalid range, an empty file,
+or a start beyond EOF attaches no base-file content. Directory and media ranges
+do not become text attachments.
+
+The existing limits remain: a 5 MiB source file and 3,000 lines or 50 KiB of inline
+text. A small selection cannot bypass the source-file limit. Truncation notices
+use original source coordinates. Hashline attachments retain the real source path
+and full-source snapshot, but mark only displayed source lines as seen.
+
 ### Launch flags
 
 #### Session and workspace

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Inline `@file:N` and `@file:N-M` mentions now attach selected saved lines before the first conversation model request. Literal filenames, whole-file mentions, existing limits, and full-source hashline snapshots retain their behavior.
 - Added `/wtmove` to select an existing worktree with branch/path completion while preserving session history and artifacts. It leaves checkout files and branches unchanged.
 - Model-profile keys now open a searchable picker by default. Set `modelProfileSwitchStyle: cycling` to keep forward and backward cycling; `/model-profile` remains unchanged.
 - Added `cyberModels` and `cyberMode` to constrain role selection, model switches, and recovery to an operator-defined allowlist. Startup and live notices identify substitutions. Session transitions restore and revalidate the recorded state.

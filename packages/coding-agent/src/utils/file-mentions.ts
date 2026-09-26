@@ -24,7 +24,7 @@ import {
 	truncateHead,
 	truncateHeadBytes,
 } from "@oh-my-pi/pi-tui/tools/streaming-output";
-import { resolveReadPath } from "../tools/path-utils";
+import { probeLiteralPathExists, resolveReadPath } from "../tools/path-utils";
 import { formatDimensionNote, resizeImage } from "./image-resize";
 import { VideoError, buildVideoContactSheetPng, formatVideoDetails, probeVideo, videoMimeForPath } from "./video";
 import { createVideoPreviewImage, isVideoPath } from "@oh-my-pi/pi-tui/prompt/video";
@@ -57,51 +57,55 @@ function sanitizeMentionPath(rawPath: string): string | null {
 async function resolveMentionPath(
 	filePath: string,
 	cwd: string,
-): Promise<{ resolvedPath: string; absolutePath: string } | null> {
-	// Exact resolution only. The TUI @-selector inserts the real, complete path, so a
-	// mention that does not resolve to an existing file or directory is prose, not a file
-	// reference. Fuzzy/prefix guessing here previously dragged in unrelated same-named
-	// files; that disambiguation belongs to the selector's display, not post-send.
+): Promise<{ resolvedPath: string; absolutePath: string; range?: { start: number; end: number } } | null> {
+	// Literal filenames win. Only a confirmed missing entry permits a range suffix.
+	let range: { start: number; end: number } | undefined;
+	const match = /^(.+):(\d+)(?:-(\d+))?$/.exec(filePath);
+	if (match && (await probeLiteralPathExists(filePath, cwd)) === "missing") {
+		const start = Number(match[2]);
+		const end = Number(match[3] ?? match[2]);
+		if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) return null;
+		filePath = match[1];
+		range = { start, end };
+	}
 	const absolutePath = resolveReadPath(filePath, cwd);
 	try {
 		await Bun.file(absolutePath).stat();
-		return { resolvedPath: filePath, absolutePath };
+		return { resolvedPath: filePath, absolutePath, range };
 	} catch {
 		return null;
 	}
 }
 
-function buildTextOutput(textContent: string): { output: string; lineCount: number } {
+function buildTextOutput(
+	textContent: string,
+	startLine = 1,
+	sourceLineCount?: number,
+): { output: string; notice: string; lineCount: number } {
 	const allLines = textContent.split("\n");
-	const totalFileLines = allLines.length;
+	const lineCount = allLines.length;
 	const truncation = truncateHead(textContent);
 
 	if (truncation.firstLineExceedsLimit) {
 		const firstLine = allLines[0] ?? "";
 		const firstLineBytes = Buffer.byteLength(firstLine, "utf-8");
 		const snippet = truncateHeadBytes(firstLine, DEFAULT_MAX_BYTES);
-		let outputText = snippet.text;
-
-		if (outputText.length > 0) {
-			outputText += `\n\n[Line 1 is ${formatBytes(firstLineBytes)}, exceeds ${formatBytes(
-				DEFAULT_MAX_BYTES,
-			)} limit. Showing first ${formatBytes(snippet.bytes)} of the line.]`;
-		} else {
-			outputText = `[Line 1 is ${formatBytes(firstLineBytes)}, exceeds ${formatBytes(
-				DEFAULT_MAX_BYTES,
-			)} limit. Unable to display a valid UTF-8 snippet.]`;
-		}
-
-		return { output: outputText, lineCount: totalFileLines };
+		const notice =
+			snippet.text.length > 0
+				? `\n\n[Line ${startLine} is ${formatBytes(firstLineBytes)}, exceeds ${formatBytes(
+						DEFAULT_MAX_BYTES,
+					)} limit. Showing first ${formatBytes(snippet.bytes)} of the line.]`
+				: `[Line ${startLine} is ${formatBytes(firstLineBytes)}, exceeds ${formatBytes(
+						DEFAULT_MAX_BYTES,
+					)} limit. Unable to display a valid UTF-8 snippet.]`;
+		return { output: snippet.text, notice, lineCount };
 	}
 
-	let outputText = truncation.content;
-
-	if (truncation.truncated) {
-		outputText += formatHeadTruncationNotice(truncation, { startLine: 1, totalFileLines });
-	}
-
-	return { output: outputText, lineCount: totalFileLines };
+	return {
+		output: truncation.content,
+		notice: formatHeadTruncationNotice(truncation, { startLine, totalFileLines: sourceLineCount ?? lineCount }),
+		lineCount,
+	};
 }
 
 async function buildDirectoryListing(absolutePath: string): Promise<{ output: string; lineCount: number }> {
@@ -205,10 +209,11 @@ export async function generateFileMentionMessages(
 		if (!resolved) {
 			continue;
 		}
-		const { resolvedPath, absolutePath } = resolved;
+		const { resolvedPath, absolutePath, range } = resolved;
 		try {
 			const stat = await Bun.file(absolutePath).stat();
 			if (stat.isDirectory()) {
+				if (range) continue;
 				const { output, lineCount } = await buildDirectoryListing(absolutePath);
 				files.push({ path: resolvedPath, content: output, lineCount });
 				continue;
@@ -217,6 +222,7 @@ export async function generateFileMentionMessages(
 			const imageMetadata = await readImageMetadata(absolutePath);
 			const mimeType = imageMetadata?.mimeType;
 			if (mimeType) {
+				if (range) continue;
 				if (stat.size > MAX_AUTO_READ_IMAGE_BYTES) {
 					files.push({
 						path: resolvedPath,
@@ -254,6 +260,7 @@ export async function generateFileMentionMessages(
 			}
 
 			if (isVideoPath(absolutePath)) {
+				if (range) continue;
 				try {
 					const meta = await probeVideo(absolutePath);
 					const sheet = await buildVideoContactSheetPng(absolutePath, meta);
@@ -288,7 +295,7 @@ export async function generateFileMentionMessages(
 
 			if (stat.size > MAX_AUTO_READ_TEXT_BYTES) {
 				files.push({
-					path: resolvedPath,
+					path: filePath,
 					content: `(skipped auto-read: too large, ${formatBytes(stat.size)})`,
 					byteSize: stat.size,
 					skippedReason: "tooLarge",
@@ -297,7 +304,7 @@ export async function generateFileMentionMessages(
 			}
 			if (await isProbablyBinary(absolutePath)) {
 				files.push({
-					path: resolvedPath,
+					path: filePath,
 					content: `(skipped auto-read: binary file, ${formatBytes(stat.size)})`,
 					byteSize: stat.size,
 					skippedReason: "binary",
@@ -307,16 +314,29 @@ export async function generateFileMentionMessages(
 
 			const content = await Bun.file(absolutePath).text();
 			const snapshotStore = options?.useHashLines ? options.snapshotStore : undefined;
-			const normalized = snapshotStore ? normalizeToLF(content) : content;
-			const displayText = snapshotStore ? splitAddressableFileLines(normalized).join("\n") : normalized;
-			const textOutput = buildTextOutput(displayText);
-			let { output } = textOutput;
-			const { lineCount } = textOutput;
+			const normalized = snapshotStore || range ? normalizeToLF(content) : content;
+			const sourceLines = snapshotStore || range ? splitAddressableFileLines(normalized) : undefined;
+			const startLine = range?.start ?? 1;
+			const endLine = range ? Math.min(range.end, sourceLines!.length) : undefined;
+			if (range && startLine > endLine!) continue;
+			const displayText = range
+				? sourceLines!.slice(startLine - 1, endLine).join("\n")
+				: sourceLines
+					? sourceLines.join("\n")
+					: normalized;
+			const { output: body, notice, lineCount } = buildTextOutput(displayText, startLine, sourceLines?.length);
+			let output = range ? body : body + notice;
 			if (snapshotStore) {
 				const tag = snapshotStore.recordSnapshot(absolutePath, normalized);
-				output = `${formatHashlineHeader(resolvedPath, tag)}\n${formatNumberedLines(output)}`;
+				output = formatNumberedLines(output, startLine);
+				if (range) snapshotStore.recordSeenLinesFromBody(absolutePath, tag, output);
+				output = `${formatHashlineHeader(resolvedPath, tag)}\n${output}`;
 			}
-			files.push({ path: resolvedPath, content: output, lineCount });
+			if (range) output += notice;
+			const label = range
+				? `${resolvedPath}:${startLine}${startLine === endLine ? "" : `-${endLine}`}`
+				: resolvedPath;
+			files.push({ path: label, content: output, lineCount });
 		} catch {
 			// File doesn't exist or isn't readable - skip silently
 		}
