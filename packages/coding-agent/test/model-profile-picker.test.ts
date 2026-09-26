@@ -127,6 +127,29 @@ describe("model profile keys", () => {
 		expect(cfgModelProfile.get(h.settings)).toBe("");
 	});
 
+	it("matches literal terms in order without overlap, regardless of case or surrounding spaces", async () => {
+		// Invariant: later terms consume characters after the previous term.
+		for (const query of ["sol l", " SOL   L ", "sol-low", "low", "", "l sol", "sol sol", "sol ."]) {
+			const matches = !["l sol", "sol sol", "sol ."].includes(query);
+			const h = harness(["base", "sol-low", "sol", "sonnet", "luna"]);
+			await h.editor.onCycleModelProfileForward!();
+			const picker = h.overlays.at(-1)!;
+			for (const key of query) picker.handleInput(key);
+			const rows = picker.renderContent(60).slice(1).map(line => Bun.stripANSI(line).trimEnd());
+			expect(rows.some(line => line.endsWith("sol-low"))).toBe(matches);
+			expect(rows.some(line => line.endsWith(" sol"))).toBe(query === "");
+			expect(rows.some(line => line.endsWith("sonnet"))).toBe(query === "");
+			expect(rows.some(line => line.endsWith("luna"))).toBe(query === "");
+			if (query && matches) {
+				picker.handleInput("\r");
+				await h.closed[0];
+				expect(h.state.activeModelProfile).toBe("sol-low");
+			} else {
+				picker.handleInput("\x1b");
+			}
+		}
+	});
+
 	it("cycles choices only with an empty search field", async () => {
 		const h = harness(["base", "sol", "sol-low", "luna"]);
 		await h.editor.onCycleModelProfileForward!();

@@ -20,6 +20,7 @@
 
 ### Changed
 
+- Model-profile search now matches space-separated literal terms in order without overlap, regardless of case. For example, `sol l` matches `sol-low` but not `sol`.
 - Command cards now show the submitted command in a bordered prompt with the normal user-message background and terminal prompt markers. The existing command summary remains below.
 - `/guided-goal` now keeps the exact submitted slash command visible in the transcript while its rewritten interview brief remains hidden.
 - Ctrl-R history now starts with prompts from the active working directory. Press Tab to switch between current-folder and all-projects results without changing the query.

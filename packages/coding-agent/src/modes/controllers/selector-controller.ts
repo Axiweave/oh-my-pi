@@ -650,9 +650,9 @@ export class SelectorController {
 				emptyText: "No other model profiles",
 				noMatchText: "No matching model profiles",
 				filterItems: (items, query) => {
-					const prefix = query.toLowerCase();
+					const pattern = new RegExp(query.trim().split(/\s+/).map(RegExp.escape).join(".*"), "is");
 					return items
-						.filter(item => item.value.toLowerCase().startsWith(prefix))
+						.filter(item => pattern.test(item.value))
 						.sort((a, b) => a.value.localeCompare(b.value));
 				},
 			},
