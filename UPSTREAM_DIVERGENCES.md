@@ -3,7 +3,7 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.3.1` on 2026-09-25.
+**Reviewed against:** `v18.3.2` on 2026-09-25.
 
 ## Maintenance
 
@@ -96,6 +96,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 - **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/modes/settings.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts` and `packages/tui/test/history-frame-plan.test.ts`.
+- **Known gap:** CLI startup still requests history clearing in `startup-composer.ts` and `main.ts`. This predates `v18.3.2`. The composer checks do not verify shell-history preservation through those callers. Keep the preservation decision.
 
 ### Collapsed command cards
 
