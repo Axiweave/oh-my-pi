@@ -31,7 +31,7 @@
 
 ### Fixed
 
-- Verified image paste now accepts TIFF on Linux and macOS through a portable native decoder. OMP retains original TIFF bytes and converts the model attachment to PNG. PNG remains preferred when the clipboard offers both. Full decoding rejects truncated raster data.
+- Verified TIFF image paste now works on Linux and macOS without Bun's TIFF decoder. OMP preserves original bytes, converts model attachments to PNG, prefers offered PNG, and rejects truncated TIFF data.
 - Image paste errors now retain the declared MIME type and decoder cause, instead of telling users to copy again.
 - Verified image paste now captures its destination before receipt. Session and editor changes cancel pending receipt, including switches away and back.
 - Verified image paste now rejects undecodable data before attachment, even when its transfer hash matches. Local and legacy image routes remain unchanged.
