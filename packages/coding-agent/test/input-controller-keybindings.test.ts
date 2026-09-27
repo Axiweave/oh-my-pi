@@ -65,7 +65,7 @@ function dispatchInput(listeners: InputListener[], data: string): InputListenerR
 	return undefined;
 }
 
-function registeredInputListeners(addInputListener: Mock<(listener: InputListener) => void>): InputListener[] {
+function registeredInputListeners(addInputListener: Mock<(listener: InputListener) => () => void>): InputListener[] {
 	return addInputListener.mock.calls.map(call => call[0]);
 }
 
@@ -103,10 +103,11 @@ async function createContext(options: CreateContextOptions = {}) {
 	const showError = vi.fn();
 	let focused: unknown;
 	let overlayVisible = false;
-	const addInputListener = vi.fn((listener: InputListener) => {
-		void listener;
+	const addInputListener = vi.fn((_listener: InputListener) => {
+		return () => {};
 	});
-	const addStartListener = vi.fn();
+	const addStartListener = vi.fn(() => () => {});
+	const addStopListener = vi.fn(() => () => {});
 	const terminalWrite = vi.fn();
 	const refreshAppearance = vi.fn();
 	const resetDisplayAfterAppearanceRefresh = vi.fn(() => {
@@ -117,6 +118,7 @@ async function createContext(options: CreateContextOptions = {}) {
 	const retry = vi.fn(async () => true);
 	const abort = vi.fn(async () => {});
 	const session = {
+		registerSessionChangeCallback: () => () => {},
 		isStreaming: false,
 		isCompacting: false,
 		isGeneratingHandoff: false,
@@ -183,6 +185,7 @@ async function createContext(options: CreateContextOptions = {}) {
 			clearInlineImages,
 			addInputListener,
 			addStartListener,
+			addStopListener,
 			getFocused: vi.fn(() => focused),
 			hasOverlay: vi.fn(() => overlayVisible),
 			terminal: { write: terminalWrite, refreshAppearance },

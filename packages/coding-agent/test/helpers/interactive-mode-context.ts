@@ -102,6 +102,7 @@ export function createSessionStub(
 		isAborting: false,
 		isRetrying: false,
 		isTtsrAbortPending: false,
+		isSessionTransitioning: false,
 		retryAttempt: 0,
 		messages: [],
 		model: undefined,
@@ -128,6 +129,7 @@ export function createSessionStub(
 		setActiveToolsByName: vi.fn(async () => {}),
 		runIdleCompaction: vi.fn(async () => {}),
 		subscribe: vi.fn(() => () => {}),
+		registerSessionChangeCallback: vi.fn(() => () => {}),
 	} satisfies SessionOverrides;
 	if (overrides) layer(stub, overrides);
 	return stub as unknown as AgentSession;

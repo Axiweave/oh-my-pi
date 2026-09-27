@@ -859,6 +859,44 @@ describe("StdinBuffer", () => {
 	});
 
 	describe("Torn String Sequences (kitty OSC 5522 paste spam)", () => {
+		it("preserves the next input after an interrupted OSC across chunk boundaries", () => {
+			for (const partial of ["\x1b]", "\x1b]5522;type=read:status=DATA;AA"]) {
+				for (const next of ["\x1b]5522;type=paste:status=OK\x07", "\x1b]52;c;AA==\x1b\\", "\x1b[A"]) {
+					const input = partial + next;
+					for (let split = 0; split <= input.length; split++) {
+						const probe = new StdinBuffer();
+						const received: string[] = [];
+						probe.on("data", sequence => received.push(sequence));
+						try {
+							if (split > 0) probe.process(input.slice(0, split));
+							if (split < input.length) probe.process(input.slice(split));
+							expect(received, `partial=${JSON.stringify(partial)} split=${split}`).toEqual([next]);
+						} finally {
+							probe.destroy();
+						}
+					}
+				}
+			}
+		});
+
+		it("preserves a fresh paste header during torn-string discard", async () => {
+			setKittyProtocolActive(true);
+			const next = "\x1b]5522;type=paste:status=OK\x07";
+			for (let split = 0; split <= next.length; split++) {
+				buffer.destroy();
+				buffer = new StdinBuffer({ timeout: 5, partialHoldTimeout: 5 });
+				const received: string[] = [];
+				buffer.on("data", sequence => received.push(sequence));
+				processInput("\x1b]5522;type=read:status=DATA;AA");
+				await waitUntil(() => buffer.getBuffer().length === 0);
+				expect(buffer.getBuffer()).toBe("");
+				processInput("tail" + next.slice(0, split));
+				if (split > 0 && split < next.length) processInput("");
+				if (split < next.length) processInput(next.slice(split));
+				expect(received, `split=${split}`).toEqual([next]);
+			}
+		});
+
 		it("swallows a torn kitty OSC 5522 packet instead of typing its base64 tail", async () => {
 			// Regression: a stall past the incomplete-sequence flush window mid
 			// packet during a kitty OSC 5522 clipboard read (image paste) tore

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `TUI.addStopListener()` so features can cancel pending work before terminal handoff.
 - Added `HistoryBatch.clearScrollback` for atomic replacement replays, including empty replacements, with stale-identifier protection.
 - Added `AutocompleteProvider.getRecognizedCommandRanges` and `Editor.getRecognizedCommandRanges` so hosts can color-highlight a fully recognized leading slash command and inline `/skill:name` tokens as they're typed. Optional `anchor` and `messageStart` arguments name where the message starts on a line, so a host prefix such as the `->` queue shorthand still gets its command highlighted.
 - Added `Editor.setLeadingSlashCommand` so hosts can replace or insert a draft's leading slash command without moving its body cursor. A body with no text yet has no cursor to keep, so the caret lands after the inserted command and its trailing space, and the line is appended when the draft has none. Optional `line` and `anchor` arguments name where the message starts, so a host prefix such as the `->` queue shorthand keeps its header line.
@@ -12,6 +13,9 @@
 
 ### Fixed
 
+- Image validation now rejects unrecognized bytes labeled as a supported image format before verified paste preparation.
+- Incomplete OSC packets no longer consume the next paste or escape key sequence after a transfer stops.
+- Start listeners now receive the current started state when they subscribe after startup. This enables terminal features after early CLI rendering.
 - `ImageBudget.acquireId` now takes an optional content tag beside the placement key. A key whose bytes changed supersedes its old graphics id (purging the stale data from the terminal store) instead of keeping an id that `shouldTransmit` had already marked sent, which made the terminal re-draw the previous image.
 - Fixed shutdown rearming a destructive history reset while flushing a provider's pending rows.
 

@@ -144,7 +144,8 @@ function createContext(): {
 				inputListeners.push(listener as (data: string) => { consume?: boolean; data?: string } | undefined);
 				return () => {};
 			}),
-			addStartListener: vi.fn(),
+			addStartListener: vi.fn(() => () => {}),
+			addStopListener: vi.fn(() => () => {}),
 		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
@@ -152,6 +153,7 @@ function createContext(): {
 		autoCompactionEscapeHandler: undefined,
 		retryEscapeHandler: undefined,
 		session: {
+			registerSessionChangeCallback: () => () => {},
 			isStreaming: false,
 			isCompacting: false,
 			isGeneratingHandoff: false,

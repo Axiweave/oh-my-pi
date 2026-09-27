@@ -120,7 +120,7 @@ function isRawMultilineBurst(text: string): boolean {
  * helper returns -1 when the first byte after ESC is another ESC.
  *
  * Return codes:
- *   `end > pos`  — complete sequence, exclusive end index.
+ *   `end > pos`  — exclusive end index. An OSC can stop before a new ESC.
  *   `-1`         — incomplete, still under the per-type cap; buffer for more.
  *   `-2`         — incomplete and the prefix already spans the per-type cap;
  *                  the caller cap-flushes CSI as raw bytes; string types
@@ -191,7 +191,11 @@ function resolveEscapeEnd(buffer: string, pos: number, length: number, resumeSea
 					// `ESC \` (ST) must end within the cap; a lone trailing
 					// ESC at the buffer edge stays incomplete and is
 					// re-examined next call via the resume overlap.
-					if (i + 1 < scanLimit && buffer.charCodeAt(i + 1) === 0x5c /* \ */) return i + 2;
+					if (i + 1 < scanLimit) {
+						if (buffer.charCodeAt(i + 1) === 0x5c /* \ */) return i + 2;
+						// A new escape interrupts this OSC rather than becoming its payload.
+						return i;
+					}
 				}
 			}
 			return length - pos >= MAX_STRING_SEQ_BYTES ? -2 : -1;
@@ -344,7 +348,12 @@ function extractCompleteSequences(
 			hint = 0;
 			continue;
 		}
-		sequences.push(buffer.slice(pos, end));
+		const interruptedOsc =
+			buffer.charCodeAt(pos + 1) === 0x5d &&
+			buffer.charCodeAt(end - 1) !== 0x07 &&
+			!(buffer.charCodeAt(end - 2) === 0x1b && buffer.charCodeAt(end - 1) === 0x5c);
+		// Do not expose an interrupted protocol payload as editor input.
+		if (!interruptedOsc) sequences.push(buffer.slice(pos, end));
 		pos = end;
 		hint = 0;
 	}
@@ -542,7 +551,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 		const result = extractCompleteSequences(this.#buffer, this.#escapeSearchOffset);
 		if (result.discardFrom !== undefined) {
-			const junk = this.#buffer.slice(result.discardFrom);
+			const junk = this.#buffer.slice(result.discardFrom + 2);
 			this.#buffer = "";
 			this.#escapeSearchOffset = 0;
 			for (const sequence of result.sequences) {
@@ -869,11 +878,9 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	 */
 	#consumeStringDiscard(str: string): string {
 		if (this.#stringDiscardEscHeld) {
-			this.#stringDiscardEscHeld = false;
-			if (str.charCodeAt(0) === 0x5c /* \ */) {
-				this.#exitStringDiscard();
-				return str.slice(1);
-			}
+			if (str.length === 0) return "";
+			this.#exitStringDiscard();
+			return str.charCodeAt(0) === 0x5c /* \ */ ? str.slice(1) : ESC + str;
 		}
 		for (let i = 0; i < str.length; i++) {
 			const code = str.charCodeAt(i);
@@ -890,6 +897,9 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 					this.#exitStringDiscard();
 					return str.slice(i + 2);
 				}
+				// A fresh escape starts new input even if the old string lost its terminator.
+				this.#exitStringDiscard();
+				return str.slice(i);
 			}
 		}
 		this.#stringDiscardBytes += str.length;

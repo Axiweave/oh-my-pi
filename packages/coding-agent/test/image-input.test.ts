@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readImageMetadata, removeSyncWithRetries } from "@oh-my-pi/pi-utils";
-import { loadImageInput } from "../src/utils/image-loading";
+import { loadImageAttachmentInput, loadImageInput } from "../src/utils/image-loading";
 import { InvalidImageDataError } from "@oh-my-pi/pi-tui/chat/image-loading";
 
 describe("readImageMetadata", () => {
@@ -69,5 +69,39 @@ describe("readImageMetadata", () => {
 
 		const loading = loadImageInput({ path: imagePath, cwd: testDir, autoResize: false });
 		await expect(loading).rejects.toBeInstanceOf(InvalidImageDataError);
+	});
+});
+
+describe("loadImageAttachmentInput", () => {
+	it("preserves ordinary decoding when the header parser does not recognize the container", async () => {
+		const bmp = Buffer.from(
+			"Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AA==",
+			"base64",
+		);
+		// Fixed boundary colors generate valid BMP payloads without random state.
+		for (const color of [0x000000, 0x0000ff, 0xffffff]) {
+			const bytes = Buffer.from(bmp);
+			bytes.writeUIntLE(color, 54, 3);
+			const data = bytes.toString("base64");
+			const result = await loadImageAttachmentInput({
+				image: { type: "image", mimeType: "image/png", data },
+				label: `BMP color ${color}`,
+				uri: "memory:ordinary-attachment",
+				autoResize: false,
+			});
+			expect(result?.data).toBe(data);
+			expect(result?.bytes).toBe(bytes.length);
+			expect(result?.mimeType).toBe("image/png");
+		}
+		for (const bytes of [Buffer.alloc(0), bmp.subarray(0, 1), bmp.subarray(0, 54), Buffer.from("not an image")]) {
+			await expect(
+				loadImageAttachmentInput({
+					image: { type: "image", mimeType: "image/png", data: bytes.toString("base64") },
+					label: `invalid BMP (${bytes.length} bytes)`,
+					uri: "memory:ordinary-attachment",
+					autoResize: false,
+				}),
+			).rejects.toBeInstanceOf(InvalidImageDataError);
+		}
 	});
 });

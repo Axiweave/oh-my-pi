@@ -113,6 +113,7 @@ function resizeInPlaceOverride(): boolean | null {
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
 type StartListener = () => void;
+type StopListener = () => void;
 
 export interface RenderTimer {
 	cancel(): void;
@@ -802,6 +803,7 @@ export class TUI extends Container {
 	#debugNextWindowTop = 0;
 	#inputListeners = new Set<InputListener>();
 	#startListeners = new Set<StartListener>();
+	#stopListeners = new Set<StopListener>();
 	#paintListeners = new Set<PaintListener>();
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
@@ -881,6 +883,7 @@ export class TUI extends Container {
 	#forceViewportRepaintOnNextRender = false;
 	#hasEverRendered = false;
 	#stopped = false;
+	#started = false;
 	#cancelPostmortemRestore?: () => void;
 	/** True between a `deferInput` start() and enableInput(). */
 	#inputDeferred = false;
@@ -1341,6 +1344,7 @@ export class TUI extends Container {
 		if (this.#stopped) return;
 		this.#cancelPostmortemRestore?.();
 		this.#cancelPostmortemRestore = postmortem.register("tui-restore", () => this.stop());
+		this.#started = true;
 		for (const listener of this.#startListeners) {
 			try {
 				listener();
@@ -1817,8 +1821,16 @@ export class TUI extends Container {
 
 	addStartListener(listener: StartListener): () => void {
 		this.#startListeners.add(listener);
+		if (this.#started) listener();
 		return () => {
 			this.#startListeners.delete(listener);
+		};
+	}
+
+	addStopListener(listener: StopListener): () => void {
+		this.#stopListeners.add(listener);
+		return () => {
+			this.#stopListeners.delete(listener);
 		};
 	}
 
@@ -1999,6 +2011,14 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		this.#started = false;
+		for (const listener of this.#stopListeners) {
+			try {
+				listener();
+			} catch {
+				// One failed feature hook must not prevent terminal cleanup.
+			}
+		}
 		this.#cancelPostmortemRestore?.();
 		this.#cancelPostmortemRestore = undefined;
 		this.#debugServer?.stop();

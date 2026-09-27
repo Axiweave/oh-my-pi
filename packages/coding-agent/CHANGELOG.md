@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the verified Ghostel OSC 5522 image receiver. It checks request identity, byte count, SHA-256, and expiry before the editor commit. Busy, canceled, or incomplete transfers cannot replace the active image. Legacy terminal paste and local paste keep their existing routes.
 - Inline `@file:N` and `@file:N-M` mentions now attach selected saved lines before the first conversation model request. Literal filenames, whole-file mentions, existing limits, and full-source hashline snapshots retain their behavior.
 - Added `/wtmove` to select an existing worktree with branch/path completion while preserving session history and artifacts. It leaves checkout files and branches unchanged.
 - Model-profile keys now open a searchable picker by default. Set `modelProfileSwitchStyle: cycling` to keep forward and backward cycling; `/model-profile` remains unchanged.
@@ -29,6 +30,8 @@
 
 ### Fixed
 
+- Verified image paste now captures its destination before receipt. Session and editor changes cancel pending receipt, including switches away and back.
+- Verified image paste now rejects undecodable data before attachment, even when its transfer hash matches. Local and legacy image routes remain unchanged.
 - Fixed empty Enter ignoring a visible steering message after live steering claimed it. Pending counts now include unrecorded deliveries, so main and focused sessions interrupt and resume with the message.
 - Fixed ambiguous `/wtmove` completion rows across multiple sibling groups. Labels retain distinguishing path fragments near the start, including when long paths share both prefixes and endings.
 - Fixed `/wtmove` path identity for trailing and Unicode spaces, including native Git metadata pointers. Worktree paths remain distinguishable in completion and narrow pickers, and source-repository errors take precedence over missing targets.

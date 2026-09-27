@@ -1352,6 +1352,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	clearTransientSessionUi(): void {
+		this.#inputController.cancelPendingImagePaste();
 		this.#hideSessionInfo();
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -6372,6 +6373,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	stop(): void {
+		this.#inputController.disposeEnhancedPaste();
 		this.#appearanceRefreshRequest = undefined;
 		this.#streamPublisher?.dispose();
 		this.#streamPublisher = undefined;
@@ -6684,6 +6686,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender();
 		};
 		nextEditor.setShimmerRepaintHandler(() => this.ui.requestComponentRender(nextEditor));
+		this.#inputController.cancelPendingImagePaste();
 		this.editor = nextEditor;
 		this.composer.setEditor(nextEditor);
 		this.syncComposerShape();

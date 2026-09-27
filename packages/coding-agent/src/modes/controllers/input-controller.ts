@@ -54,10 +54,14 @@ import {
 	readTextFromClipboard,
 } from "../../utils/clipboard";
 import { getSlashCommandUsage, loadSlashCommandUsage, recordSlashCommandUsage } from "../../utils/command-usage";
-import { EnhancedPasteController } from "../../utils/enhanced-paste";
+import { EnhancedPasteController, type PasteImageCommit } from "../../utils/enhanced-paste";
 import { openInEditor, takeEditorOrigin } from "../../utils/external-editor";
 import { loadImageInput } from "../../utils/image-loading";
-import { ensureSupportedImageInput, ImageInputTooLargeError } from "@oh-my-pi/pi-tui/chat/image-loading";
+import {
+	ensureSupportedImageInput,
+	imageDecodeFailureReason,
+	ImageInputTooLargeError,
+} from "@oh-my-pi/pi-tui/chat/image-loading";
 import { type ImageAttachmentSource, tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { blobExtensionForImageMimeType } from "@oh-my-pi/pi-tui/prompt/image-format";
 import { VideoError, buildVideoContactSheetPng, probeVideo } from "../../utils/video";
@@ -264,6 +268,7 @@ export class InputController {
 	}
 
 	#enhancedPaste?: EnhancedPasteController;
+	#enhancedPasteUnsubscribers: Array<() => void> = [];
 	#draftText: string | undefined;
 	#focusedLeftTapListenerInstalled = false;
 	#focusedPasteListenerInstalled = false;
@@ -908,7 +913,7 @@ export class InputController {
 	#setupEnhancedPaste(): void {
 		if (this.#enhancedPaste) return;
 
-		this.#enhancedPaste = new EnhancedPasteController({
+		const receiver = new EnhancedPasteController({
 			write: data => this.ctx.ui.terminal.write(data),
 			pasteText: text => {
 				// Route enhanced-paste text to the currently focused component when it
@@ -921,20 +926,70 @@ export class InputController {
 				target.pasteText(text);
 				this.ctx.ui.requestRender();
 			},
-			pasteImage: async image => {
+			captureImageTarget: () => {
+				const editor = this.ctx.editor;
+				const session = this.ctx.session;
+				const viewSession = this.ctx.viewSession;
+				const sessionId = this.ctx.sessionManager.getSessionId();
+				const viewSessionId = viewSession.sessionManager.getSessionId();
+				return () => {
+					if (
+						this.ctx.editor !== editor ||
+						this.ctx.session !== session ||
+						this.ctx.viewSession !== viewSession ||
+						this.ctx.sessionManager.getSessionId() !== sessionId ||
+						viewSession.sessionManager.getSessionId() !== viewSessionId ||
+						session.isSessionTransitioning ||
+						viewSession.isSessionTransitioning
+					) {
+						throw new Error("Image paste canceled because the Session or editor changed.");
+					}
+					const focused = this.ctx.ui.getFocused();
+					if (focused && focused !== editor) {
+						throw new Error("Image paste is not supported in this prompt");
+					}
+				};
+			},
+			pasteImage: async (image, tryCommit) => {
 				// Images can only land in the main editor — when a modal Input is
 				// focused, refuse rather than dump the binary blob in a hidden buffer.
 				const focused = this.ctx.ui.getFocused();
 				if (focused && focused !== this.ctx.editor && hasPasteText(focused)) {
 					this.ctx.showStatus("Image paste is not supported in this prompt");
-					return;
+					return false;
 				}
-				await this.#normalizeAndInsertPastedImage(image, `Unsupported pasted image format: ${image.mimeType}`);
+				if (tryCommit && (await imageDecodeFailureReason(image, true))) {
+					throw new Error("Image paste contains invalid image data. Copy the image again.");
+				}
+				return this.#normalizeAndInsertPastedImage(
+					image,
+					`Unsupported pasted image format: ${image.mimeType}`,
+					undefined,
+					tryCommit,
+				);
 			},
 			showStatus: message => this.ctx.showStatus(message),
 		});
-		this.ctx.ui.addInputListener(data => (this.#enhancedPaste?.handleInput(data) ? { consume: true } : undefined));
-		this.ctx.ui.addStartListener(() => this.#enhancedPaste?.enable());
+		this.#enhancedPaste = receiver;
+		this.#enhancedPasteUnsubscribers = [
+			this.ctx.ui.addInputListener(data => (receiver.handleInput(data) ? { consume: true } : undefined)),
+			this.ctx.ui.addStartListener(() => receiver.enable()),
+			this.ctx.ui.addStopListener(() => receiver.disable()),
+			this.ctx.session.registerSessionChangeCallback(() =>
+				receiver.cancelPending("Image paste canceled because the Session changed."),
+			),
+		];
+	}
+
+	cancelPendingImagePaste(): void {
+		this.#enhancedPaste?.cancelPending("Image paste canceled because the Session or editor changed.");
+	}
+
+	disposeEnhancedPaste(): void {
+		this.#enhancedPaste?.disable();
+		this.#enhancedPaste = undefined;
+		for (const unsubscribe of this.#enhancedPasteUnsubscribers) unsubscribe();
+		this.#enhancedPasteUnsubscribers = [];
 	}
 
 	/** Enforce the deleted-chip contract at submit time: images whose inline token was removed
@@ -1924,7 +1979,11 @@ export class InputController {
 		return entries.length;
 	}
 
-	async #insertPendingImage(imageData: ImageContent, source?: ImageAttachmentSource): Promise<void> {
+	async #insertPendingImage(
+		imageData: ImageContent,
+		source?: ImageAttachmentSource,
+		tryCommit?: PasteImageCommit,
+	): Promise<boolean> {
 		const image: ImageContent = source
 			? tagImageAttachmentSource(imageData, source.path, source.kind)
 			: { type: "image", data: imageData.data, mimeType: imageData.mimeType };
@@ -1935,20 +1994,25 @@ export class InputController {
 			(
 				await materializeImageReferenceLinks([image], this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager))
 			)?.[0];
-		this.ctx.editor.pendingImages.push(image);
-		this.ctx.editor.pendingImageLinks.push(imageLink);
-		this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
-		const imageNum = this.ctx.editor.pendingImages.length;
 		const dims = await this.#imageDimensions(imageData);
 		setCachedImageDimensions(image, dims ?? null);
-		const kind = source?.kind ?? "image";
-		// The buffer holds the compact chip token; the atom table expands it to the bracketed
-		// marker (the wire/transcript format) on submit.
-		const expansion = dims
-			? `[${kind === "video" ? "Video" : "Image"} #${imageNum}, ${dims.width}x${dims.height}]`
-			: `[${kind === "video" ? "Video" : "Image"} #${imageNum}]`;
-		this.ctx.editor.insertAtom(chipLabel(kind, imageNum), expansion);
-		this.ctx.ui.requestRender();
+		const apply = () => {
+			const editor = this.ctx.editor;
+			const imageNum = editor.pendingImages.length + 1;
+			const kind = source?.kind ?? "image";
+			// The atom expands to the wire marker when the user submits the draft.
+			const expansion = dims
+				? `[${kind === "video" ? "Video" : "Image"} #${imageNum}, ${dims.width}x${dims.height}]`
+				: `[${kind === "video" ? "Video" : "Image"} #${imageNum}]`;
+			editor.pendingImages.push(image);
+			editor.pendingImageLinks.push(imageLink);
+			editor.imageLinks = editor.pendingImageLinks;
+			editor.insertAtom(chipLabel(kind, imageNum), expansion);
+			this.ctx.ui.requestRender();
+		};
+		if (tryCommit) return tryCommit(apply);
+		apply();
+		return true;
 	}
 
 	/** Probe pixel dimensions for the marker label (`[Image #N, WxH]`). Returns undefined when the
@@ -1988,6 +2052,7 @@ export class InputController {
 		image: ImageContent,
 		unsupportedMessage: string,
 		sourcePath?: string,
+		tryCommit?: PasteImageCommit,
 	): Promise<boolean> {
 		const normalized = await this.#normalizePastedImage(image, unsupportedMessage);
 		if (!normalized) return false;
@@ -1996,8 +2061,7 @@ export class InputController {
 		// and referenced by a relocation-safe `local://` URL. The reference reaches the
 		// model via the hidden companion message (see AgentSession's attachment source notices).
 		const filePath = sourcePath ?? (await this.#persistPastedImage(image));
-		await this.#insertPendingImage(normalized, filePath ? { path: filePath, kind: "image" } : undefined);
-		return true;
+		return this.#insertPendingImage(normalized, filePath ? { path: filePath, kind: "image" } : undefined, tryCommit);
 	}
 
 	/**

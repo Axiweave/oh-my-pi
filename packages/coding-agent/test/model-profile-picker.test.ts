@@ -43,6 +43,7 @@ function harness(names = ["base", "work", "review"]) {
 		onCycleModelProfileBackward: undefined as undefined | (() => Promise<void>),
 	};
 	const session = {
+		registerSessionChangeCallback: () => () => {},
 		get activeModelProfile() {
 			return state.activeModelProfile;
 		},
@@ -80,8 +81,9 @@ function harness(names = ["base", "work", "review"]) {
 				};
 			},
 			setFocus: vi.fn(),
-			addInputListener: vi.fn(),
-			addStartListener: vi.fn(),
+			addInputListener: vi.fn(() => () => {}),
+			addStartListener: vi.fn(() => () => {}),
+			addStopListener: vi.fn(() => () => {}),
 			terminal: { write: vi.fn() },
 			requestRender: vi.fn(),
 		},

@@ -74,6 +74,8 @@ const DECODE_PROBE_EDGE_PX = 1;
 
 /**
  * Why an image cannot be decoded, or `null` when it decodes.
+ * Set `requireKnownFormat` for verified receipt, which requires a recognized container.
+ * Ordinary callers retain full decoding when the header parser cannot identify the format.
  *
  * A full decode is the only check that matches what vision backends accept: a
  * middle-elided PNG keeps its signature, its header, and even a well-formed
@@ -82,13 +84,19 @@ const DECODE_PROBE_EDGE_PX = 1;
  * a structural walk rejects payloads providers accept. Decoding is the ground
  * truth on both sides. Callers on hot paths must cache the verdict.
  */
-export async function imageDecodeFailureReason(image: ImageContent): Promise<string | null> {
+export async function imageDecodeFailureReason(
+	image: ImageContent,
+	requireKnownFormat = false,
+): Promise<string | null> {
 	if (!/^[A-Za-z0-9+/]*={0,2}$/.test(image.data)) return "invalid base64 image data";
 	const normalizedData = image.data.replace(/=+$/, "");
 	const bytes = Buffer.from(image.data, "base64");
 	if (bytes.length === 0) return "empty image data";
 	if (bytes.toString("base64").replace(/=+$/, "") !== normalizedData) return "invalid base64 image data";
 	const detected = parseImageMetadata(bytes);
+	if (requireKnownFormat && !detected) {
+		return `image data does not match declared ${image.mimeType}`;
+	}
 	if (detected && detected.mimeType !== image.mimeType.toLowerCase()) {
 		return `declared ${image.mimeType} but contains ${detected.mimeType}`;
 	}

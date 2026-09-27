@@ -23,11 +23,16 @@ function makeHarness() {
 		ui: {
 			addInputListener: (fn: (data: string) => { consume?: boolean; data?: string } | undefined) => {
 				listeners.push(fn);
+				return () => {
+					const index = listeners.indexOf(fn);
+					if (index !== -1) listeners.splice(index, 1);
+				};
 			},
 			getMutableViewport: () => ({ top: 0, length: 5 }),
 			hasOverlay: () => false,
 			requestRender: () => {},
-			addStartListener: () => {},
+			addStartListener: () => () => {},
+			addStopListener: () => () => {},
 			getFocused: () => undefined,
 		},
 		handlesBtwBranchKey: () => false,
@@ -42,6 +47,7 @@ function makeHarness() {
 		dictationSpaceHold: () => undefined,
 		session: {
 			extensionRunner: undefined,
+			registerSessionChangeCallback: () => () => {},
 		},
 		resolveViewportClickCandidates: (index: number) => (index === 2 ? [PINNED_HUD_TOGGLE_ID] : []),
 		focusedAgentId: undefined,
