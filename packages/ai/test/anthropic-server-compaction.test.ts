@@ -231,12 +231,30 @@ describe("Anthropic on-demand compaction requests", () => {
 		expect(supportsAnthropicCompaction(model, "https://workspace.services.ai.azure.com/anthropic")).toBe(true);
 		expect(supportsAnthropicCompaction(model, "https://aws-external-anthropic.us-west-2.api.aws")).toBe(true);
 		expect(supportsAnthropicCompaction(model, "https://bedrock-runtime.us-west-2.amazonaws.com")).toBe(false);
-		const optedIn = buildModel({ ...spec, remoteCompaction: { enabled: true } });
-		expect(supportsAnthropicCompaction(optedIn, "https://bedrock-mantle.us-west-2.api.aws")).toBe(false);
 		await withEnv({ ANTHROPIC_BASE_URL: "https://gateway.example.test" }, async () => {
 			const response = await captureRequest(model, { anthropicCompaction: {} });
 			expect(response.payload.compaction).toBeUndefined();
 		});
+	});
+
+	it("requires proxy opt-in and model support before sending compaction", async () => {
+		for (const [enabled, supported, expected] of [
+			[undefined, true, false],
+			[true, true, true],
+			[false, true, false],
+			[true, false, false],
+		] as const) {
+			const proxy = buildModel({
+				...spec,
+				provider: "cliproxyapi",
+				baseUrl: "https://proxy.example.test/anthropic",
+				compat: { supportsServerCompaction: supported },
+				...(enabled === undefined ? {} : { remoteCompaction: { enabled } }),
+			});
+			const response = await captureRequest(proxy, { anthropicCompaction: {} });
+			expect(response.payload.compaction).toEqual(expected ? { type: "summarize" } : undefined);
+			expect(response.beta.includes("compact-2026-09-04")).toBe(expected);
+		}
 	});
 });
 

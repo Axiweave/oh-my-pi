@@ -12,6 +12,7 @@ import { buildDiscoveredModel, buildModel } from "@oh-my-pi/pi-catalog/build";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import {
 	getBundledModelReferenceIndex,
+	getReferenceCandidateIds,
 	inheritReferenceThinking,
 	resolveModelReference,
 	stripBracketedModelIdAffixes,
@@ -1033,11 +1034,17 @@ async function discoverCLIProxyAPIModels(
 		throw new Error("CLIProxyAPI catalog must contain a models array.");
 	}
 	const discovered: Model<Api>[] = [];
+	const references = getBundledModelReferenceIndex();
 	for (const item of payload.models) {
 		if (!isRecord(item)) continue;
 		const id = typeof item.slug === "string" ? item.slug.trim() : "";
 		const visibility = typeof item.visibility === "string" ? item.visibility.toLowerCase() : "";
 		if (!id || visibility === "hide" || visibility === "hidden") continue;
+		const candidates = getReferenceCandidateIds(id);
+		const isClaude = candidates.some(candidate => /^claude-/i.test(candidate));
+		const isGpt = candidates.some(candidate => /^gpt-/i.test(candidate));
+		const reference = isClaude ? resolveModelReference(id, references) : undefined;
+		const api = isClaude ? "anthropic-messages" : providerConfig.api;
 		const reportedEfforts = new Set<string>();
 		if (Array.isArray(item.supported_reasoning_levels)) {
 			for (const entry of item.supported_reasoning_levels) {
@@ -1055,17 +1062,19 @@ async function discoverCLIProxyAPIModels(
 			toPositiveNumberOrUndefined(item.max_tokens) ??
 			toPositiveNumberOrUndefined(item.max_output_tokens) ??
 			toPositiveNumberOrUndefined(item.max_completion_tokens) ??
-			discoveryDefaultMaxTokens(providerConfig.api);
+			reference?.maxTokens ??
+			discoveryDefaultMaxTokens(api);
 		discovered.push(
 			buildModel({
 				id,
 				name: typeof item.display_name === "string" ? item.display_name.trim() || id : id,
-				api: providerConfig.api,
+				api,
 				provider: providerConfig.provider,
 				baseUrl,
-				reasoning: efforts.length > 0,
+				reasoning: reference?.reasoning ?? efforts.length > 0,
 				thinking:
-					efforts.length > 0
+					reference?.thinking ??
+					(efforts.length > 0
 						? {
 								mode: "effort",
 								efforts,
@@ -1073,17 +1082,24 @@ async function discoverCLIProxyAPIModels(
 								effortMap: Object.fromEntries(efforts.map(effort => [effort, effort])),
 								requiresEffort: !reportedEfforts.has("none") && !reportedEfforts.has("off"),
 							}
-						: undefined,
+						: undefined),
 				input: extractOpenAIModelsListInputCapabilities(item) ?? ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow,
 				maxTokens: Math.min(maxTokens, contextWindow),
 				headers,
-				compat: {
-					supportsStore: false,
-					supportsReasoningEffort: efforts.length > 0,
-					trustExplicitThinkingOnly: true,
-				},
+				remoteCompaction: isClaude
+					? { enabled: true }
+					: isGpt
+						? { api: "openai-responses", v2StreamingEnabled: true }
+						: undefined,
+				compat: isClaude
+					? reference?.compat
+					: {
+							supportsStore: false,
+							supportsReasoningEffort: efforts.length > 0,
+							trustExplicitThinkingOnly: true,
+						},
 			}),
 		);
 	}

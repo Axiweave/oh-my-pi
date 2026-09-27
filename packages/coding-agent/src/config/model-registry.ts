@@ -1386,10 +1386,10 @@ export class ModelRegistry {
 			? withDecoderMetadata.map(model =>
 					buildModel({
 						...model,
-						remoteCompaction: mergeProviderRemoteCompactionConfig(
-							model.remoteCompaction,
-							providerConfig.remoteCompaction,
-						),
+						remoteCompaction:
+							providerConfig.discovery.type === "cliproxyapi"
+								? mergeRemoteCompactionConfig(model.remoteCompaction, providerConfig.remoteCompaction)
+								: mergeProviderRemoteCompactionConfig(model.remoteCompaction, providerConfig.remoteCompaction),
 						compat: model.compatConfig,
 					} as ModelSpec<Api>),
 				)
@@ -1792,7 +1792,7 @@ export class ModelRegistry {
 			return `${providerConfig.provider}:litellm-rich-v5`;
 		}
 		if (providerConfig.discovery.type === "cliproxyapi") {
-			return `${providerConfig.provider}:cliproxyapi-v1`;
+			return `${providerConfig.provider}:cliproxyapi-v2`;
 		}
 		return providerConfig.provider;
 	}
@@ -1841,10 +1841,12 @@ export class ModelRegistry {
 			try {
 				const resolvedHeaders = await resolveConfigHeaders(providerConfig.headers);
 				const requestConfig = { ...providerConfig, headers: resolvedHeaders };
-				const models = this.#applyProviderModelOverrides(
-					providerId,
-					await discoverModelsByProviderType(requestConfig, this.#discoveryContext()),
-				);
+				const discovered = await discoverModelsByProviderType(requestConfig, this.#discoveryContext());
+				// Keep CLIProxyAPI cache rows independent of model settings so removed overrides do not persist.
+				const models =
+					providerConfig.discovery.type === "cliproxyapi"
+						? discovered
+						: this.#applyProviderModelOverrides(providerId, discovered);
 				this.#lastDiscoveryWarnings.delete(providerId);
 				return models.map(toModelSpec);
 			} catch (error) {

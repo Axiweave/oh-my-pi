@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { shouldUseProviderNativeCompaction } from "@oh-my-pi/pi-agent-core/compaction";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { discoverModelsByProviderType } from "@oh-my-pi/pi-coding-agent/config/model-discovery";
@@ -113,7 +114,7 @@ test("CLIProxyAPI isolates discovery and cached metadata by configured provider"
 	}
 });
 
-// A familiar model name must not replace the proxy's advertised effort vocabulary.
+// GPT models retain the proxy's advertised effort vocabulary.
 test("CLIProxyAPI maps reported effort levels and ignores hidden or malformed entries", async () => {
 	const models = await discoverModelsByProviderType(
 		{
@@ -128,8 +129,8 @@ test("CLIProxyAPI maps reported effort levels and ignores hidden or malformed en
 				Response.json({
 					models: [
 						{
-							slug: "claude-opus-5-5",
-							display_name: "Claude Opus 5.5",
+							slug: "gpt-5.4",
+							display_name: "GPT 5.4",
 							context_window: 1000000,
 							max_tokens: 128000,
 							input_modalities: ["text", "image"],
@@ -145,7 +146,7 @@ test("CLIProxyAPI maps reported effort levels and ignores hidden or malformed en
 								null,
 							],
 						},
-						{ slug: "claude-sonnet-5", supported_reasoning_levels: ["none"] },
+						{ slug: "gpt-5-mini", supported_reasoning_levels: ["none"] },
 						{
 							slug: "future-model",
 							max_context_window: 2000,
@@ -160,7 +161,7 @@ test("CLIProxyAPI maps reported effort levels and ignores hidden or malformed en
 				}),
 		},
 	);
-	expect(models.map(model => model.id)).toEqual(["claude-opus-5-5", "claude-sonnet-5", "future-model"]);
+	expect(models.map(model => model.id)).toEqual(["gpt-5.4", "gpt-5-mini", "future-model"]);
 	expect(models[0]).toMatchObject({
 		contextWindow: 1000000,
 		maxTokens: 128000,
@@ -195,4 +196,163 @@ test("CLIProxyAPI preserves authentication rejection status", async () => {
 			},
 		),
 	).rejects.toMatchObject({ status: 403 });
+});
+
+test("CLIProxyAPI selects compaction and thinking by model family", async () => {
+	const models = await discoverModelsByProviderType(
+		{
+			provider: "proxy-families",
+			api: "openai-completions",
+			baseUrl: "https://families.invalid",
+			discovery: { type: "cliproxyapi" },
+		},
+		{
+			getBearerApiKeyResolver: async () => undefined,
+			fetch: async () =>
+				Response.json({
+					models: [
+						{ slug: "openai/gpt-5.4" },
+						{ slug: "[proxy] claude-sonnet-4-6", supported_reasoning_levels: ["low", "high"] },
+						{ slug: "gemini-3-pro" },
+						{ slug: "unknown-model" },
+					],
+				}),
+		},
+	);
+	expect(models[0]).toMatchObject({
+		api: "openai-completions",
+		remoteCompaction: { api: "openai-responses", v2StreamingEnabled: true },
+	});
+	expect(models[1]).toMatchObject({
+		api: "anthropic-messages",
+		remoteCompaction: { enabled: true },
+		thinking: { mode: "anthropic-adaptive", efforts: ["low", "medium", "high"] },
+	});
+	expect(models[2]?.remoteCompaction).toBeUndefined();
+	expect(models[3]?.remoteCompaction).toBeUndefined();
+});
+
+test("CLIProxyAPI reapplies current provider and model opt-outs to raw cached models", async () => {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cliproxyapi-settings-"));
+	const auth = await AuthStorage.create(path.join(dir, "auth.db"));
+	try {
+		const modelsPath = path.join(dir, "models.yml");
+		const configure = (settings = "") =>
+			Bun.write(
+				modelsPath,
+				`providers:
+  proxy-settings:
+    baseUrl: https://settings.invalid
+    api: openai-responses
+    apiKey: test-key
+    authHeader: true
+    discovery:
+      type: cliproxyapi
+${settings}`,
+			);
+		const providerOptOut = `    remoteCompaction:
+      enabled: false
+`;
+		const modelOptOut = `    modelOverrides:
+      gpt-5.4:
+        remoteCompaction:
+          v2StreamingEnabled: false
+          api: openai-completions
+    models:
+      - id: claude-sonnet-4-6
+        api: openai-responses
+        remoteCompaction:
+          enabled: false
+`;
+		const fetch: FetchImpl = async () =>
+			Response.json({
+				models: [{ slug: "gpt-5.4" }, { slug: "claude-sonnet-4-6" }],
+			});
+		const offlineFetch: FetchImpl = async () => {
+			throw new Error("Unexpected network request");
+		};
+		await configure(providerOptOut);
+		const initial = new ModelRegistry(auth, modelsPath, { fetch });
+		await initial.refreshProvider("proxy-settings");
+		expect(initial.getError()).toBeUndefined();
+		for (const id of ["gpt-5.4", "claude-sonnet-4-6"]) {
+			const model = initial.find("proxy-settings", id)!;
+			expect(model.remoteCompaction?.enabled).toBe(false);
+			expect(shouldUseProviderNativeCompaction(model, { remoteEnabled: true })).toBe(false);
+		}
+		await configure(modelOptOut);
+		const overridden = new ModelRegistry(auth, modelsPath, { fetch: offlineFetch });
+		await overridden.refreshProvider("proxy-settings", "offline");
+		expect(overridden.find("proxy-settings", "gpt-5.4")?.remoteCompaction).toMatchObject({
+			api: "openai-completions",
+			v2StreamingEnabled: false,
+		});
+		expect(
+			shouldUseProviderNativeCompaction(overridden.find("proxy-settings", "gpt-5.4")!, {
+				remoteEnabled: true,
+			}),
+		).toBe(false);
+		expect(overridden.find("proxy-settings", "claude-sonnet-4-6")).toMatchObject({
+			api: "openai-responses",
+			remoteCompaction: { enabled: false },
+		});
+		// Fresh discovery must not write model opt-outs into the reusable cache.
+		const onlineOverride = new ModelRegistry(auth, modelsPath, { fetch });
+		await onlineOverride.refreshProvider("proxy-settings");
+		expect(onlineOverride.find("proxy-settings", "claude-sonnet-4-6")?.api).toBe("openai-responses");
+		await configure();
+		const restored = new ModelRegistry(auth, modelsPath, { fetch: offlineFetch });
+		await restored.refreshProvider("proxy-settings", "offline");
+		expect(restored.find("proxy-settings", "gpt-5.4")?.remoteCompaction).toMatchObject({
+			api: "openai-responses",
+			v2StreamingEnabled: true,
+		});
+		expect(restored.find("proxy-settings", "claude-sonnet-4-6")).toMatchObject({
+			api: "anthropic-messages",
+			remoteCompaction: { enabled: true },
+		});
+		for (const id of ["gpt-5.4", "claude-sonnet-4-6"]) {
+			expect(
+				shouldUseProviderNativeCompaction(restored.find("proxy-settings", id)!, {
+					remoteEnabled: true,
+				}),
+			).toBe(true);
+		}
+		await configure(`    modelOverrides:
+      gpt-5.4:
+        remoteCompaction:
+          enabled: false
+      claude-sonnet-4-6:
+        remoteCompaction:
+          enabled: false
+`);
+		const modelDisabled = new ModelRegistry(auth, modelsPath, { fetch: offlineFetch });
+		for (const id of ["gpt-5.4", "claude-sonnet-4-6"]) {
+			expect(
+				shouldUseProviderNativeCompaction(modelDisabled.find("proxy-settings", id)!, {
+					remoteEnabled: true,
+				}),
+			).toBe(false);
+		}
+		await configure(`    remoteCompaction:
+      v2StreamingEnabled: false
+`);
+		const streamingDisabled = new ModelRegistry(auth, modelsPath, { fetch: offlineFetch });
+		expect(
+			shouldUseProviderNativeCompaction(streamingDisabled.find("proxy-settings", "gpt-5.4")!, {
+				remoteEnabled: true,
+			}),
+		).toBe(false);
+		await configure(providerOptOut);
+		const disabled = new ModelRegistry(auth, modelsPath, { fetch: offlineFetch });
+		expect(
+			shouldUseProviderNativeCompaction(disabled.find("proxy-settings", "gpt-5.4")!, {
+				remoteEnabled: true,
+			}),
+		).toBe(false);
+		expect(disabled.find("proxy-settings", "claude-sonnet-4-6")?.remoteCompaction?.enabled).toBe(false);
+	} finally {
+		auth.close();
+		await fs.rm(dir, { recursive: true, force: true });
+	}
 });

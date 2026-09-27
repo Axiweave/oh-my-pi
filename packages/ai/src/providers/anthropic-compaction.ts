@@ -34,6 +34,7 @@ export function resolvesToOfficialAnthropicEndpoint(model: Model<"anthropic-mess
 /** Whether model policy and the effective deployment support on-demand compaction. */
 export function supportsAnthropicCompaction(model: Model<"anthropic-messages">, effectiveBaseUrl?: string): boolean {
 	if (!isCompactionCapableModel(model)) return false;
+	if (model.remoteCompaction?.enabled === true) return true;
 	if (
 		model.transport === "pi-native" &&
 		model.compat.firstPartyProvider === true &&
@@ -48,9 +49,7 @@ export function supportsAnthropicCompaction(model: Model<"anthropic-messages">, 
 			: normalizeAnthropicBaseUrl(model.baseUrl));
 	return (
 		isSupportedCompactionEndpoint(route) &&
-		(model.compat.firstPartyProvider === true ||
-			model.provider === "google-vertex" ||
-			model.remoteCompaction?.enabled === true)
+		(model.compat.firstPartyProvider === true || model.provider === "google-vertex")
 	);
 }
 

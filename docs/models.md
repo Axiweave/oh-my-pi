@@ -390,13 +390,49 @@ providers:
 
 Discovery requests `{root}/v1/models?client_version=pi` and reads the `models` array, not the generic OpenAI `data` array.
 Set `baseUrl` to the server root or its `/v1` URL. Path prefixes remain intact.
-The configured `api` still controls inference. With `openai-responses`, inference uses `{root}/v1/responses`, not the Pi extension's `/backend-api/codex/responses` route.
+The configured `api` controls inference for non-Claude models. With `openai-responses`, requests use `{root}/v1/responses`.
+Recognized Claude models use `anthropic-messages` at `{root}/v1/messages`. An explicit model definition in `models` can override its `api`.
 
-The mapper reads model IDs from `slug`, names from `display_name`, context and output limits, input modalities, and advertised reasoning levels.
-It excludes hidden entries and ignores unsupported effort names, including `ultra` in this OMP version.
-It uses the advertised default effort when supported. Otherwise, it uses the lowest supported advertised effort.
-An explicit `none` or `off` level permits reasoning-off requests. Missing effort metadata does not create a guessed effort ladder.
+The mapper reads model IDs from `slug`, names from `display_name`, context and output limits, and input modalities.
+It excludes hidden entries. Claude models use known Anthropic thinking metadata when available.
+Other models use advertised reasoning levels and exclude unsupported effort names, including `ultra`.
+The advertised default effort wins when supported. Otherwise, the lowest supported advertised effort wins.
+An explicit `none` or `off` level permits reasoning-off requests.
 Costs remain unknown (zero). Normal `modelOverrides` still apply after discovery.
+
+Server compaction defaults to enabled for recognized GPT and Claude models:
+
+- GPT models use OpenAI V2 streaming compaction through `/v1/responses`.
+- Supported Claude models use Anthropic on-demand compaction through `/v1/messages`.
+- Other model families keep their existing compaction behavior.
+
+The server must support the selected protocol. A failed compaction follows the configured `compaction.methodOrder` fallback order.
+Some proxies add `context_management` when adaptive thinking is present, which conflicts with Anthropic on-demand compaction.
+Such proxies must preserve requests without that added field before Claude compaction can succeed.
+
+To disable server compaction for this provider, merge the following settings into its existing entry:
+
+```yaml
+providers:
+  cliproxy-home:
+    remoteCompaction:
+      enabled: false
+```
+
+To disable it for one model instead, use a model override:
+
+```yaml
+providers:
+  cliproxy-home:
+    modelOverrides:
+      claude-fable-5-1:
+        remoteCompaction:
+          enabled: false
+```
+
+Provider settings override discovery defaults. Model overrides take precedence over provider settings, including after cached discovery.
+Set `remoteCompaction.v2StreamingEnabled: false` to disable only the GPT V2 default.
+Existing CLIProxyAPI cache rows refresh under the new discovery version.
 
 The catalog's prompts, tool policy, and service-tier fields do not change agent behavior or enable paid Fast mode.
 A malformed response fails discovery and retains the existing cache. An explicit empty `models` array clears that provider's discovered models.

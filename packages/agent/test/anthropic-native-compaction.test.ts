@@ -148,13 +148,13 @@ describe("shouldUseAnthropicNativeCompaction", () => {
 		expect(shouldUseAnthropicNativeCompaction(makeOpenAiModel())).toBe(false);
 	});
 
-	test("resolves the endpoint the way the transport does, so an ANTHROPIC_BASE_URL reroute is excluded", async () => {
+	test("requires opt-in when ANTHROPIC_BASE_URL reroutes the first-party model", async () => {
 		const previous = Bun.env.ANTHROPIC_BASE_URL;
 		Bun.env.ANTHROPIC_BASE_URL = "https://gateway.example.com";
 		try {
 			expect(shouldUseAnthropicNativeCompaction(makeAnthropicModel())).toBe(false);
 			expect(shouldUseAnthropicNativeCompaction(makeAnthropicModel({ remoteCompaction: { enabled: true } }))).toBe(
-				false,
+				true,
 			);
 		} finally {
 			if (previous === undefined) delete Bun.env.ANTHROPIC_BASE_URL;

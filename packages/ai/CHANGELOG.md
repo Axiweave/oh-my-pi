@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Anthropic server compaction now accepts custom endpoints when `remoteCompaction.enabled` is true. Model capability checks and explicit opt-outs still apply.
+
 ## [18.3.4] - 2026-09-27
 
 ### Fixed
