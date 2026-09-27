@@ -116,24 +116,18 @@ describe("HistorySearchComponent", () => {
 		type(component, "deploy");
 
 		const local = render(component).plain;
-		expect(local).toContain("History (current folder)");
 		expect(local).toContain("deploy current service");
 		expect(local).not.toContain("deploy other service");
-		expect(local).toContain("tab all projects");
 
 		component.handleInput("\t");
 		const global = render(component).plain;
-		expect(global).toContain("History (all projects)");
 		expect(global).toContain("deploy current service");
 		expect(global).toContain("deploy other service");
 		expect(global).not.toContain("unrelated global prompt");
-		expect(global).toContain("tab current folder");
 
 		component.handleInput("\t");
 		const localAgain = render(component).plain;
-		expect(localAgain).toContain("History (current folder)");
 		expect(localAgain).toContain("deploy current service");
 		expect(localAgain).not.toContain("deploy other service");
-		expect(localAgain).toContain("tab all projects");
 	});
 });

@@ -3,7 +3,13 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.3.2` on 2026-09-25.
+**Reviewed against:** `v18.3.4` on 2026-09-27.
+
+**Verification exception:** The maintainer approved this merge despite failures reproduced at the pre-merge commit or in upstream `v18.3.4`.
+Source setup, `bun check`, the launcher smoke test, and 46 focused merge checks passed.
+Pre-merge failures cover terminal probes, welcome resize, macOS spelling, skill discovery, usage-row fixtures, JavaScript package isolation, and the Rust JJ fixture.
+Upstream-only checks also fail: `packages/coding-agent/test/btw-history.test.ts` expects three files but finds six.
+`packages/coding-agent/test/steering-skip-render.test.ts` reports an ellipsis background-color mismatch.
 
 ## Maintenance
 

@@ -150,7 +150,7 @@ function makeHarness(
 		},
 		pendingMessagesContainer,
 		compactionQueuedMessages: [],
-		keybindings: { getDisplayString: () => "Alt+Up" },
+		keybindings: { getKeys: () => ["alt+up"] },
 		unsubscribe: () => {
 			mainUnsubscribe++;
 		},

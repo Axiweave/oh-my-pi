@@ -28,7 +28,7 @@ export interface HistorySource {
 	search(query: string, limit: number, cwd?: string): HistorySearchEntry[];
 	getRecent(limit: number, cwd?: string): HistorySearchEntry[];
 }
-import { rawKeyHint } from "../chrome/keybinding-hints";
+import { editorKeys, keyHint, rawKeyHint } from "../chrome/keybinding-hints";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
 import { MenuSelection } from "../components/menu-selection";
@@ -274,12 +274,13 @@ export class HistorySearchComponent extends OverlayPanel {
 	#refreshScopeChrome(): void {
 		this.title = this.#scope === "folder" ? "History (current folder)" : "History (all projects)";
 		const dot = theme.fg("dim", theme.sep.dot);
+		const navigate = theme.fg("dim", editorKeys("tui.select.up", "tui.select.down")) + theme.fg("muted", " navigate");
 		const targetScope = this.#scope === "folder" ? "all projects" : "current folder";
 		this.#footer.setText(
 			[
-				rawKeyHint("↑↓", "navigate"),
+				navigate,
 				rawKeyHint("enter", "select"),
-				rawKeyHint("esc", "cancel"),
+				keyHint("tui.select.cancel", "cancel"),
 				rawKeyHint("tab", targetScope),
 			].join(dot),
 		);

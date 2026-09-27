@@ -3,6 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -70,7 +71,6 @@ async function createHarness(sessionName: string): Promise<Harness> {
 		model: undefined,
 		thinkingLevel: undefined,
 		titleGenerationSignal: new AbortController().signal,
-		notifyTitleGenerationStart: () => undefined,
 	} as unknown as AgentSession;
 	const mode = new InteractiveMode(session, "test");
 	harness = { mode, sessionManager, tempDir };
@@ -116,7 +116,7 @@ describe("InteractiveMode working-message session accent cache", () => {
 			startStableLoader(mode);
 			const rendered = Bun.stripANSI(renderLoader(mode)).trimStart();
 			expect(rendered.startsWith(`${theme.getSpinnerFrames()[0]}  `)).toBe(true);
-			expect(rendered).not.toContain(theme.icon.esc);
+			expect(rendered).not.toContain(appKey(mode.keybindings, "app.interrupt"));
 		} finally {
 			cfgComposerStyleFooterMode.clearOverride(settings);
 			mode.syncComposerShape();
@@ -126,7 +126,7 @@ describe("InteractiveMode working-message session accent cache", () => {
 		const { mode } = await createHarness("Status brand session");
 		startStableLoader(mode);
 		const rendered = Bun.stripANSI(renderLoader(mode)).trimStart();
-		expect(rendered.startsWith(`${theme.icon.esc}  `)).toBe(true);
+		expect(rendered.startsWith(`${appKey(mode.keybindings, "app.interrupt")}  `)).toBe(true);
 	});
 
 	it("reuses one computed accent across loader spinner and message colorizers", async () => {

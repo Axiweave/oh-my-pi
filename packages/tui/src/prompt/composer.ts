@@ -17,6 +17,7 @@ import { sliceWithWidth, truncateToWidth, visibleWidth, wrapTextWithAnsi } from 
 import { postmortem } from "@oh-my-pi/pi-utils";
 import { handleEditorInput } from "../../../coding-agent/src/utils/external-editor";
 import { CustomEditor } from "./custom-editor";
+import type { WordCompletionMethod } from "./word-completion";
 import { type AnimationFrame, isRowPrefix, TranscriptContainer } from "../chrome/transcript-container";
 import { type LspServerInfo, type RecentSession, WelcomeComponent } from "./welcome";
 import { queueShorthandBodyStart } from "./queue-input";
@@ -41,7 +42,7 @@ export interface ComposerPreferences {
 	readonly imeSafeCursor: boolean;
 	readonly autocompleteMaxVisible: number;
 	readonly spellingTypoDetection: boolean;
-	readonly spellingAutocomplete: boolean;
+	readonly spellingAutocomplete: WordCompletionMethod;
 	readonly spellingAutocorrect: boolean;
 	// Dock the composer group (hook widgets + editor + status line) to the
 	// viewport bottom so collapsing tool output cannot pull the prompt up; the
@@ -60,7 +61,7 @@ export const COMPOSER_DEFAULTS: ComposerPreferences = {
 	imeSafeCursor: false,
 	autocompleteMaxVisible: 10,
 	spellingTypoDetection: true,
-	spellingAutocomplete: true,
+	spellingAutocomplete: "auto",
 	spellingAutocorrect: false,
 	pinBottom: true,
 	streamingScrollback: false,

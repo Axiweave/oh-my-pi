@@ -14,6 +14,7 @@ import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-ag
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { McpConnectionStatusEvent } from "@oh-my-pi/pi-coding-agent/mcp/startup-events";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -131,6 +132,7 @@ function makeTurnEndContext(
 	const viewSession = options.focusedSubagent ? { ...session, isStreaming: true } : session;
 	return {
 		isInitialized: true,
+		keybindings: KeybindingsManager.inMemory(),
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
 		retryLoader: undefined,
@@ -207,6 +209,41 @@ describe("EventController IDE session-state publishing", () => {
 		await flushMicrotasks();
 
 		expect(fake.sent).toEqual([]);
+	});
+
+	it("publishes the drained async turn outcome only while the main session remains visible", async () => {
+		const cases: Array<[StopReason, boolean, string[]]> = [
+			["stop", false, ["working", "done"]],
+			["aborted", false, ["working", "idle"]],
+			["stop", true, ["working"]],
+		];
+		for (const [stopReason, focusSubagent, expected] of cases) {
+			const fake = fakeIdeManager();
+			const ctx = makeTurnEndContext(fake.manager);
+			const drained = Promise.withResolvers<void>();
+			let pending = true;
+			Object.assign(ctx.session, {
+				hasPendingAsyncWork: () => pending,
+				settleAsyncWork: () => drained.promise,
+			});
+			const controller = new EventController(ctx);
+
+			await controller.handleEvent({ type: "agent_start" });
+			await controller.handleEvent({
+				...makeAgentEndEvent([makeAssistantMessage(stopReason)]),
+				isTerminal: false,
+				awaitingAsyncWork: true,
+			});
+			await flushMicrotasks();
+			expect(fake.sent).toEqual(["working"]);
+
+			if (focusSubagent) Object.assign(ctx, { viewSession: { ...ctx.session } });
+			pending = false;
+			drained.resolve();
+			await flushMicrotasks();
+
+			expect(fake.sent).toEqual(expected);
+		}
 	});
 
 	it("suppresses agent_end publishes while a retry is pending, then publishes once settled", async () => {

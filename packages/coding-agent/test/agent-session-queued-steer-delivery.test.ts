@@ -462,7 +462,7 @@ describe("AgentSession queued steer delivery", () => {
 			await started.promise;
 			await session.steer("123123");
 			const signal = await claimed.promise;
-			expect(session.getQueuedMessages().steering).toEqual([]);
+			expect(session.queuedMessageCount).toBe(1);
 			editor.handleInput("\r");
 			expect(signal.aborted).toBe(true);
 			await submitted;

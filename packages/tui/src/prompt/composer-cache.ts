@@ -5,6 +5,7 @@ import { getComposerCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import type { LspServerInfo, RecentSession } from "./welcome";
 import type { ComposerPreferences, ComposerStatusSnapshot } from "./composer";
 import type { SymbolPreset } from "../theme/theme";
+import { isWordCompletionMethod } from "./word-completion";
 
 const CACHE_VERSION = 1;
 const STATUS_CACHE_VERSION = 3;
@@ -206,7 +207,7 @@ function readUiState(file: string): { preferences: ComposerPreferences; theme: C
 		typeof imeSafeCursor !== "boolean" ||
 		typeof autocompleteMaxVisible !== "number" ||
 		typeof spellingTypoDetection !== "boolean" ||
-		typeof spellingAutocomplete !== "boolean" ||
+		!isWordCompletionMethod(spellingAutocomplete) ||
 		typeof spellingAutocorrect !== "boolean" ||
 		typeof pinBottom !== "boolean" ||
 		(streamingScrollback !== undefined && typeof streamingScrollback !== "boolean")

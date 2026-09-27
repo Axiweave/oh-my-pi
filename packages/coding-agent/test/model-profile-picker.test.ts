@@ -137,7 +137,10 @@ describe("model profile keys", () => {
 			await h.editor.onCycleModelProfileForward!();
 			const picker = h.overlays.at(-1)!;
 			for (const key of query) picker.handleInput(key);
-			const rows = picker.renderContent(60).slice(1).map(line => Bun.stripANSI(line).trimEnd());
+			const rows = picker
+				.renderContent(60)
+				.slice(1)
+				.map(line => Bun.stripANSI(line).trimEnd());
 			expect(rows.some(line => line.endsWith("sol-low"))).toBe(matches);
 			expect(rows.some(line => line.endsWith(" sol"))).toBe(query === "");
 			expect(rows.some(line => line.endsWith("sonnet"))).toBe(query === "");
