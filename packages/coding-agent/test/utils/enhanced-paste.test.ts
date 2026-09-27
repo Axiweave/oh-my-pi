@@ -191,7 +191,7 @@ const PNG = Buffer.from(
 	"base64",
 );
 const PNG_SHA256 = createHash("sha256").update(PNG).digest("hex");
-const VERIFIED_MIMES = ["text/plain", VERIFIED_MIME, "image/png", "image/jpeg"];
+const VERIFIED_MIMES = ["text/plain", VERIFIED_MIME, "image/tiff", "image/png", "image/jpeg"];
 
 function manifest(overrides: Record<string, unknown> = {}): string {
 	return JSON.stringify({

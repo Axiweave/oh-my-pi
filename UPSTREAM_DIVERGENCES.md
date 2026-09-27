@@ -19,9 +19,11 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 - **Decision:** Verify OSC 5522 request identity, framing, byte count, SHA-256, expiry, and image decoding before one guarded editor commit.
 - **Decision:** Cancel pending receipt when the session, editor, or terminal lifecycle changes. Require a known image container only for verified receipt.
+- **Decision:** Use the Rust image library for classic TIFF in either byte order. Preserve original TIFF bytes during transfer and storage. Normalize the model attachment to PNG, and prefer PNG when both clipboard formats are available.
+- **Runtime:** Rebuild the native addon with `bun run setup`. Existing OMP processes must restart to load the portable TIFF decoder.
 - **Why:** Incomplete or stale transfers must not alter a draft or attach an image to the wrong destination. Local and legacy image routes stay unchanged.
 - **Key paths:** `packages/coding-agent/src/utils/enhanced-paste.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/tui/src/chat/image-loading.ts`, `packages/tui/src/stdin-buffer.ts`, and `packages/tui/src/tui.ts`.
-- **Checks:** `packages/coding-agent/test/utils/enhanced-paste.test.ts`, `packages/coding-agent/test/input-controller-enhanced-paste.test.ts`, `packages/coding-agent/test/image-input.test.ts`, `packages/tui/test/start-listener.test.ts`, and `packages/tui/test/stdin-buffer.test.ts`.
+- **Checks:** `packages/coding-agent/test/utils/enhanced-paste.test.ts`, `packages/coding-agent/test/input-controller-enhanced-paste.test.ts`, `packages/coding-agent/test/image-input.test.ts`, `packages/tui/test/image-loading.test.ts`, `packages/tui/test/start-listener.test.ts`, and `packages/tui/test/stdin-buffer.test.ts`.
 
 ### Empty Enter with live-steering messages
 

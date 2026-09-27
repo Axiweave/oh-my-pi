@@ -61,6 +61,7 @@ import {
 	ensureSupportedImageInput,
 	imageDecodeFailureReason,
 	ImageInputTooLargeError,
+	InvalidImageDataError,
 } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { type ImageAttachmentSource, tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { blobExtensionForImageMimeType } from "@oh-my-pi/pi-tui/prompt/image-format";
@@ -958,8 +959,9 @@ export class InputController {
 					this.ctx.showStatus("Image paste is not supported in this prompt");
 					return false;
 				}
-				if (tryCommit && (await imageDecodeFailureReason(image, true))) {
-					throw new Error("Image paste contains invalid image data. Copy the image again.");
+				if (tryCommit) {
+					const failure = await imageDecodeFailureReason(image, true);
+					if (failure !== null) throw new InvalidImageDataError("Image paste", image.mimeType, failure);
 				}
 				return this.#normalizeAndInsertPastedImage(
 					image,

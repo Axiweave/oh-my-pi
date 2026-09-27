@@ -1059,6 +1059,14 @@ export declare function countTokens(input: string | string[], encoding?: Encodin
  */
 export declare function decodeSixelToPng(bytes: Uint8Array): Uint8Array
 
+/**
+ * Decode TIFF bytes and encode PNG at the original dimensions.
+ *
+ * # Errors
+ * Rejects TIFF decode failures and PNG encoding failures with their causes.
+ */
+export declare function decodeTiffToPng(bytes: Uint8Array): Promise<Uint8Array>
+
 export interface DesktopCapabilities {
   backend: string
   displayServer?: string
@@ -3148,6 +3156,14 @@ export declare function supportsLanguage(lang: string): boolean
  * Pads with spaces when requested.
  */
 export declare function truncateToWidth(text: string, maxWidth: number, ellipsisKind: Ellipsis | undefined | null, pad: boolean | undefined | null, tabWidth: number): string
+
+/**
+ * Decode the complete TIFF raster without allocating a PNG output.
+ *
+ * # Errors
+ * Rejects unsupported, invalid, truncated, or oversized TIFF images.
+ */
+export declare function validateTiffImage(bytes: Uint8Array): Promise<undefined>
 
 /** Patch application options. */
 export interface VcsApplyOptions {

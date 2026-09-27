@@ -36,6 +36,37 @@ const imageMime = Buffer.from("image/png").toBase64();
 const manifestMime = Buffer.from(MANIFEST_MIME).toBase64();
 const textMime = Buffer.from("text/plain").toBase64();
 
+function tiffRaster(littleEndian: boolean): Buffer {
+	const pixelOffset = 8 + 2 + 9 * 12 + 4;
+	const bytes = Buffer.alloc(pixelOffset + 2);
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	bytes.write(littleEndian ? "II" : "MM");
+	view.setUint16(2, 42, littleEndian);
+	view.setUint32(4, 8, littleEndian);
+	const tags = [
+		[256, 4, 2], // Width
+		[257, 4, 1], // Height
+		[258, 3, 8], // Bits per sample
+		[259, 3, 1], // No compression
+		[262, 3, 1], // Black is zero
+		[273, 4, pixelOffset], // Strip offset
+		[277, 3, 1], // Samples per pixel
+		[278, 4, 1], // Rows per strip
+		[279, 4, 2], // Strip byte count
+	] as const;
+	view.setUint16(8, tags.length, littleEndian);
+	for (const [index, [tag, type, value]] of tags.entries()) {
+		const offset = 10 + index * 12;
+		view.setUint16(offset, tag, littleEndian);
+		view.setUint16(offset + 2, type, littleEndian);
+		view.setUint32(offset + 4, 1, littleEndian);
+		if (type === 3) view.setUint16(offset + 8, value, littleEndian);
+		else view.setUint32(offset + 8, value, littleEndian);
+	}
+	bytes.set([0, 255], pixelOffset);
+	return bytes;
+}
+
 function packet(metadata: string, payload?: string): string {
 	return `\x1b]5522;${metadata}${payload === undefined ? "" : `;${payload}`}\x1b\\`;
 }
@@ -50,10 +81,10 @@ function observeTerminal(terminal: VirtualTerminal): string[] {
 	return writes;
 }
 
-function startVerifiedPaste(terminal: VirtualTerminal, writes: string[]): string {
+function startVerifiedPaste(terminal: VirtualTerminal, writes: string[], mimeType = "image/png"): string {
 	terminal.sendInput(packet("type=read:status=OK:pw=cGFzdGU="));
 	terminal.sendInput(packet(`type=read:status=DATA:mime=${manifestMime}`));
-	terminal.sendInput(packet(`type=read:status=DATA:mime=${imageMime}`));
+	terminal.sendInput(packet(`type=read:status=DATA:mime=${Buffer.from(mimeType).toBase64()}`));
 	terminal.sendInput(packet("type=read:status=DONE"));
 	const request = writes.findLast(data => data.startsWith("\x1b]5522;type=read"));
 	const id = request?.match(/:id=([^:;\x07\x1b]+)/)?.[1];
@@ -61,10 +92,10 @@ function startVerifiedPaste(terminal: VirtualTerminal, writes: string[]): string
 	return id;
 }
 
-function finishVerifiedPaste(terminal: VirtualTerminal, id: string, bytes = PNG): void {
+function finishVerifiedPaste(terminal: VirtualTerminal, id: string, bytes: Buffer = PNG, mimeType = "image/png"): void {
 	const manifest = {
 		version: 1,
-		mime: "image/png",
+		mime: mimeType,
 		bytes: bytes.length,
 		sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
 		remaining_ms: 10_000,
@@ -73,7 +104,9 @@ function finishVerifiedPaste(terminal: VirtualTerminal, id: string, bytes = PNG)
 	terminal.sendInput(
 		packet(`type=read:status=DATA:id=${id}:mime=${manifestMime}`, Buffer.from(JSON.stringify(manifest)).toBase64()),
 	);
-	terminal.sendInput(packet(`type=read:status=DATA:id=${id}:mime=${imageMime}`, bytes.toBase64()));
+	terminal.sendInput(
+		packet(`type=read:status=DATA:id=${id}:mime=${Buffer.from(mimeType).toBase64()}`, bytes.toBase64()),
+	);
 	terminal.sendInput(packet(`type=read:status=DONE:id=${id}`));
 }
 
@@ -242,15 +275,26 @@ function expectNoImageAtom(editor: CustomEditor): void {
 }
 
 describe("InputController enhanced-paste editor commit", () => {
-	for (const bytes of [Buffer.alloc(0), PNG.subarray(0, 1), PNG.subarray(0, 40), Buffer.from("not an image"), BMP]) {
-		it(`refuses invalid PNG data (${bytes.length} bytes) and accepts the next valid image`, async () => {
+	for (const [bytes, mimeType] of [
+		...[
+			Buffer.alloc(0),
+			PNG.subarray(0, 1),
+			PNG.subarray(0, 40),
+			Buffer.from("not an image"),
+			BMP,
+			tiffRaster(true),
+		].map(bytes => [bytes, "image/png"] as const),
+		[PNG, "image/tiff"],
+		[tiffRaster(true).subarray(0, -2), "image/tiff"],
+	] as const) {
+		it(`refuses invalid ${mimeType} data (${bytes.length} bytes) and accepts the next valid image`, async () => {
 			const h = createHarness();
 			const outcome = Promise.withResolvers<void>();
 			vi.spyOn(h.ctx, "showStatus").mockImplementation(() => outcome.resolve());
 			vi.spyOn(h.ui, "requestRender").mockImplementation(() => {
 				if (h.editor.pendingImages.length) outcome.resolve();
 			});
-			finishVerifiedPaste(h.terminal, startVerifiedPaste(h.terminal, h.writes), bytes);
+			finishVerifiedPaste(h.terminal, startVerifiedPaste(h.terminal, h.writes, mimeType), bytes, mimeType);
 			await outcome.promise;
 			expectUntouched(h.editor);
 			expect(h.ctx.showStatus).toHaveBeenCalled();
@@ -263,6 +307,21 @@ describe("InputController enhanced-paste editor commit", () => {
 			expect(h.editor.getExpandedText()).toBe("draft [Image #1, 1x1] ");
 		});
 	}
+
+	it("shows the TIFF decoder cause without attaching an unsupported compression stream", async () => {
+		const h = createHarness();
+		const bytes = tiffRaster(true);
+		// Replace the Compression tag value with an unknown method.
+		bytes.writeUInt16LE(0xffff, 10 + 3 * 12 + 8);
+		const shown = Promise.withResolvers<string>();
+		vi.spyOn(h.ctx, "showStatus").mockImplementation(message => shown.resolve(message));
+		finishVerifiedPaste(h.terminal, startVerifiedPaste(h.terminal, h.writes, "image/tiff"), bytes, "image/tiff");
+		const status = await shown.promise;
+		expect(status).toMatch(/tiff/i);
+		expect(status).toMatch(/compression/i);
+		expectUntouched(h.editor);
+		expect([...new Bun.Glob("**/pasted-image-*").scanSync(tempDir.path())]).toEqual([]);
+	});
 
 	for (const stage of ["validation", "normalization", "resize", "storage", "links", "dimensions"] as const) {
 		it(`rejects expiry across awaited ${stage} without changing the draft`, async () => {
@@ -400,6 +459,37 @@ describe("InputController enhanced-paste editor commit", () => {
 		});
 		expect(await Bun.file(savedPath).bytes()).toEqual(new Uint8Array(PNG));
 	});
+
+	for (const littleEndian of [true, false]) {
+		it(`handles verified ${littleEndian ? "little" : "big"}-endian TIFF without changing its source bytes`, async () => {
+			const bytes = tiffRaster(littleEndian);
+			const h = createHarness();
+			const outcome = Promise.withResolvers<void>();
+			vi.spyOn(h.ctx, "showStatus").mockImplementation(() => outcome.resolve());
+			vi.spyOn(h.ui, "requestRender").mockImplementation(() => {
+				if (h.editor.pendingImages.length) outcome.resolve();
+			});
+			const id = startVerifiedPaste(h.terminal, h.writes, "image/tiff");
+			finishVerifiedPaste(h.terminal, id, bytes, "image/tiff");
+			await outcome.promise;
+			expect(h.ctx.showStatus).not.toHaveBeenCalled();
+			expect(h.editor.pendingImages).toHaveLength(1);
+			expect(h.editor.getExpandedText()).toBe("draft [Image #1, 2x1] ");
+			const image = h.editor.pendingImages[0]!;
+			expect(image.mimeType).toBe("image/png");
+			expect(Buffer.from(image.data, "base64").subarray(0, 8)).toEqual(PNG.subarray(0, 8));
+			expect(await imageLoading.imageDecodeFailureReason(image, true)).toBeNull();
+			const link = h.editor.pendingImageLinks[0]!;
+			expect(link).toMatch(/^local:\/\/pasted-image-[0-9a-f]+\.tiff$/);
+			expect(imageAttachmentSource(image)).toEqual({ path: link, kind: "image" });
+			expect(h.editor.imageLinks).toEqual([link]);
+			const savedPath = resolveLocalUrlToPath(link, {
+				getArtifactsDir: () => h.sessionManager.getArtifactsDir(),
+				getSessionId: () => h.sessionManager.getSessionId(),
+			});
+			expect(await Bun.file(savedPath).bytes()).toEqual(new Uint8Array(bytes));
+		});
+	}
 
 	it("keeps legacy image attachment on the same preparation path", async () => {
 		const h = createHarness();

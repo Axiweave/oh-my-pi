@@ -1,4 +1,5 @@
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import { decodeTiffToPng, validateTiffImage } from "@oh-my-pi/pi-natives";
 import { formatBytes, parseImageMetadata, SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils";
 
 export const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
@@ -72,6 +73,14 @@ export class InvalidImageDataError extends Error {
  */
 const DECODE_PROBE_EDGE_PX = 1;
 
+function hasTiffSignature(bytes: Uint8Array): boolean {
+	return (
+		bytes.length >= 4 &&
+		((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a && bytes[3] === 0x00) ||
+			(bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0x00 && bytes[3] === 0x2a))
+	);
+}
+
 /**
  * Why an image cannot be decoded, or `null` when it decodes.
  * Set `requireKnownFormat` for verified receipt, which requires a recognized container.
@@ -93,18 +102,21 @@ export async function imageDecodeFailureReason(
 	const bytes = Buffer.from(image.data, "base64");
 	if (bytes.length === 0) return "empty image data";
 	if (bytes.toString("base64").replace(/=+$/, "") !== normalizedData) return "invalid base64 image data";
-	const detected = parseImageMetadata(bytes);
-	if (requireKnownFormat && !detected) {
+	const detectedMimeType =
+		parseImageMetadata(bytes)?.mimeType ?? (requireKnownFormat && hasTiffSignature(bytes) ? "image/tiff" : undefined);
+	if (requireKnownFormat && !detectedMimeType) {
 		return `image data does not match declared ${image.mimeType}`;
 	}
-	if (detected && detected.mimeType !== image.mimeType.toLowerCase()) {
-		return `declared ${image.mimeType} but contains ${detected.mimeType}`;
+	if (detectedMimeType && detectedMimeType !== image.mimeType.toLowerCase()) {
+		return `declared ${image.mimeType} but contains ${detectedMimeType}`;
 	}
 	try {
-		// Decode in full (that is what catches a hole in the compressed stream),
-		// then terminate into a 1x1 raster's bytes instead of re-encoding at the
-		// source dimensions and base64-ing a result nobody reads.
-		await new Bun.Image(bytes).resize(DECODE_PROBE_EDGE_PX, DECODE_PROBE_EDGE_PX).png().bytes();
+		if (hasTiffSignature(bytes)) {
+			await validateTiffImage(bytes);
+		} else {
+			// Decode in full, then encode only a 1x1 probe instead of a full-size PNG.
+			await new Bun.Image(bytes).resize(DECODE_PROBE_EDGE_PX, DECODE_PROBE_EDGE_PX).png().bytes();
+		}
 		return null;
 	} catch (error) {
 		return error instanceof Error ? error.message : String(error);
@@ -114,7 +126,9 @@ export async function imageDecodeFailureReason(
 /** Converts an image to PNG, rejecting when the runtime cannot decode or encode it. */
 export async function convertImageToPng(image: ImageContent): Promise<ImageContent> {
 	const bytes = Buffer.from(image.data, "base64");
-	const data = await new Bun.Image(bytes).png().toBase64();
+	const data = hasTiffSignature(bytes)
+		? (await decodeTiffToPng(bytes)).toBase64()
+		: await new Bun.Image(bytes).png().toBase64();
 	return { ...image, data, mimeType: "image/png" };
 }
 

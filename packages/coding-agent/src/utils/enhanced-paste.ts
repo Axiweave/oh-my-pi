@@ -5,7 +5,7 @@ const OSC_TERMINATOR_ST = "\x1b\\";
 const OSC_TERMINATOR_BEL = "\x07";
 const PASTE_EVENT_NAME_BASE64 = Buffer.from("Paste event", "utf8").toString("base64");
 
-const IMAGE_MIME_PRIORITY = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
+const IMAGE_MIME_PRIORITY = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/tiff"] as const;
 const TEXT_MIME_TYPE = "text/plain";
 /** Kitty's "give me the list of available MIME types" sentinel — see `TARGETS_MIME` in `kitty/clipboard.py`. */
 const MIME_LISTING_TARGET = ".";
