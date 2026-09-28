@@ -63,13 +63,16 @@ import { installStartupCyberMode, substituteLaunchModel } from "./config/cyber-m
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
+	disabledProviderIds,
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
+	type ModelMatchPreferences,
 	parseModelPattern,
 	pickDefaultAvailableModel,
 	resolveAllowedModels,
 	resolveCliModel,
+	type ResolveCliModelResult,
 	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 } from "./config/model-resolver";
@@ -273,6 +276,7 @@ import {
 	warmupLspServers,
 	xdevEntries,
 } from "./tools";
+import { resolveYieldReportText } from "./tools/yield";
 import { createBrowserPrelude } from "./tools/browser";
 import { isMCPToolName, normalizeToolNames } from "./tools/builtin-names";
 import { createComputerPrelude } from "./tools/computer";
@@ -352,7 +356,7 @@ import { cfgDisabledProviders, cfgEnabledModels, cfgEnabledProviders, cfgModelRo
 import { cfgEditRecoverInlineEdits } from "./edit/settings";
 import { cfgGoalEnabled } from "./goals/settings";
 import { cfgImagesBlockImages, cfgStartupQuiet, cfgTuiReactions, cfgTuiRenderMermaid } from "./modes/settings";
-import { cfgLspLazy, cfgLspShared } from "./lsp/settings";
+import { cfgLspEnabled, cfgLspLazy, cfgLspShared } from "./lsp/settings";
 import {
 	cfgMcpEnableProjectConfig,
 	cfgMcpNotificationDebounceMs,
@@ -546,6 +550,13 @@ export interface CreateAgentSessionOptions {
 	 * so caller-owned routing and limits remain authoritative.
 	 */
 	rebindModelAfterDiscovery?: boolean;
+	/**
+	 * Skip retry.fallbackChains validation while building the session; the host
+	 * MUST call `session.validateRetryFallbackChains()` once its first frame is
+	 * up. Validation composes the catalog slice of every provider a chain names,
+	 * so interactive startup keeps it off the first-frame path.
+	 */
+	deferRetryFallbackValidation?: boolean;
 	/** Raw model pattern(s) (e.g. from --model CLI flag) to resolve after extensions load.
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string | string[];
@@ -581,6 +592,10 @@ export interface CreateAgentSessionOptions {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
 	prewalk?: Prewalk;
+	/** CLI prewalk selector awaiting extension provider registration; patterns retain role fallback order. */
+	deferredPrewalk?: { target: string; patterns: string[] };
+	/** Host-owned display sink for non-fatal startup prewalk warnings. */
+	onPrewalkWarning?: (warning: string) => void;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
 	planYolo?: PlanYolo;
 
@@ -953,6 +968,16 @@ export async function discoverExtensions(cwd?: string): Promise<LoadExtensionsRe
 	return discoverAndLoadExtensions([], resolvedCwd);
 }
 
+type ExtensionDiscoveryOptions = Pick<
+	CreateAgentSessionOptions,
+	"disableExtensionDiscovery" | "additionalExtensionPaths" | "extensionRoots"
+> & { includeAmbientHooks?: boolean };
+
+type CliExtensionProviderOptions = ExtensionDiscoveryOptions & {
+	/** Discover extension model catalogs after registration (default true); usage-only commands skip it. */
+	discoverModels?: boolean;
+};
+
 /**
  * Path-only counterpart of {@link loadSessionExtensions}: the FS-heavy scan
  * without the per-session module load. Subagents reuse the parent's path list
@@ -961,10 +986,7 @@ export async function discoverExtensions(cwd?: string): Promise<LoadExtensionsRe
  * runtime) is its own.
  */
 export async function discoverSessionExtensionPaths(
-	options: Pick<
-		CreateAgentSessionOptions,
-		"disableExtensionDiscovery" | "additionalExtensionPaths" | "extensionRoots"
-	>,
+	options: ExtensionDiscoveryOptions,
 	cwd: string,
 	settings: Settings,
 ): Promise<string[]> {
@@ -977,6 +999,7 @@ export async function discoverSessionExtensionPaths(
 	const disabledExtensionIds = explicitOnly ? undefined : cfgDisabledExtensions.get(settings);
 	return discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds, {
 		ambient: !explicitOnly,
+		includeAmbientHooks: options.includeAmbientHooks,
 	});
 }
 
@@ -990,7 +1013,7 @@ export async function discoverSessionExtensionPaths(
  * repeated. Keep this the single source of the discovery branch logic.
  */
 export async function loadSessionExtensions(
-	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths">,
+	options: ExtensionDiscoveryOptions,
 	cwd: string,
 	settings: Settings,
 	eventBus: EventBus,
@@ -1012,13 +1035,14 @@ export async function loadSessionExtensions(
  * `~/.omp/agent/extensions/`) never reach model resolution. Mirrors the
  * session / `omp models` path: drain the queued provider registrations, then
  * `refreshRuntimeProviders` so dynamically-discovered models exist before
- * selectors are resolved.
+ * selectors are resolved, unless `discoverModels: false` (e.g. `omp usage`,
+ * which needs only registered usage providers).
  */
 export async function loadCliExtensionProviders(
 	modelRegistry: ModelRegistry,
 	settings: Settings,
 	cwd: string,
-	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths"> = {},
+	options: CliExtensionProviderOptions = {},
 ): Promise<void> {
 	const eventBus = new EventBus();
 	const extensionsResult = await loadSessionExtensions(options, cwd, settings, eventBus);
@@ -1031,7 +1055,97 @@ export async function loadCliExtensionProviders(
 		modelRegistry.registerProvider(name, config, sourceId);
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
-	await modelRegistry.refreshRuntimeProviders();
+	if (options.discoverModels !== false) await modelRegistry.refreshRuntimeProviders();
+}
+
+/** Resolve prewalk with the same ordering before and after extension registration. */
+export async function resolvePrewalkTarget(
+	patterns: readonly string[],
+	target: string,
+	modelRegistry: ModelRegistry,
+	preferences: ModelMatchPreferences,
+	disabledProviders: ReadonlySet<string>,
+	{
+		deferUnregistered = false,
+		beforeRefresh,
+	}: { deferUnregistered?: boolean; beforeRefresh?: () => Promise<void> } = {},
+): Promise<{ prewalk?: Prewalk; warnings: string[]; deferred: boolean }> {
+	let refreshedProviders: Set<string> | undefined;
+	const resolveCandidate = (pattern: string) => resolveCliModel({ cliModel: pattern, modelRegistry, preferences });
+	let authenticated: ResolveCliModelResult | undefined;
+	let firstUnauthenticated: ResolveCliModelResult | undefined;
+	let lastResolution: ResolveCliModelResult | undefined;
+	let deferred = false;
+	let disabledProvider: string | undefined;
+
+	// Each provider-qualified candidate gets its scoped discovery opportunity
+	// before advancing to the next candidate in the configured role chain.
+	for (const pattern of patterns) {
+		disabledProvider = undefined;
+		let candidate = resolveCandidate(pattern);
+		lastResolution = candidate;
+		if (candidate.model && disabledProviders.has(candidate.model.provider)) {
+			disabledProvider = candidate.model.provider;
+			continue;
+		}
+		if (candidate.model && modelRegistry.hasConfiguredAuth(candidate.model)) {
+			authenticated = candidate;
+			break;
+		}
+		if (candidate.model) {
+			firstUnauthenticated ??= candidate;
+			continue;
+		}
+
+		const requestedProvider = parseModelString(pattern)?.provider.toLowerCase();
+		if (requestedProvider && disabledProviders.has(requestedProvider)) {
+			disabledProvider = requestedProvider;
+			continue;
+		}
+		if (!requestedProvider) {
+			if (deferUnregistered) deferred = true;
+			continue;
+		}
+		if (refreshedProviders?.has(requestedProvider)) continue;
+		const provider = modelRegistry.getDiscoveryProviderId(requestedProvider);
+		if (!provider) {
+			if (deferUnregistered) deferred = true;
+			continue;
+		}
+
+		(refreshedProviders ??= new Set()).add(requestedProvider);
+		await beforeRefresh?.();
+		await modelRegistry.refreshDiscoverableProviders([provider], "online-if-uncached");
+		candidate = resolveCandidate(pattern);
+		lastResolution = candidate;
+		if (candidate.model && disabledProviders.has(candidate.model.provider)) {
+			disabledProvider = candidate.model.provider;
+			continue;
+		}
+		if (candidate.model && modelRegistry.hasConfiguredAuth(candidate.model)) {
+			authenticated = candidate;
+			break;
+		}
+		if (candidate.model) firstUnauthenticated ??= candidate;
+	}
+
+	if (deferred) return { warnings: [], deferred: true };
+	const resolved = authenticated ?? firstUnauthenticated ?? lastResolution ?? resolveCandidate(patterns[0] ?? target);
+	const warnings = resolved.warning ? [resolved.warning] : [];
+	if (resolved.error || !resolved.model) {
+		warnings.push(
+			disabledProvider
+				? `prewalk disabled — provider "${disabledProvider}" is disabled`
+				: `prewalk disabled — ${resolved.error ?? `model "${target}" not found`}`,
+		);
+	} else if (disabledProviders.has(resolved.model.provider)) {
+		warnings.push(`prewalk disabled — provider "${resolved.model.provider}" is disabled`);
+	} else if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
+		warnings.push(`prewalk disabled — no API key for ${resolved.model.provider}/${resolved.model.id}`);
+	} else {
+		return { prewalk: { target: resolved.model, thinkingLevel: resolved.thinkingLevel }, warnings, deferred: false };
+	}
+	return { warnings, deferred: false };
 }
 
 /**
@@ -1569,6 +1683,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				cacheDbPath: getModelDbPath(agentDir),
 			},
 		);
+	let prewalk = options.prewalk;
+	let deferredPrewalk = options.deferredPrewalk;
 	// Track whether we internally created the authStorage so we can close it
 	// if construction fails before the session takes ownership.
 	const ownsAuthStorage = !options.authStorage && !options.modelRegistry;
@@ -1599,16 +1715,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 	});
 	startupCleanup.defer(unsubscribeCredentialDisabled);
-	await logger.time("hydrateCredentialScopedModelCaches", () => modelRegistry.hydrateCredentialScopedModelCaches());
-	if (!options.modelRegistry) {
-		modelRegistry.refreshInBackground();
-	}
-	// Install the configured cyber protection before the first role is resolved and
-	// before the launch model is picked below (FR-003, FR-010). The registry settled
-	// its catalogue in the constructor, so the allowlist resolves against the same
-	// models this session can run on. An install that finds no usable allowlist
-	// leaves the overlay off, and `validateCyberMode` reports why.
-	const cyberStartup = installStartupCyberMode(settings, modelRegistry.getAvailable());
+	// Local-only and never rejects; awaited just before the first catalog read so
+	// its credential/cache I/O overlaps the cwd-scoped discoveries started below.
+	const credentialScopedCacheHydration = logger.time("hydrateCredentialScopedModelCaches", () =>
+		modelRegistry.hydrateCredentialScopedModelCaches(),
+	);
 	// Kick off workspace tree discovery early. The native workspace scan returns
 	// both the rendered-tree input and the AGENTS.md directory-context index, so
 	// startup does not perform a second recursive filesystem search. Subagents
@@ -1762,6 +1873,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			: [];
 	const hasExplicitModel = options.model !== undefined || deferredModelPatterns.length > 0;
 	const modelMatchPreferences = getModelMatchPreferences(settings);
+	await credentialScopedCacheHydration;
+	if (!options.modelRegistry) {
+		modelRegistry.refreshInBackground();
+	}
+	// Install the configured cyber protection before the first role is resolved and
+	// before the launch model is picked below (FR-003, FR-010). The registry settled
+	// its catalogue in the constructor, so the allowlist resolves against the same
+	// models this session can run on. An install that finds no usable allowlist
+	// leaves the overlay off, and `validateCyberMode` reports why.
+	const cyberStartup = installStartupCyberMode(settings, modelRegistry.getAvailable());
 	const defaultRoleValue = settings.getModelRole("default");
 	let explicitDefaultProviders: Set<string> | undefined;
 	if ((cfgEnabledModels.get(settings)?.length ?? 0) === 0) {
@@ -1943,7 +2064,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const rulesResult =
 			options.rules !== undefined
 				? { items: options.rules, warnings: undefined }
-				: await loadCapability<Rule>(ruleCapability.id, { cwd });
+				: await loadCapability<Rule>(ruleCapability.id, { cwd, agentDir });
 		const { rulebookRules, alwaysApplyRules } = bucketRules(rulesResult.items, ttsrManager, {
 			builtinRules: ttsrSettings.builtinRules,
 			disabledRules: ttsrSettings.disabledRules,
@@ -2122,7 +2243,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			outputSchema: options.outputSchema,
 			outputSchemaMode: options.outputSchemaMode,
 			requireYieldTool: options.requireYieldTool,
-			prewalkArmed: options.prewalk !== undefined,
+			get prewalkArmed() {
+				return prewalk !== undefined || deferredPrewalk !== undefined;
+			},
 			taskDepth: options.taskDepth ?? 0,
 			getSessionFile: () => sessionManager.getSessionFile() ?? null,
 			sessionManager,
@@ -2185,6 +2308,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			persistTodoPhases: phases => sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases }),
 			getWorkPoolYieldItems: () => session?.getWorkPoolYieldItems() ?? [],
 			getLastAssistantText: () => session?.getLastAssistantText(),
+			getYieldReportText: toolCallId => resolveYieldReportText(session?.messages ?? [], toolCallId),
 			setWorkPoolYieldItems: items => session.setWorkPoolYieldItems(items),
 			getCheckpointState: () => session.getCheckpointState(),
 			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
@@ -2408,7 +2532,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// pending-action queueing.
 			customToolPaths =
 				options.preloadedCustomToolPaths ??
-				(await logger.time("discoverCustomToolPaths", () => discoverCustomToolPaths([], cwd)));
+				(await logger.time("discoverCustomToolPaths", () => discoverCustomToolPaths([], cwd, agentDir)));
 			const customToolsLoadResult = await logger.time("loadCustomTools", () =>
 				loadCustomTools(customToolPaths, cwd, builtInToolNames, action => queueResolveHandler(toolSession, action)),
 			);
@@ -3073,6 +3197,25 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
+		if (deferredPrewalk) {
+			const { target, patterns } = deferredPrewalk;
+			const discoveryInFlight = runtimeDiscoveryPromise;
+			const selection = await resolvePrewalkTarget(
+				patterns,
+				target,
+				modelRegistry,
+				modelMatchPreferences,
+				disabledProviderIds(settings),
+				{ beforeRefresh: discoveryInFlight ? () => discoveryInFlight : undefined },
+			);
+			prewalk = selection.prewalk;
+			deferredPrewalk = undefined;
+			for (const warning of selection.warnings) {
+				logger.warn("Prewalk startup warning", { warning });
+				options.onPrewalkWarning?.(warning);
+			}
+		}
+
 		if (model) {
 			const selectedModel = model;
 			const refreshedModel = await logger.time("refreshInitialModelMetadata", () =>
@@ -3589,8 +3732,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const ttsrSettings = cfgTtsr.get(settings);
 				const ruleItems =
 					options.rules ??
-					(await logger.time("rediscoverRules", () => loadCapability<Rule>(ruleCapability.id, { cwd: promptCwd })))
-						.items;
+					(
+						await logger.time("rediscoverRules", () =>
+							loadCapability<Rule>(ruleCapability.id, { cwd: promptCwd, agentDir }),
+						)
+					).items;
 				const buckets = bucketRules(ruleItems, ttsrManager, {
 					builtinRules: ttsrSettings.builtinRules,
 					disabledRules: ttsrSettings.disabledRules,
@@ -4369,7 +4515,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			thinkingLevelCeiling: options.thinkingLevelCeiling,
 			initialRetryFallback,
-			prewalk: options.prewalk,
+			deferRetryFallbackValidation: options.deferRetryFallbackValidation,
+			prewalk,
 			runPlanDebateReviewer: async (request: PlanDebateReviewerRequest) => {
 				const execution = await runStructuredSubagent({
 					session: toolSession,
@@ -4959,8 +5106,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// CPU parsing big `initialize` responses concurrently with the LLM stream consumer, jittering
 		// perceived latency.
 		// Turning `lsp.lazy` off mid-session kicks off the same warmup once.
+		// `lsp.enabled: false` skips discovery and warmup entirely; `lspServers` stays undefined so the
+		// welcome screen hides its LSP section.
 		let lspServers: CreateAgentSessionResult["lspServers"];
-		if (enableLsp && options.hasUI) {
+		if (enableLsp && cfgLspEnabled.get(settings) && options.hasUI) {
 			const startupLspServers = discoverStartupLspServers(
 				cwd,
 				cfgLspLazy.get(settings) ? "available" : "connecting",
