@@ -69,6 +69,13 @@
 - Fixed Ghostel prompt navigation landing on blank padding instead of the first input character, including multiline prompts. Synthetic messages and expanded command bodies no longer create extra prompt markers.
 - Fixed the Edit tool's streaming diff preview changing height on nearly every update once a long line pushed the window past its budget. The tail window packed whole lines, so the row count it drew re-quantized between the budget and one line less on each tick, moving the frame's bottom border and re-clipping the block's head in the transcript. A single line taller than the whole window was admitted whole and grew the frame to the line's own row count. The window is now measured on the rows the diff renderer actually draws, clamped to the budget, and padded to a constant height once it saturates, matching the Write tool's streaming preview.
 
+## [18.3.5] - 2026-09-27
+
+### Added
+
+- Added API-key-billed OpenAI Responses web search (`openai/gpt-6-luna`, then `openai/gpt-5.6-luna`), tried after every Codex entry in the default search fallback chain so ChatGPT-subscription search is exhausted before any API usage is billed ([#13467](https://github.com/can1357/oh-my-pi/pull/13467) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Added prompt-cache warming, ported from [earendil-works/pi](https://github.com/earendil-works/pi): shortly before a prompt-cache entry expires, the main agent loop replays its last request and cuts the replay off at the first generated token, so idle gaps no longer force a full-prefix cache re-write. A refresh fires only when the expected avoided-miss cost clears its cost by $0.05, and warming stops as soon as a refresh misses the cache. Controlled by `providers.cacheWarming` (`off` / `streaming` / `idle`, default `idle`); idle warming covers 5-minute entries only, and models without a declared `promptCache` lifetime are never warmed. Extensions can override each decision through the `cache_warming_decision` event ([#12699](https://github.com/can1357/oh-my-pi/pull/12699) by [@KamijoToma](https://github.com/KamijoToma)).
+
 ## [18.3.4] - 2026-09-27
 
 ### Breaking Changes

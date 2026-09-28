@@ -3,13 +3,11 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.3.4` on 2026-09-27.
+**Reviewed against:** `v18.3.5` on 2026-09-27.
 
-**Verification exception:** The maintainer approved this merge despite failures reproduced at the pre-merge commit or in upstream `v18.3.4`.
-Source setup, `bun check`, the launcher smoke test, and 46 focused merge checks passed.
-Pre-merge failures cover terminal probes, welcome resize, macOS spelling, skill discovery, usage-row fixtures, JavaScript package isolation, and the Rust JJ fixture.
-Upstream-only checks also fail: `packages/coding-agent/test/btw-history.test.ts` expects three files but finds six.
-`packages/coding-agent/test/steering-skip-render.test.ts` reports an ellipsis background-color mismatch.
+**Verification:** Source setup, `bun check`, the launcher smoke test, and 69 focused merge checks passed (1450 tests).
+The focused checks cover every divergence entry plus `packages/coding-agent/test/cache-warmer.test.ts` for the auto-merged session and SDK paths.
+The merge adds a cyber membership check to cache-warm replays, covered by `packages/coding-agent/test/cyber-mode-shared-settings.test.ts`.
 
 ## Maintenance
 
@@ -219,7 +217,7 @@ Upstream-only checks also fail: `packages/coding-agent/test/btw-history.test.ts`
 - **Decision:** Failed session switches restore outgoing protection and notice history. Publish cyber notices only after a successful switch. Resumed active-model substitutions use the startup warning channel.
 - **Decision:** Send print/RPC startup warnings to stderr at CLI session creation. Publish ACP warnings after registration, excluding temporary-session transitions.
 - **Decision:** Keep protection on shared configuration state. An implicit clear removes only its owner's claim. An explicit operator switch-off clears all claims.
-- **Decision:** Apply installed membership checks to background overrides, fallback traversal, and dispatch. A retained callback re-checks protection before it dispatches, and a session that shares another session's protection stays constrained while its own indicator is off.
+- **Decision:** Apply installed membership checks to background overrides, fallback traversal, cache-warm replays, and dispatch. A retained callback re-checks protection before it dispatches, and a session that shares another session's protection stays constrained while its own indicator is off.
 - **Why:** Operators need to restrict cyber work to approved models. This allowlist does not bypass provider safety restrictions. Preserve the filtering, switch guard, `cyber` status-line segment, and lifecycle rules.
 - **Key paths:** `packages/coding-agent/src/config/cyber-mode.ts`, `packages/coding-agent/src/config/model-resolver.ts`, `packages/coding-agent/src/config/settings.ts`, `packages/coding-agent/src/config/model-roles.ts`, `packages/coding-agent/src/session/model-controls.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/session/turn-recovery.ts`, `packages/coding-agent/src/session/session-advisors.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, `packages/coding-agent/src/eval/completion-bridge.ts`, `packages/coding-agent/src/tiny/online-candidates.ts`, `packages/coding-agent/src/judgment/index.ts`, `packages/coding-agent/src/mnemopi/backend.ts`, `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/modes/components/status-line/segments.ts`, `packages/coding-agent/src/slash-commands/builtin-modes.ts`, and `docs/cyber-mode.md`.
 - **Checks:** `packages/coding-agent/test/cyber-mode.test.ts`, `packages/coding-agent/test/cyber-mode-session.test.ts`, `packages/coding-agent/test/cyber-mode-shared-settings.test.ts`, `packages/coding-agent/test/cyber-switch-guard.test.ts`, `packages/coding-agent/test/agent-session-retry-fallback.test.ts`, `packages/coding-agent/test/eval/completion-bridge.test.ts`, `packages/coding-agent/test/online-tiny-candidates.test.ts`, `packages/coding-agent/test/judgment/index.test.ts`, `packages/coding-agent/test/compaction-cyber-candidates.test.ts`, `packages/coding-agent/test/compaction-cyber-dispatch.test.ts`, `packages/coding-agent/test/main-cyber-warnings.test.ts`, `packages/coding-agent/test/status-line-cyber.test.ts`, and `packages/coding-agent/test/slash-commands/cyber.test.ts`.

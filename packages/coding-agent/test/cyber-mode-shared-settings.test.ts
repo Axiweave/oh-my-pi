@@ -169,6 +169,21 @@ describe("cyber protection on configuration state shared by several sessions", (
 		expect(`${parent.model?.provider}/${parent.model?.id}`).toBe(excluded);
 	});
 
+	it("stops a pending cache warm on an excluded model once a sibling installs protection", async () => {
+		const settings = sharedSettings({ "providers.cacheWarming": "idle" });
+		const parent = await startSession(settings);
+		const sibling = await startSession(settings);
+		parent.startCacheWarming(sonnet, { messages: [] }, {});
+		// Only an armed run reaches the economics check. The empty transcript has no prompt size.
+		expect(parent.cacheWarmingStatus).toMatchObject({ state: "inactive", reason: "cache economics unavailable" });
+
+		// The parent keeps its excluded model and request shape. Only the shared
+		// allowlist changes, and the warmer re-checks it before every replay.
+		await sibling.setCyberMode(true);
+		expect(`${parent.model?.provider}/${parent.model?.id}`).toBe(excluded);
+		expect(parent.cacheWarmingStatus).toMatchObject({ state: "inactive", reason: "conversation context changed" });
+	});
+
 	it("restores the configured role chains when a subagent snapshot releases protection", async () => {
 		const settings = sharedSettings();
 		const parent = await startSession(settings);
