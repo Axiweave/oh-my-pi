@@ -3,11 +3,13 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.3.5` on 2026-09-27.
+**Reviewed against:** `v18.4.0` on 2026-09-28.
 
-**Verification:** Source setup, `bun check`, the launcher smoke test, and 69 focused merge checks passed (1450 tests).
-The focused checks cover every divergence entry plus `packages/coding-agent/test/cache-warmer.test.ts` for the auto-merged session and SDK paths.
-The merge adds a cyber membership check to cache-warm replays, covered by `packages/coding-agent/test/cyber-mode-shared-settings.test.ts`.
+**Verification:** Source setup, `bun check`, the launcher checks, and 91 focused merge checks passed (2438 tests).
+The focused checks cover every divergence entry plus the test files that both this fork and upstream changed since the merge base.
+Ghostel followed source-CLI OSC 7 reports directly and through tmux passthrough. A source-CLI replay discovered and used two local CLIProxyAPI servers with separate keys.
+The merge keeps the OSC 7 report when `getProjectDir()` falls back from an inaccessible working directory, now after upstream's path normalization.
+Upstream deleted `packages/coding-agent/test/slash-commands/plan-history.test.ts`, which held the fork's `/debate` wiring cases. The debate checks below still cover the workflow.
 
 ## Maintenance
 

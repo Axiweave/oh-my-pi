@@ -6,6 +6,12 @@
 
 - Added removable message-context transforms so hosts can apply session-specific provider filtering after agent construction.
 
+## [18.4.0] - 2026-09-28
+
+### Changed
+
+- Updated telemetry attribute names from the `pi.*` namespace to the `omp.*` namespace.
+
 ## [18.3.3] - 2026-09-27
 
 ### Added

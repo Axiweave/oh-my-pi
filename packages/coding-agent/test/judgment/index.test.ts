@@ -44,6 +44,7 @@ describe("resolveJudge online fallback under cyber mode protection", () => {
 			settings,
 			registry: { getAvailable: () => [], getApiKey: apiKeySpy } as unknown as ModelRegistry,
 			sessionModel: excludedSession,
+			purpose: "test",
 		};
 
 		const judge = resolveJudge(deps);
@@ -63,6 +64,7 @@ describe("resolveJudge online fallback under cyber mode protection", () => {
 			settings,
 			registry: { getAvailable: () => [], getApiKey: apiKeySpy } as unknown as ModelRegistry,
 			sessionModel: allowedSession,
+			purpose: "test",
 		};
 
 		const judge = resolveJudge(deps);
@@ -100,6 +102,7 @@ describe("resolveJudge online fallback under cyber mode protection", () => {
 				resolver: () => undefined,
 			} as unknown as ModelRegistry,
 			sessionModel: midFlight,
+			purpose: "test",
 		};
 
 		const judge = resolveJudge(deps);
