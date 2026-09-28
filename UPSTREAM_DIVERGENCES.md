@@ -3,13 +3,15 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.4.1` on 2026-09-28.
+**Reviewed against:** `v18.4.2` on 2026-09-28.
 
-**Verification:** Source setup, `bun check`, the launcher checks, and 153 focused merge checks passed (3487 tests).
-The focused checks cover every divergence entry plus every test file that upstream added or changed since the merge base.
-The merge installs cyber protection after upstream's deferred credential-cache hydration settles, before the first role read.
-Upstream's new prepaint status line (`packages/tui/src/status-line/startup.ts`) supplies empty model-profile and IDE inputs for the fork's status-line contract.
-Upstream did not change the OSC 7 reporting or CLIProxyAPI discovery paths, so this review ran their automated checks and did not repeat the manual Ghostel or two-server replays.
+**Verification:** Source setup, `bun check`, the launcher checks, and 93 focused merge checks passed (1978 tests).
+The focused checks cover every divergence entry plus every test file that upstream added or changed since `v18.4.1`.
+`packages/tui/test/theme-color-mode.test.ts` fails only when the host `TMUX` variable leaks into its subprocess, and it passes with `TMUX` unset.
+Ghostel followed source-CLI OSC 7 reports at startup and after `/move`, directly and through tmux passthrough. The parent shell directory stayed unchanged after exit.
+A source-CLI replay discovered and used two local CLIProxyAPI-shaped servers, and each server received only its own key.
+The judge role chain keeps upstream's candidate cache, and its session-model fallback still requires cyber membership.
+Pinned-composer retirement keeps the current chrome height and shares upstream's single composed frame with the viewport render.
 Upstream deleted `packages/coding-agent/test/slash-commands/plan-history.test.ts`, which held the fork's `/debate` wiring cases. The debate checks below still cover the workflow.
 
 ## Maintenance

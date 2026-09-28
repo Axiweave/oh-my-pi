@@ -6,6 +6,12 @@
 
 - Added `onProjectDirChanged()` to observe successful project directory changes, including inaccessible-directory recovery.
 
+## [18.4.2] - 2026-09-28
+
+### Added
+
+- Added cloneJsonTree to provide a high-performance deep copy utility for JSON-shaped object trees
+
 ## [18.4.1] - 2026-09-28
 
 ### Fixed

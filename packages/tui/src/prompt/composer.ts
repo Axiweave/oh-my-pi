@@ -425,12 +425,15 @@ export class Composer implements TerminalFrameProvider {
 		// Retire against the current chrome height before clipping the viewport.
 		// A smaller historical height can hide settled rows without saving them.
 		// Pin-bottom padding uses the history anchor to absorb later chrome shrink.
+		const now = performance.now();
+		const frame: AnimationFrame = { now, tick: Math.floor(now / 80) };
+		// Retirement measures the same live blocks the viewport lays out below;
+		// one open frame renders each of them once for both.
+		transcript.beginFrame(frame);
 		const history = this.#offerHistory(transcript, width, rows, preRoots.length + after.length);
 		const headerVisible = !this.#headerRetired && this.#offeredHistory?.source !== "header";
 		const headerRows = headerVisible ? this.#header.render(width) : [];
 		const before = [...headerRows, ...preRoots];
-		const now = performance.now();
-		const frame: AnimationFrame = { now, tick: Math.floor(now / 80) };
 		const capacity = Math.max(0, rows - before.length - after.length);
 		let active = transcript.renderViewport(width, capacity, frame);
 		const activeSpans: ViewportClickSpan[] = [];
