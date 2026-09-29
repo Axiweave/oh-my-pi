@@ -1341,7 +1341,7 @@ export class TUI extends Container {
 				this.#beginResizeAltPaint();
 			},
 			() => this.stop(),
-			{ deferInput: this.#inputDeferred },
+			{ deferInput: this.#inputDeferred, isLoopStalled: () => this.#watchdog.isStalled() },
 		);
 		if (this.#stopped) return;
 		this.#cancelPostmortemRestore?.();
