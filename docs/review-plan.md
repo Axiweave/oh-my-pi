@@ -23,6 +23,7 @@ While the switch is on and a `plan` role resolves:
 - The `reviewer`, `plan-reviewer`, and `impl-reviewer` agents use `plan`, even when a saved override names a fixed model.
 - A custom agent whose first role alias is `@reviewer` also uses `plan`.
 - A review agent on the plan model retries through the `plan` fallback chain. In main-session and eval retries, a `reviewer` reference reads `plan` too, and `retry.fallbackChains.reviewer` is set aside, so it cannot claim a plan-model session.
+- While the switch is on, the real reviewer model no longer owns the `reviewer` chain. A session or completion that runs on it retries only through a chain keyed by its own selector, for example `retry.fallbackChains["openai-codex/gpt-6-sol"]`.
 - Only a `model` given on one task request wins over the switch. A request that names `@reviewer` still reads `plan`.
 
 When no `plan` role resolves, the switch stays on but has no effect, and reviews keep the reviewer model. `/review-plan` says so. A warning also shows when a session starts or resumes in this state, and when a profile change removes the `plan` model.

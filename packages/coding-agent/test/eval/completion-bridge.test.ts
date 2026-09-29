@@ -260,6 +260,80 @@ describe("runEvalCompletion", () => {
 		});
 	});
 
+	// With the switch on, `reviewer` reads the plan model. The `reviewer` chain
+	// key must still never claim a plan-model session, whatever the YAML order.
+	it("retries a plan-model completion through the plan chain for any key order and switch state", async () => {
+		const models = ["plan", "rev", "plan-fb", "rev-fb"].map(id => makeModel("p", id));
+		for (const chains of [
+			{ reviewer: ["p/rev-fb"], plan: ["p/plan-fb"] },
+			{ plan: ["p/plan-fb"], reviewer: ["p/rev-fb"] },
+		]) {
+			for (const active of [false, true]) {
+				const label = `${Object.keys(chains).join(" before ")}, active ${active}`;
+				const session = makeSession({ available: [SMOL, ...models], activeModel: "p/plan" });
+				session.settings.setModelRole("plan", "p/plan");
+				session.settings.setModelRole("reviewer", "p/rev");
+				session.getReviewPlan = () => active;
+				cfgRetryFallbackChains.set(session.settings, chains);
+				const spy = vi
+					.spyOn(ai, "completeSimple")
+					.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "quota exhausted" }))
+					.mockResolvedValueOnce(assistant({ text: "fallback answer" }));
+
+				const result = await runEvalCompletionAndWait({ prompt: "q", model: "default" }, { session });
+
+				expect(
+					spy.mock.calls.map(call => (call[0] as Model<Api>).id),
+					label,
+				).toEqual(["plan", "plan-fb"]);
+				expect(result.details.model, label).toBe("p/plan-fb");
+				spy.mockRestore();
+			}
+		}
+	});
+
+	// The switch points the reviewer role at the plan model, so the real reviewer
+	// model no longer owns the `reviewer` chain; only its selector chain applies.
+	it("uses the reviewer chain for a reviewer-model completion only while the switch is off", async () => {
+		const models = ["plan", "rev", "rev-fb", "rev-sel-fb"].map(id => makeModel("p", id));
+		// [chains, fallback while off, fallback while on]; a selector key outranks the role key.
+		const cases: [Record<string, string[]>, string, string | undefined][] = [
+			[{ reviewer: ["p/rev-fb"] }, "rev-fb", undefined],
+			[{ reviewer: ["p/rev-fb"], "p/rev": ["p/rev-sel-fb"] }, "rev-sel-fb", "rev-sel-fb"],
+		];
+		for (const [chains, offFallback, onFallback] of cases) {
+			for (const active of [false, true]) {
+				const label = `${Object.keys(chains).join(", ")}, active ${active}`;
+				const session = makeSession({ available: [SMOL, ...models], activeModel: "p/rev" });
+				session.settings.setModelRole("plan", "p/plan");
+				session.settings.setModelRole("reviewer", "p/rev");
+				session.getReviewPlan = () => active;
+				cfgRetryFallbackChains.set(session.settings, chains);
+				const spy = vi
+					.spyOn(ai, "completeSimple")
+					.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "quota exhausted" }))
+					.mockResolvedValueOnce(assistant({ text: "fallback answer" }));
+
+				const run = runEvalCompletionAndWait({ prompt: "q", model: "default" }, { session });
+				const expected = active ? onFallback : offFallback;
+				if (expected) {
+					expect((await run).details.model, label).toBe(`p/${expected}`);
+					expect(
+						spy.mock.calls.map(call => (call[0] as Model<Api>).id),
+						label,
+					).toEqual(["rev", expected]);
+				} else {
+					await expect(run, label).rejects.toBeInstanceOf(ToolError);
+					expect(
+						spy.mock.calls.map(call => (call[0] as Model<Api>).id),
+						label,
+					).toEqual(["rev"]);
+				}
+				spy.mockRestore();
+			}
+		}
+	});
+
 	it("retries the same model at a lower effort when the fallback chain suffixes it", async () => {
 		const session = makeSession({ available: [SMOL, DEFAULT, REASONING_SLOW], roles: { slow: "p/slow" } });
 		cfgRetryFallbackChains.set(session.settings, { slow: ["p/slow:low"] });
