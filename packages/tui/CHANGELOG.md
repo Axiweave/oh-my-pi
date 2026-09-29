@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Escape no longer lets a hidden autocomplete popup reappear after it interrupts the active response. Added `Editor.cancelAutocomplete()`.
 - Image validation now rejects unrecognized bytes labeled as a supported image format before verified paste preparation.
 - Incomplete OSC packets no longer consume the next paste or escape key sequence after a transfer stops.
 - Start listeners now receive the current started state when they subscribe after startup. This enables terminal features after early CLI rendering.

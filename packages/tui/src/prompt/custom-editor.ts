@@ -1534,6 +1534,8 @@ export class CustomEditor extends Editor {
 				!this.isShowingAutocomplete() &&
 				!this.vimConsumesEscape()
 			) {
+				// A hidden popup's pending refresh would otherwise pop up after the interrupt.
+				this.cancelAutocomplete();
 				this.onEscape();
 				return;
 			}

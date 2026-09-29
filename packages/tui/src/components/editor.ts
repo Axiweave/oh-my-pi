@@ -4555,6 +4555,11 @@ export class Editor implements Component, Focusable {
 		return this.#visibleAutocompleteList() !== undefined;
 	}
 
+	/** Drop an open or hidden autocomplete popup and its pending refresh. */
+	cancelAutocomplete(): void {
+		this.#cancelAutocomplete(true);
+	}
+
 	/** The open autocomplete list, unless it has no candidate to show. */
 	#visibleAutocompleteList(): SelectList | undefined {
 		if (this.#autocompleteState === null) return undefined;

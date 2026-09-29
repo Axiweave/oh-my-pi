@@ -217,6 +217,14 @@ The upstream native-input harness stubs the stop-listener and session-change hoo
 - **Key path:** `packages/tui/src/chat/user-message.ts`.
 - **Checks:** `packages/coding-agent/test/modes/components/user-message-keywords.test.ts`.
 
+### Escape drops a hidden autocomplete popup
+
+- **Decision:** When Escape runs the interrupt, first cancel an open autocomplete that has no visible row. Its pending refresh cannot show a popup after the interrupt. A single Escape still interrupts.
+- **Why:** An `@` list narrowed to no match stays open internally while its refresh is pending. Upstream's interrupt shortcut returned before the base editor dropped it, so a late popup appeared after Escape.
+- **Key paths:** `packages/tui/src/prompt/custom-editor.ts` and `packages/tui/src/components/editor.ts` (`cancelAutocomplete`).
+- **Check:** `packages/tui/test/custom-editor-keybindings.test.ts`.
+- **Retire when:** Upstream's interrupt path cancels hidden autocomplete state.
+
 ### Cyber mode allowlist
 
 - **Decision:** Keep `cyberModels` and `cyberMode`. Filter every role chain and refuse operator model switches outside the allowlist. Empty chains use the first resolved declaration.

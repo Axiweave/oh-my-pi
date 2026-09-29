@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import { type AppKeybinding, KEYBINDINGS, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui/autocomplete";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 
@@ -240,6 +241,45 @@ describe("CustomEditor keybindings", () => {
 		editor.handleInput("\x11"); // Ctrl+Q
 		expect(onExit).toHaveBeenCalledTimes(1);
 		expect(editor.getText()).toBe("ab");
+	});
+
+	it("interrupts on Escape and drops a hidden @ popup so its pending refresh never appears", async () => {
+		const editor = new CustomEditor(getEditorTheme());
+		const onEscape = vi.fn();
+		editor.onEscape = onEscape;
+		const refresh = Promise.withResolvers<{ items: AutocompleteItem[]; prefix: string } | null>();
+		const refreshStarted = Promise.withResolvers<void>();
+		editor.setAutocompleteProvider({
+			getSuggestions(lines, cursorLine, cursorCol, signal) {
+				const text = (lines[cursorLine] ?? "").slice(0, cursorCol);
+				if (text === "@")
+					return Promise.resolve({ items: [{ value: "@alpha.ts", label: "alpha.ts" }], prefix: "@" });
+				refreshStarted.resolve();
+				signal?.addEventListener("abort", () => refresh.resolve(null));
+				return refresh.promise;
+			},
+			applyCompletion(lines, cursorLine, cursorCol) {
+				return { lines, cursorLine, cursorCol };
+			},
+		});
+
+		const shown = Promise.withResolvers<void>();
+		editor.onAutocompleteUpdate = () => {
+			if (editor.isShowingAutocomplete()) shown.resolve();
+		};
+		editor.handleInput("@");
+		await shown.promise;
+		editor.handleInput("z");
+		await refreshStarted.promise;
+		expect(editor.isShowingAutocomplete()).toBe(false);
+
+		editor.handleInput("\x1b");
+		expect(onEscape).toHaveBeenCalledTimes(1);
+		// A still-open hidden popup would reappear when its pending refresh lands.
+		expect(editor.isAutocompleteActive()).toBe(false);
+		expect(await refresh.promise).toBeNull();
+		expect(editor.isShowingAutocomplete()).toBe(false);
+		expect(editor.getText()).toBe("@z");
 	});
 });
 
