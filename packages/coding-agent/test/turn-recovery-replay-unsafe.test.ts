@@ -97,6 +97,7 @@ function createHost(
 		setModelWithProviderSessionReset: async () => {},
 		cyberAllowsModel: () => true,
 		cyberModeEnabled: () => false,
+		reviewPlanActive: () => false,
 		resolveActiveEditMode: () => "hashline",
 		syncAfterModelChange: async () => {},
 		resetCurrentResponsesProviderSession: () => {},

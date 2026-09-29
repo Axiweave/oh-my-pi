@@ -2941,6 +2941,7 @@ export class SessionManager {
 	 * @param resolvedModelIsFallback Whether this transition selected a retry-fallback model
 	 * @param profile `modelProfiles` bundle this transition installed, if any
 	 * @param cyber Cyber mode state in effect, which every call site records
+	 * @param reviewPlan Review plan switch state, recorded only where it is set or carried over
 	 */
 	appendModelChange(
 		model: string,
@@ -2948,6 +2949,7 @@ export class SessionManager {
 		resolvedModelIsFallback = false,
 		profile?: string,
 		cyber?: boolean,
+		reviewPlan?: boolean,
 	): string {
 		const entry: ModelChangeEntry = {
 			type: "model_change",
@@ -2957,6 +2959,7 @@ export class SessionManager {
 			resolvedModelIsFallback,
 			profile,
 			cyber,
+			reviewPlan,
 		};
 		this.#recordEntry(entry);
 		return entry.id;
@@ -3181,6 +3184,16 @@ export class SessionManager {
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type === "model_change" && entry.cyber !== undefined) return entry.cyber;
+		}
+		return undefined;
+	}
+
+	/** Review plan switch state this branch last recorded, or undefined when none did. */
+	getLastReviewPlan(): boolean | undefined {
+		const branch = this.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (entry.type === "model_change" && entry.reviewPlan !== undefined) return entry.reviewPlan;
 		}
 		return undefined;
 	}

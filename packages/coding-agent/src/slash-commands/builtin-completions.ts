@@ -455,35 +455,67 @@ const CYBER_SCOPES = [
 	{ name: "project", description: "Also save cyberMode in ./.omp/config.yml" },
 ] as const;
 
-/** Build getArgumentCompletions for /cyber: the verb, then a save scope after `on`. */
-export function buildCyberArgumentCompletions(): (prefix: string) => AutocompleteItem[] | null {
+const REVIEW_PLAN_VERBS = [
+	{ name: "on", description: "Reviews use the profile's plan model" },
+	{ name: "off", description: "Reviews use the profile's reviewer model" },
+	{ name: "status", description: "Show the state and the review model in effect" },
+] as const;
+
+const REVIEW_PLAN_SCOPES = [
+	{ name: "global", description: "Also save reviewUsesPlan in ~/.omp/agent/config.yml" },
+	{ name: "project", description: "Also save reviewUsesPlan in ./.omp/config.yml" },
+] as const;
+
+type CompletionEntry = { readonly name: string; readonly description: string };
+
+/** Completes a verb, then a save scope after any verb in `scopedVerbs`. */
+function buildVerbScopeCompletions(
+	verbs: readonly CompletionEntry[],
+	scopes: readonly CompletionEntry[],
+	scopedVerbs: readonly string[],
+): (prefix: string) => AutocompleteItem[] | null {
 	return (argumentPrefix: string) => {
 		const trimmed = argumentPrefix.trimStart();
 		const spaceIndex = trimmed.indexOf(" ");
 		if (spaceIndex === -1) {
 			const lower = trimmed.toLowerCase();
-			const matches = CYBER_VERBS.filter(verb => verb.name.startsWith(lower)).map(verb => ({
-				value: verb.name,
-				label: verb.name,
-				description: verb.description,
-			}));
+			const matches = verbs
+				.filter(verb => verb.name.startsWith(lower))
+				.map(verb => ({
+					value: verb.name,
+					label: verb.name,
+					description: verb.description,
+				}));
 			return matches.length > 0 ? matches : null;
 		}
-		// Only enabling has a persisted form, so a scope completes after `on` alone.
-		if (trimmed.slice(0, spaceIndex) !== "on") return null;
+		const verb = trimmed.slice(0, spaceIndex);
+		if (!scopedVerbs.includes(verb)) return null;
 		const scopePrefix = trimmed.slice(spaceIndex + 1).toLowerCase();
 		if (scopePrefix.includes(" ")) return null;
-		const matches = CYBER_SCOPES.filter(scope => scope.name.startsWith(scopePrefix)).map(scope => ({
-			value: `on ${scope.name}`,
-			label: scope.name,
-			description: scope.description,
-		}));
+		const matches = scopes
+			.filter(scope => scope.name.startsWith(scopePrefix))
+			.map(scope => ({
+				value: `${verb} ${scope.name}`,
+				label: scope.name,
+				description: scope.description,
+			}));
 		return matches.length > 0 ? matches : null;
 	};
 }
 
-/** Ghost hint for /cyber: the full usage while the argument text is empty. */
-export function buildCyberInlineHint(): (argumentText: string) => string | null {
+/** Build getArgumentCompletions for /cyber: the verb, then a save scope after `on`. */
+export function buildCyberArgumentCompletions(): (prefix: string) => AutocompleteItem[] | null {
+	// Only enabling has a persisted form, so a scope completes after `on` alone.
+	return buildVerbScopeCompletions(CYBER_VERBS, CYBER_SCOPES, ["on"]);
+}
+
+/** Build getArgumentCompletions for /review-plan: the verb, then a save scope after `on` or `off`. */
+export function buildReviewPlanArgumentCompletions(): (prefix: string) => AutocompleteItem[] | null {
+	return buildVerbScopeCompletions(REVIEW_PLAN_VERBS, REVIEW_PLAN_SCOPES, ["on", "off"]);
+}
+
+/** Ghost hint for /cyber and /review-plan: the full usage while the argument text is empty. */
+export function buildVerbScopeInlineHint(): (argumentText: string) => string | null {
 	return argumentText => (argumentText.trim().length === 0 ? "[on|off|status] [global|project]" : null);
 }
 

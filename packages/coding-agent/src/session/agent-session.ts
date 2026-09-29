@@ -119,6 +119,7 @@ import { validateModelRoleConfiguration } from "../config/model-roles";
 import {
 	DEFAULT_PREWALK_TARGET,
 	getModelMatchPreferences,
+	isReviewPlanActive,
 	type ResolvedModelRoleValue,
 	resolveCliModel,
 } from "../config/model-resolver";
@@ -1821,6 +1822,7 @@ export class AgentSession implements SettingsScope {
 			thinkingLevel: config.thinkingLevel,
 			thinkingLevelCeiling: config.thinkingLevelCeiling,
 			serviceTierByFamily: config.serviceTierByFamily,
+			reviewPlan: config.reviewPlan,
 		});
 		restoringInitialModels = false;
 		// A host that cannot enumerate its catalogue (a partial test double, a not-yet
@@ -1883,6 +1885,7 @@ export class AgentSession implements SettingsScope {
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			cyberAllowsModel: model => cyberAllowsModel(this.settings, model),
 			cyberModeEnabled: () => this.cyberMode,
+			reviewPlanActive: () => this.reviewPlanActive,
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
 			syncAfterModelChange: previousEditMode => this.#tools.syncAfterModelChange(previousEditMode),
 			resetCurrentResponsesProviderSession: reason => this.#resetCurrentResponsesProviderSession(reason),
@@ -9504,6 +9507,7 @@ export class AgentSession implements SettingsScope {
 					false,
 					this.#models.activeModelProfile,
 					this.cyberMode,
+					this.reviewPlan,
 				);
 			}
 			this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
@@ -9717,6 +9721,21 @@ export class AgentSession implements SettingsScope {
 	/** Whether this session has cyber mode on (FR-019). */
 	get cyberMode(): boolean {
 		return this.#models.cyberMode;
+	}
+
+	/** This session's review plan switch: reviews use the `plan` role instead of `reviewer`. */
+	get reviewPlan(): boolean {
+		return this.#models.reviewPlan;
+	}
+
+	/** Whether the switch takes effect: it is on and a `plan` role exists to point reviews at. */
+	get reviewPlanActive(): boolean {
+		return isReviewPlanActive(this.#models.reviewPlan, this.settings);
+	}
+
+	/** Switch reviews onto the `plan` role for this session only (FR-009). */
+	setReviewPlan(enabled: boolean): void {
+		this.#models.setReviewPlan(enabled);
 	}
 
 	/**
@@ -11046,6 +11065,7 @@ export class AgentSession implements SettingsScope {
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
 		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
 		const previousCyberMode = this.cyberMode;
+		const previousReviewPlan = this.reviewPlan;
 		const previousCyberAllowlist = this.settings.getCyberAllowlist();
 		const previousCyberReports = new Set(this.#reportedCyberChanges);
 
@@ -11149,6 +11169,7 @@ export class AgentSession implements SettingsScope {
 			// Cyber state rides the same entry, and installing it here means the
 			// restore below resolves through filtered roles.
 			this.#models.restoreCyberMode(this.sessionManager.getLastCyberMode());
+			this.#models.restoreReviewPlan(this.sessionManager.getLastReviewPlan());
 
 			// Restore model if saved
 			const targetModelStrings = getRestorableSessionModels(
@@ -11282,6 +11303,7 @@ export class AgentSession implements SettingsScope {
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
 			this.#models.restoreCyberMode(previousCyberMode, previousCyberAllowlist);
+			this.#models.restoreReviewPlan(previousReviewPlan);
 			this.#reportedCyberChanges.clear();
 			for (const report of previousCyberReports) this.#reportedCyberChanges.add(report);
 			this.#pendingCyberNotices = undefined;

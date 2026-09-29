@@ -9,7 +9,7 @@ import {
 	concreteThinkingLevel,
 	resolveThinkingLevelForModel,
 } from "@oh-my-pi/pi-tui/thinking";
-import { resolveConfiguredModelPatterns, resolveModelRoleValue } from "../config/model-resolver";
+import { resolveConfiguredModelPatterns, resolveModelRoleValue, reviewPlanRole } from "../config/model-resolver";
 import { getRoleInfo, isKindRole } from "../config/model-roles";
 
 import { cfgRetryFallbackChains, cfgRetryFallbackRevertPolicy } from "./settings";
@@ -43,6 +43,21 @@ export interface RetryFallbackResolutionContext {
 	chains: RetryFallbackChains;
 	getModelRole(role: string): string | undefined;
 	modelLookup: RetryFallbackModelLookup;
+}
+
+/**
+ * The retry view while the review plan switch is active: `reviewer` reads the
+ * `plan` model, and the `reviewer` chain yields to the `plan` chain. Keeping
+ * the `reviewer` key would let it claim a plan-model session by YAML order and
+ * retry on the provider the switch moved away from.
+ */
+export function reviewPlanRetryContext(
+	context: RetryFallbackResolutionContext,
+	active: boolean,
+): RetryFallbackResolutionContext {
+	if (!active) return context;
+	const { reviewer: _reviewer, ...chains } = context.chains;
+	return { ...context, chains, getModelRole: role => context.getModelRole(reviewPlanRole(role, true)) };
 }
 
 /** Active retry fallback state retained until the primary can be restored. */

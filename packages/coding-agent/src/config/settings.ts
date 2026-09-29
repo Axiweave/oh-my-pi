@@ -59,6 +59,7 @@ import {
 	cfgModelProfiles,
 	cfgModelRoles,
 	cfgModelRoleStorage,
+	cfgReviewUsesPlan,
 	type ModelProfilesSettings,
 } from "./model-settings";
 import { cfgShellPath } from "../exec/settings";
@@ -630,6 +631,8 @@ export class Settings {
 	#modifiedProjectModelProfile = false;
 	/** Whether `cyberMode` changed in the project layer and awaits a save. */
 	#modifiedProjectCyberMode = false;
+	/** Whether `reviewUsesPlan` changed in the project layer and awaits a save. */
+	#modifiedProjectReviewUsesPlan = false;
 	/** Individual global model roles modified during this session (for partial save) */
 	#modifiedGlobalModelRoles = new Set<string>();
 	/** On-disk generations and prior values observed before each pending global mutation, keyed like {@link #modified}. */
@@ -1254,7 +1257,8 @@ export class Settings {
 		if (
 			this.#modifiedProjectModelRoles.size > 0 ||
 			this.#modifiedProjectModelProfile ||
-			this.#modifiedProjectCyberMode
+			this.#modifiedProjectCyberMode ||
+			this.#modifiedProjectReviewUsesPlan
 		) {
 			await this.#saveProjectNow();
 		}
@@ -1769,6 +1773,17 @@ export class Settings {
 		this.#persistedMutationGeneration++;
 		this.#rebuildMerged();
 		this.#fireIfChanged(cfgCyberMode, prev);
+		this.#queueProjectSave();
+	}
+
+	/** Persist `reviewUsesPlan: enabled` in <cwd>/.omp/config.yml (project layer). */
+	setProjectReviewUsesPlan(enabled: boolean): void {
+		const prev = cfgReviewUsesPlan.get(this);
+		setByPath(this.#project, ["reviewUsesPlan"], enabled);
+		this.#modifiedProjectReviewUsesPlan = true;
+		this.#persistedMutationGeneration++;
+		this.#rebuildMerged();
+		this.#fireIfChanged(cfgReviewUsesPlan, prev);
 		this.#queueProjectSave();
 	}
 
@@ -3899,7 +3914,8 @@ export class Settings {
 			!this.#persist ||
 			(this.#modifiedProjectModelRoles.size === 0 &&
 				!this.#modifiedProjectModelProfile &&
-				!this.#modifiedProjectCyberMode)
+				!this.#modifiedProjectCyberMode &&
+				!this.#modifiedProjectReviewUsesPlan)
 		)
 			return;
 
@@ -3910,6 +3926,8 @@ export class Settings {
 		this.#modifiedProjectModelProfile = false;
 		const modifiedCyberMode = this.#modifiedProjectCyberMode;
 		this.#modifiedProjectCyberMode = false;
+		const modifiedReviewUsesPlan = this.#modifiedProjectReviewUsesPlan;
+		this.#modifiedProjectReviewUsesPlan = false;
 
 		try {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
@@ -3930,6 +3948,9 @@ export class Settings {
 				if (modifiedCyberMode) {
 					setByPath(projectSettings, ["cyberMode"], getByPath(this.#project, ["cyberMode"]));
 				}
+				if (modifiedReviewUsesPlan) {
+					setByPath(projectSettings, ["reviewUsesPlan"], getByPath(this.#project, ["reviewUsesPlan"]));
+				}
 
 				await this.#writeYamlAtomically(writePath, projectSettings);
 				this.#projectFileSettings = structuredClone(projectSettings);
@@ -3942,6 +3963,7 @@ export class Settings {
 			}
 			if (modifiedModelProfile) this.#modifiedProjectModelProfile = true;
 			if (modifiedCyberMode) this.#modifiedProjectCyberMode = true;
+			if (modifiedReviewUsesPlan) this.#modifiedProjectReviewUsesPlan = true;
 			throw error;
 		}
 

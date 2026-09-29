@@ -24,11 +24,12 @@ import {
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
+	isReviewPlanActive,
 	type ResolvedModelRoleValue,
 	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { getKnownRoleIds } from "../config/model-roles";
-import { cfgCyberMode } from "../config/model-settings";
+import { cfgCyberMode, cfgReviewUsesPlan } from "../config/model-settings";
 import type { Settings } from "../config/settings";
 import { containsMagicKeyword } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import type { MagicKeywordId } from "../modes/magic-keywords";
@@ -102,6 +103,15 @@ export class ModelControls {
 	 * installed unreleasable, and let an unrelated transcript's id claim it.
 	 */
 	readonly #cyberOwner: string;
+	/**
+	 * Whether this session sends reviews to the `plan` role. Per session, never on
+	 * the shared settings: two sessions on one configuration keep their own choice.
+	 */
+	#reviewPlan = false;
+	/** Whether the current inactive stretch of the switch was already reported. */
+	#reviewPlanWarned = false;
+	/** Parent session's review plan switch, the fallback when the transcript records none. */
+	readonly #inheritedReviewPlan: boolean | undefined;
 
 	constructor(
 		host: ModelControlsHost,
@@ -110,10 +120,12 @@ export class ModelControls {
 			thinkingLevel?: ConfiguredThinkingLevel;
 			thinkingLevelCeiling?: Effort;
 			serviceTierByFamily?: ServiceTierByFamily;
+			reviewPlan?: boolean;
 		},
 	) {
 		this.#host = host;
 		this.#cyberOwner = host.sessionId();
+		this.#inheritedReviewPlan = options.reviewPlan;
 		this.#scopedModels = options.scopedModels ?? [];
 		this.#serviceTierByFamily = options.serviceTierByFamily ?? {};
 		this.#thinkingLevelCeiling = options.thinkingLevelCeiling;
@@ -140,6 +152,7 @@ export class ModelControls {
 		// before any role is resolved, so a resumed protection is in force from the
 		// first lookup.
 		this.restoreCyberMode(host.sessionManager.getLastCyberMode());
+		this.restoreReviewPlan(host.sessionManager.getLastReviewPlan());
 	}
 
 	get #model(): Model | undefined {
@@ -474,6 +487,7 @@ export class ModelControls {
 
 		this.#host.settings.applyModelProfileRoles(profile);
 		this.#activeModelProfile = name;
+		this.#noteInactiveReviewPlan(true);
 
 		let activeRole = role;
 		let resolved = this.resolveRoleModelWithThinking(activeRole);
@@ -709,8 +723,55 @@ export class ModelControls {
 	async restoreCyberBranch(): Promise<void> {
 		const enabled = this.#host.sessionManager.getLastCyberMode() ?? cfgCyberMode.get(this.#host.settings) === true;
 		this.restoreCyberMode(enabled);
+		this.restoreReviewPlan(this.#host.sessionManager.getLastReviewPlan());
 		await this.repointCyberModel();
 		if (enabled && !this.cyberMode) this.#recordCyberState();
+	}
+
+	/** This session's review plan switch, whether or not a `plan` role exists to act on it. */
+	get reviewPlan(): boolean {
+		return this.#reviewPlan;
+	}
+
+	/** Switch reviews onto the `plan` role for this session only, and record the choice. */
+	setReviewPlan(enabled: boolean): void {
+		this.#reviewPlan = enabled;
+		// `/review-plan` reports an inactive switch itself, so no second notice.
+		this.#noteInactiveReviewPlan(false);
+		const model = this.#model;
+		if (!model) return;
+		this.#host.sessionManager.appendModelChange(
+			`${model.provider}/${model.id}`,
+			this.#host.sessionManager.getLastModelChangeRole() ?? "default",
+			false,
+			this.#activeModelProfile,
+			this.cyberMode,
+			enabled,
+		);
+	}
+
+	/** Adopt the recorded state, else the parent's, else the configured startup value. */
+	restoreReviewPlan(recorded: boolean | undefined): void {
+		this.#reviewPlan = recorded ?? this.#inheritedReviewPlan ?? cfgReviewUsesPlan.get(this.#host.settings) === true;
+		this.#noteInactiveReviewPlan(true);
+	}
+
+	/**
+	 * Tell the user once when the switch is on but no `plan` model resolves, so
+	 * reviews silently keep the reviewer (FR-011). The notice repeats only after
+	 * the switch has been active or off in between.
+	 */
+	#noteInactiveReviewPlan(report: boolean): void {
+		const inactive = this.#reviewPlan && !isReviewPlanActive(true, this.#host.settings);
+		if (inactive && report && !this.#reviewPlanWarned) {
+			const reviewer = this.#host.settings.getModelRole("reviewer") ?? "the agent's own model";
+			this.#host.emitNotice(
+				"warning",
+				`Review plan mode is on, but no plan model resolves. Reviews keep ${reviewer}.`,
+				"review-plan",
+			);
+		}
+		this.#reviewPlanWarned = inactive;
 	}
 
 	/**

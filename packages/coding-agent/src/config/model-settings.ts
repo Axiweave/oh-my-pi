@@ -143,3 +143,11 @@ export const cfgCyberModels = register({ id: "cyberModels", type: "array", defau
  * state instead, exactly as `modelProfile` does.
  */
 export const cfgCyberMode = register({ id: "cyberMode", type: "boolean", default: false });
+
+/**
+ * Startup value for the review plan switch: `true` makes reviews use the active
+ * profile's `plan` model instead of its `reviewer`. The live switch is per
+ * session; a resumed session, `/new`, and branch moves follow the recorded
+ * session state instead.
+ */
+export const cfgReviewUsesPlan = register({ id: "reviewUsesPlan", type: "boolean", default: false });

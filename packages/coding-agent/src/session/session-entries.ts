@@ -122,6 +122,11 @@ export interface ModelChangeEntry extends SessionEntryBase {
 	 * still protected, and the most recent entry always names the truth.
 	 */
 	cyber?: boolean;
+	/**
+	 * Review plan switch state. Only the toggle, `/new`, and session start record
+	 * it; absent means this entry does not say, so readers take the last defined value.
+	 */
+	reviewPlan?: boolean;
 }
 
 export interface ServiceTierChangeEntry extends SessionEntryBase {

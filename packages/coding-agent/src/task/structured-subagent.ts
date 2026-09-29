@@ -353,6 +353,8 @@ export async function resolveEffectiveSubagentPolicy(
 		settings: request.session.settings,
 		activeModelPattern: parentActiveModelPattern,
 		fallbackModelPattern: request.session.getModelString?.(),
+		agentName,
+		reviewPlan: request.session.getReviewPlan?.() ?? false,
 	};
 	// Role identity and patterns come from one call so they cannot be derived
 	// from different sources: the expansion below discards the alias, and the
@@ -511,6 +513,7 @@ function buildExecutorOptions(
 		serviceTierOverride: policy.serviceTierOverride,
 		compactionThresholdOverride: policy.compactionThresholdOverride,
 		parentActiveModelPattern: policy.parentActiveModelPattern,
+		reviewPlan: session.getReviewPlan?.(),
 		thinkingLevel: policy.effectiveAgent.thinkingLevel,
 		effort: request.effort,
 		solutionSpace: request.solutionSpace?.trim() || undefined,

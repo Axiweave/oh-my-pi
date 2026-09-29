@@ -61,6 +61,7 @@ function createControls(options: {
 			sessionId: () => "test-session",
 			getLastModelProfile: () => undefined,
 			getLastCyberMode: () => options.cyber,
+			getLastReviewPlan: () => undefined,
 			appendModelChange: (model: string) => {
 				recorded.push(model);
 				return "entry";

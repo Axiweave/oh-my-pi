@@ -23,7 +23,7 @@ import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgPlanEnabled } from "../plan-mode/settings";
-import { cfgCyberMode, cfgModelProfile } from "../config/model-settings";
+import { cfgCyberMode, cfgModelProfile, cfgReviewUsesPlan } from "../config/model-settings";
 
 export function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -198,6 +198,54 @@ function cyberState(session: AgentSession): { enabled: boolean; models: readonly
 		enabled: session.cyberMode,
 		models: [...(session.settings.getCyberAllowlist()?.keys ?? [])],
 	};
+}
+
+type ReviewPlanArg =
+	| { kind: "toggle" }
+	| { kind: "status" }
+	| { kind: "set"; enabled: boolean; scope?: "global" | "project" };
+
+/** Parses `/review-plan` arguments; `undefined` means the usage line. */
+function resolveReviewPlanArg(args: string): ReviewPlanArg | undefined {
+	const tokens = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+	if (tokens.length === 0) return { kind: "toggle" };
+	if (tokens.length > 2) return undefined;
+	const [verb, scope] = tokens;
+	if (verb === "status") return scope === undefined ? { kind: "status" } : undefined;
+	if (verb !== "on" && verb !== "off") return undefined;
+	if (scope !== undefined && scope !== "global" && scope !== "project") return undefined;
+	return { kind: "set", enabled: verb === "on", scope };
+}
+
+/** Saves `reviewUsesPlan` to the named scope, returning the feedback line. */
+function persistReviewPlan(settings: Settings, scope: "global" | "project", enabled: boolean): string {
+	if (scope === "global") {
+		cfgReviewUsesPlan.set(settings, enabled);
+		return "Saved to global config";
+	}
+	settings.setProjectReviewUsesPlan(enabled);
+	return "Saved to project config";
+}
+
+/** The `/review-plan` state line: the switch and the model reviews use now. */
+function reviewPlanStateLine(session: AgentSession): string {
+	const reviewer = session.settings.getModelRole("reviewer") ?? "the agent's own model";
+	if (!session.reviewPlan) return `Review plan mode off: reviews use ${reviewer}`;
+	if (!session.reviewPlanActive) {
+		return `Review plan mode on, but no plan model resolves. Reviews keep ${reviewer}.`;
+	}
+	return `Review plan mode on: reviews use ${session.settings.getModelRole("plan")}`;
+}
+
+/** Applies a parsed `/review-plan` argument and returns the operator feedback. */
+function applyReviewPlanCommand(session: AgentSession, settings: Settings, resolved: ReviewPlanArg): string {
+	if (resolved.kind === "status") return reviewPlanStateLine(session);
+	const enabled = resolved.kind === "toggle" ? !session.reviewPlan : resolved.enabled;
+	session.setReviewPlan(enabled);
+	const line = reviewPlanStateLine(session);
+	if (resolved.kind !== "set" || !resolved.scope) return line;
+	const saved = persistReviewPlan(settings, resolved.scope, enabled);
+	return `${line.endsWith(".") ? line : `${line}.`} ${saved}.`;
 }
 
 /** Applies an `/extended-context` argument and returns its operator feedback. */
@@ -723,6 +771,37 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const saved = scope ? persistCyberMode(runtime.ctx.settings, scope) : undefined;
 				refreshStatusLine(runtime.ctx);
 				runtime.ctx.showStatus(`${cyberStateLine(result, session.model)}${saved ? ` — ${saved}` : ""}`);
+			} catch (error) {
+				runtime.ctx.showError(error instanceof Error ? error.message : String(error));
+			}
+		},
+	},
+	{
+		name: "review-plan",
+		icon: "reviewPlan",
+		description: "Toggle review plan mode: reviews use the profile's plan model instead of its reviewer",
+		acpDescription: "Toggle review plan mode",
+		acpInputHint: "[on|off|status] [global|project]",
+		allowArgs: true,
+		inlineHint: "[on|off|status] [global|project]",
+		getTuiAutocompleteDescription: runtime => `Review plan: ${runtime.ctx.session.reviewPlan ? "on" : "off"}`,
+		handle: async (command, runtime) => {
+			const resolved = resolveReviewPlanArg(command.args);
+			if (!resolved) return usage("Usage: /review-plan [on|off|status] [global|project]", runtime);
+			await runtime.output(applyReviewPlanCommand(runtime.session, runtime.settings, resolved));
+			return commandConsumed();
+		},
+		handleTui: async (command, runtime) => {
+			runtime.ctx.editor.setText("");
+			const resolved = resolveReviewPlanArg(command.args);
+			if (!resolved) {
+				runtime.ctx.showStatus("Usage: /review-plan [on|off|status] [global|project]");
+				return;
+			}
+			try {
+				const line = applyReviewPlanCommand(runtime.ctx.session, runtime.ctx.settings, resolved);
+				refreshStatusLine(runtime.ctx);
+				runtime.ctx.showStatus(line);
 			} catch (error) {
 				runtime.ctx.showError(error instanceof Error ? error.message : String(error));
 			}

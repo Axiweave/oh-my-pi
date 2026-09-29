@@ -471,6 +471,8 @@ export interface ExecutorOptions {
 	 * if the resolved subagent model has no working credentials. See #985.
 	 */
 	parentActiveModelPattern?: string;
+	/** Parent session's review plan switch; the child starts with it (FR-012). */
+	reviewPlan?: boolean;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Caller-requested coarse effort (`lo`/`med`/`hi`); maps onto the resolved model's supported thinking range and wins over {@link thinkingLevel}. */
 	effort?: TaskEffort;
@@ -3952,6 +3954,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					model || modelOverride === undefined ? undefined : inheritedRetryFallbackChain,
 				thinkingLevel: effectiveThinkingLevel,
 				thinkingLevelCeiling: spawnEffortCeiling,
+				reviewPlan: options.reviewPlan,
 				// Subagents are short-lived; never schedule background warm requests.
 				cacheWarming: false,
 				// A revived session restores the tier history it persisted (including

@@ -65,6 +65,7 @@ import {
 	type RetryFallbackRevertPolicy,
 	type RetryFallbackSelector,
 	resolveRetryFallbackChainKey,
+	reviewPlanRetryContext,
 	type ServingModel,
 	validateRetryFallbackChains,
 } from "./retry-fallback-chains";
@@ -254,6 +255,8 @@ export interface TurnRecoveryHost {
 	 * session's own indicator reads off (FR-029).
 	 */
 	cyberModeEnabled(): boolean;
+	/** Whether this session's review plan switch is in effect; retry then reads `reviewer` as `plan`. */
+	reviewPlanActive(): boolean;
 	/** Edit mode resolved for the active model and settings, captured before a fallback swap. */
 	resolveActiveEditMode(): EditMode;
 	/** Rebuilds the model-dependent base system prompt when a swap changed the edit mode or model policy. */
@@ -1638,11 +1641,14 @@ export class TurnRecovery {
 	}
 
 	#getRetryFallbackResolutionContext(): RetryFallbackResolutionContext {
-		return {
-			chains: this.#getRetryFallbackChains(),
-			getModelRole: role => this.#host.settings.getModelRole(role),
-			modelLookup: this.#host.modelRegistry,
-		};
+		return reviewPlanRetryContext(
+			{
+				chains: this.#getRetryFallbackChains(),
+				getModelRole: role => this.#host.settings.getModelRole(role),
+				modelLookup: this.#host.modelRegistry,
+			},
+			this.#host.reviewPlanActive(),
+		);
 	}
 	#getRetryFallbackChains(): RetryFallbackChains {
 		return getRetryFallbackChains(this.#host.settings);

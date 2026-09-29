@@ -6,7 +6,8 @@ import {
 	buildDirectoryArgumentCompletions,
 	buildMcpArgumentCompletions,
 	buildCyberArgumentCompletions,
-	buildCyberInlineHint,
+	buildVerbScopeInlineHint,
+	buildReviewPlanArgumentCompletions,
 	buildModelProfileArgumentCompletions,
 	buildModelProfileInlineHint,
 	buildModelSelectorCompletions,
@@ -91,7 +92,10 @@ function materializeTuiBuiltinSlashCommand(
 		materialized.getInlineHint = buildSubcommandInlineHint(cmd.subcommands);
 	} else if (cmd.name === "cyber") {
 		materialized.getArgumentCompletions = buildCyberArgumentCompletions();
-		materialized.getInlineHint = buildCyberInlineHint();
+		materialized.getInlineHint = buildVerbScopeInlineHint();
+	} else if (cmd.name === "review-plan") {
+		materialized.getArgumentCompletions = buildReviewPlanArgumentCompletions();
+		materialized.getInlineHint = buildVerbScopeInlineHint();
 	} else if (cmd.name === "model-profile" && runtime) {
 		materialized.getArgumentCompletions = buildModelProfileArgumentCompletions(runtime);
 		materialized.getInlineHint = buildModelProfileInlineHint();

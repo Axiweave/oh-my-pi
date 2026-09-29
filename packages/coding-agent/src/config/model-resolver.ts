@@ -1273,6 +1273,29 @@ export interface AgentModelPatternResolutionOptions {
 	settings?: Settings;
 	activeModelPattern?: string;
 	fallbackModelPattern?: string;
+	/** Agent being spawned; names the built-in review agents for the review plan switch. */
+	agentName?: string;
+	/** The spawning session's review plan switch. */
+	reviewPlan?: boolean;
+}
+
+/** Built-in agents that review; they follow the review plan switch whatever model they declare. */
+const REVIEW_AGENT_NAMES: Record<string, true> = { reviewer: true, "plan-reviewer": true, "impl-reviewer": true };
+
+/** `plan` while the review plan switch is active and `role` is `reviewer`, else `role`. */
+export function reviewPlanRole(role: string, active: boolean): string {
+	return active && role === "reviewer" ? "plan" : role;
+}
+
+/** Role lookup that reads `reviewer` as `plan` while `active` is true. */
+export function reviewPlanLookup(settings: ModelRoleLookup, active: boolean): ModelRoleLookup {
+	if (!active) return settings;
+	return { getModelRole: role => settings.getModelRole(reviewPlanRole(role, true)) };
+}
+
+/** Whether a review plan switch set to `enabled` takes effect: it needs a `plan` role to point at. */
+export function isReviewPlanActive(enabled: boolean | undefined, settings: ModelRoleLookup | undefined): boolean {
+	return enabled === true && settings?.getModelRole("plan") !== undefined;
 }
 
 interface EffectiveAgentModelSelection {
@@ -1285,18 +1308,38 @@ function resolveEffectiveAgentModelSelection(
 ): EffectiveAgentModelSelection {
 	const { requestModel, settingsOverride, agentModel, settings, activeModelPattern, fallbackModelPattern } = options;
 
-	const requestPatterns = resolveConfiguredModelPatterns(requestModel, settings);
+	const reviewPlanActive = isReviewPlanActive(options.reviewPlan, settings);
+	const lookup = settings && reviewPlanLookup(settings, reviewPlanActive);
+
+	// A request is the one selector the switch does not outrank; a request that
+	// names `@reviewer` still reads it through the switch.
+	const requestPatterns = resolveConfiguredModelPatterns(requestModel, lookup);
 	if (requestPatterns.length > 0) {
 		return { source: requestModel, patterns: requestPatterns };
 	}
 
-	const overridePatterns = resolveConfiguredModelPatterns(settingsOverride, settings);
+	// The review plan switch outranks saved overrides and frontmatter for review
+	// agents: a fixed-model override skips role expansion, and the built-in
+	// `reviewer` declares `@slow`, so neither would follow the lookup alone. A
+	// selector that names `@reviewer` itself stays the source, keeping its suffix.
+	if (reviewPlanActive) {
+		const named = [settingsOverride, agentModel].find(
+			value => resolveExplicitModelRole(value, settings) === "reviewer",
+		);
+		const isReviewAgent = options.agentName !== undefined && Object.hasOwn(REVIEW_AGENT_NAMES, options.agentName);
+		if (named !== undefined || isReviewAgent) {
+			const source = named ?? formatModelRoleAlias("reviewer");
+			return { source, patterns: resolveConfiguredModelPatterns(source, lookup) };
+		}
+	}
+
+	const overridePatterns = resolveConfiguredModelPatterns(settingsOverride, lookup);
 	if (overridePatterns.length > 0) {
 		return { source: settingsOverride, patterns: overridePatterns };
 	}
 
 	const normalizedAgentPatterns = normalizeModelPatternList(agentModel);
-	const configuredAgentPatterns = resolveConfiguredModelPatterns(agentModel, settings);
+	const configuredAgentPatterns = resolveConfiguredModelPatterns(agentModel, lookup);
 	const singleAgentPattern = normalizedAgentPatterns.length === 1 ? normalizedAgentPatterns[0] : undefined;
 	const agentInheritsSessionModel = singleAgentPattern ? isSessionInheritedAgentPattern(singleAgentPattern) : false;
 	if (configuredAgentPatterns.length > 0) {
@@ -1311,7 +1354,7 @@ function resolveEffectiveAgentModelSelection(
 
 	const fallback =
 		activeModelPattern?.trim() || fallbackModelPattern?.trim() || settings?.getModelRole("default")?.trim() || "";
-	return { patterns: resolveConfiguredModelPatterns(fallback, settings) };
+	return { patterns: resolveConfiguredModelPatterns(fallback, lookup) };
 }
 
 /** Effective agent model patterns paired with the pre-expansion role alias behind them. */
@@ -1330,7 +1373,11 @@ export interface AgentModelSelection {
  */
 export function resolveAgentModelSelection(options: AgentModelPatternResolutionOptions): AgentModelSelection {
 	const { source, patterns } = resolveEffectiveAgentModelSelection(options);
-	return { patterns, role: resolveExplicitModelRole(source, options.settings) };
+	const role = resolveExplicitModelRole(source, options.settings);
+	// A reviewer on the plan model retries through the plan chain, not the
+	// reviewer chain that points at the provider the switch moved away from.
+	const active = isReviewPlanActive(options.reviewPlan, options.settings);
+	return { patterns, role: role === undefined ? undefined : reviewPlanRole(role, active) };
 }
 
 /** Effective agent model patterns alone, for callers with no interest in role identity. */

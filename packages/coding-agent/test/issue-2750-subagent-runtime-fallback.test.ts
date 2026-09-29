@@ -175,6 +175,7 @@ describe("subagent runtime model resolution", () => {
 			const recovery = new TurnRecovery({
 				model: () => primary,
 				thinkingLevel: () => undefined,
+				reviewPlanActive: () => false,
 				sessionManager: options.sessionManager,
 				settings: options.settings,
 				modelRegistry: {

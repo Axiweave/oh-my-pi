@@ -105,6 +105,7 @@ export interface VibeParentSession {
 	settings: ToolSession["settings"];
 	getActiveModelString?: () => string | undefined;
 	getModelString?: () => string | undefined;
+	getReviewPlan?: () => boolean;
 }
 
 interface VibeRestoreCandidate {
@@ -365,6 +366,8 @@ export class VibeSessionRegistry {
 			settings: session.settings,
 			activeModelPattern: session.getActiveModelString?.(),
 			fallbackModelPattern: session.getModelString?.(),
+			agentName,
+			reviewPlan: session.getReviewPlan?.() ?? false,
 		});
 		return { agent, modelOverride: patterns, modelRole: role };
 	}
@@ -1293,6 +1296,7 @@ export class VibeSessionRegistry {
 			modelOverride: record.modelOverride,
 			modelRole: record.modelRole,
 			parentActiveModelPattern: session.getActiveModelString?.(),
+			reviewPlan: session.getReviewPlan?.(),
 			thinkingLevel: record.agent.thinkingLevel,
 			sessionFile,
 			persistArtifacts: Boolean(sessionFile),

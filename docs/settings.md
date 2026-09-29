@@ -437,6 +437,14 @@ cyberMode: true
 | `cyberModels` | array | `[]` | Ordered allowlist of operator-approved models. Entries accept model selectors (`provider/model-id`), role aliases (`@role`), and globs. Empty filtered chains use the first resolved entry. |
 | `cyberMode`   | boolean | `false` | Startup value for cyber mode. The mode is also toggled in-session with `/cyber` or `Alt+Shift+X`, and `/cyber on global\|project` writes this key.                        |
 
+### Review plan mode
+
+`reviewUsesPlan` is the startup value for the review plan switch. When the switch is on, `@reviewer` reads the `plan` role for review agents and custom agents, and a remapped reviewer retries through the `plan` chain. The `reviewer`, `plan-reviewer`, and `impl-reviewer` agents also use `plan`, even with a saved `task.agentModelOverrides` entry. Only a model given on one task request wins over the switch. Use it when the reviewer's provider has no usage left. See [Review plan mode](./review-plan.md).
+
+| Key              | Type    | Default | Notes                                                                                                                  |
+| ---------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `reviewUsesPlan` | boolean | `false` | Startup value for the review plan switch. `/review-plan` changes it for one session. `/review-plan on\|off global\|project` writes this key. |
+
 ### Advisor
 
 The advisor is a second model that reviews each completed turn and can inject advice into the primary session. Assign a model with `modelRoles.advisor`, then enable it with `advisor.enabled`, `/advisor on`, or by launching with the `--advisor` flag.

@@ -26,6 +26,7 @@ import {
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
+	isReviewPlanActive,
 	resolveModelFromString,
 	resolveModelOverride,
 } from "../config/model-resolver";
@@ -39,6 +40,7 @@ import {
 	getRetryFallbackChains,
 	type RetryFallbackResolutionContext,
 	resolveRetryFallbackChainKey,
+	reviewPlanRetryContext,
 } from "../session/retry-fallback-chains";
 import { shouldDisableReasoning, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import type { JsStatusEvent } from "./js/shared/types";
@@ -258,11 +260,14 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 
 	appendFallbackCandidates(
 		{
-			context: {
-				chains: getRetryFallbackChains(session.settings),
-				getModelRole: (role: string) => session.settings.getModelRole(role),
-				modelLookup: modelRegistry,
-			},
+			context: reviewPlanRetryContext(
+				{
+					chains: getRetryFallbackChains(session.settings),
+					getModelRole: (role: string) => session.settings.getModelRole(role),
+					modelLookup: modelRegistry,
+				},
+				isReviewPlanActive(session.getReviewPlan?.(), session.settings),
+			),
 			modelRegistry,
 			settings: session.settings,
 			tier,

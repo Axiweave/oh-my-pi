@@ -352,7 +352,13 @@ import {
 	type SkillsSettings,
 } from "./extensibility/settings";
 import { cfgTtsr } from "./export/ttsr-settings";
-import { cfgDisabledProviders, cfgEnabledModels, cfgEnabledProviders, cfgModelRoles } from "./config/model-settings";
+import {
+	cfgDisabledProviders,
+	cfgEnabledModels,
+	cfgEnabledProviders,
+	cfgModelRoles,
+	cfgReviewUsesPlan,
+} from "./config/model-settings";
 import { cfgEditRecoverInlineEdits } from "./edit/settings";
 import { cfgGoalEnabled } from "./goals/settings";
 import { cfgImagesBlockImages, cfgStartupQuiet, cfgTuiReactions, cfgTuiRenderMermaid } from "./modes/settings";
@@ -570,6 +576,8 @@ export interface CreateAgentSessionOptions {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
 	thinkingLevelCeiling?: Effort;
+	/** Parent session's review plan switch; the new session starts with it instead of `reviewUsesPlan`. */
+	reviewPlan?: boolean;
 	/** OpenAI service-tier override for this session. `null` omits `service_tier`. */
 	openAIServiceTier?: ServiceTier | null;
 	/**
@@ -2273,6 +2281,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
 			getActiveModel: () => agent?.state.model ?? model,
+			getReviewPlan: () => session?.reviewPlan ?? false,
 			getServiceTierByFamily: () => session?.serviceTierByFamily,
 			getImageAttachments: () => session?.getImageAttachments() ?? [],
 			getPlanModeState: () => session?.getPlanModeState(),
@@ -4411,12 +4420,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (model) {
 				// The cyber state rides the first model entry, so a resume restores the
 				// protection the session started under instead of re-reading config.
+				// The review plan switch rides it for the same reason.
 				sessionManager.appendModelChange(
 					`${model.provider}/${model.id}`,
 					undefined,
 					false,
 					undefined,
 					cyberStartup === "on",
+					options.reviewPlan ?? cfgReviewUsesPlan.get(settings) === true,
 				);
 			}
 			if (!autoThinking) {
@@ -4511,6 +4522,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			agent,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			thinkingLevelCeiling: options.thinkingLevelCeiling,
+			reviewPlan: options.reviewPlan,
 			initialRetryFallback,
 			deferRetryFallbackValidation: options.deferRetryFallbackValidation,
 			prewalk,
