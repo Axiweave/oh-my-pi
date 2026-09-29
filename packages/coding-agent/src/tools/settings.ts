@@ -387,6 +387,23 @@ export const cfgTodoEager = register({
 	},
 });
 
+export const cfgTodoHud = register({
+	id: "todo.hud",
+	type: "enum",
+	values: ["preview", "compact"] as const,
+	default: "preview",
+	ui: {
+		tab: "tools",
+		group: "Todos",
+		label: "Todo HUD Layout",
+		description: "How the sticky todo HUD starts in each session",
+		options: [
+			{ value: "preview", label: "Preview", description: "Bounded task tree above the editor" },
+			{ value: "compact", label: "Compact", description: "One line on the status row" },
+		],
+	},
+});
+
 export const cfgTasksTodoClearDelay = register({
 	id: "tasks.todoClearDelay",
 	type: "number",

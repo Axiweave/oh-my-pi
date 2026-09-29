@@ -110,6 +110,9 @@ export interface AgentHubOpenOptions {
 	initialSection?: "agents" | "activity";
 }
 
+/** Sticky todo HUD layout: every task, the bounded tree, or one status-row line. */
+export type TodoHudLayout = "full" | "preview" | "compact";
+
 export interface InteractiveModeContext {
 	// UI access
 	ui: TUI;
@@ -191,7 +194,7 @@ export interface InteractiveModeContext {
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
 	hideToolActivity: boolean;
-	todoExpanded: boolean;
+	readonly todoLayout: TodoHudLayout;
 	planModeEnabled: boolean;
 	planModePaused: boolean;
 	vibeModeEnabled: boolean;
@@ -420,8 +423,7 @@ export interface InteractiveModeContext {
 	rebuildChatFromMessages(options?: { reuseSettledComponents?: boolean }): void;
 	setTodos(todos: TodoItem[] | TodoPhase[]): void;
 	reloadTodos(source?: AgentSession): Promise<void>;
-	toggleTodoExpansion(): void;
-	setTodoExpanded(expanded: boolean): void;
+	setTodoLayout(layout: TodoHudLayout): void;
 	// Command handling
 	handleExportCommand(text: string): Promise<void>;
 	handleTraceCommand(): Promise<void>;

@@ -107,6 +107,7 @@ const TODO_HELP_TEXT = [
 	"  /todo copy                         Print todos as Markdown",
 	"  /todo expand                       (TUI only) expand the sticky HUD",
 	"  /todo collapse                     (TUI only) collapse the sticky HUD",
+	"  /todo compact                      (TUI only) fold the sticky HUD to one line",
 	"  /todo export [<path>]              Write todos to file (default: TODO.md)",
 	"  /todo import [<path>]              Replace todos from file (default: TODO.md)",
 	"  /todo append [<phase>] <task...>   Append a task",
@@ -279,6 +280,7 @@ export async function handleTodoAcp(
 			);
 		case "expand":
 		case "collapse":
+		case "compact":
 			return usage(`/todo ${verb} controls the interactive HUD and is unavailable in this mode.`, runtime);
 		case "help":
 		case "?":

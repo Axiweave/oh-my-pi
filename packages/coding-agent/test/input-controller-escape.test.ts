@@ -213,7 +213,6 @@ function createContext(): {
 		updatePendingMessagesDisplay,
 		updateEditorBorderColor: vi.fn(),
 		showDebugSelector: vi.fn(),
-		toggleTodoExpansion: vi.fn(),
 		showAgentHub: vi.fn(),
 		unfocusSession: vi.fn(async () => {}),
 		focusParentSession: vi.fn(async () => {}),

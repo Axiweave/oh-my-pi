@@ -19,6 +19,7 @@ const USAGE = [
 	"  /todo copy                         Copy todos as Markdown to clipboard",
 	"  /todo expand                       Show every phase and task in the HUD",
 	"  /todo collapse                     Restore the bounded HUD preview",
+	"  /todo compact                      Fold the HUD into one status-row line",
 	"  /todo export [<path>]              Write todos to file (default: TODO.md)",
 	"  /todo import [<path>]              Replace todos from file (default: TODO.md)",
 	"  /todo append [<phase>] <task...>   Append a task; phase fuzzy-matched or auto-created",
@@ -157,10 +158,13 @@ export class TodoCommandController {
 
 		switch (verb) {
 			case "expand":
-				this.ctx.setTodoExpanded(true);
+				this.ctx.setTodoLayout("full");
 				return;
 			case "collapse":
-				if (this.ctx.todoExpanded) this.ctx.toggleTodoExpansion();
+				this.ctx.setTodoLayout("preview");
+				return;
+			case "compact":
+				this.ctx.setTodoLayout("compact");
 				return;
 			case "edit":
 				await this.#editInExternalEditor(editorOrigin);

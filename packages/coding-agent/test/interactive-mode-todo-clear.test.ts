@@ -13,8 +13,9 @@ import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task"
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { visibleWidth } from "@oh-my-pi/pi-tui";
 
-import { cfgTasksTodoClearDelay } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { cfgTasksTodoClearDelay, cfgTodoHud } from "@oh-my-pi/pi-coding-agent/tools/settings";
 
 function renderTodos(mode: InteractiveMode): string {
 	return Bun.stripANSI(mode.todoContainer.render(120).join("\n"));
@@ -409,7 +410,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		const oldPhases: TodoPhase[] = [{ name: "Old", tasks: [{ content: "old", status: "completed" }] }];
 		const newPhases: TodoPhase[] = [{ name: "New", tasks: [{ content: "new", status: "in_progress" }] }];
 		mode.setTodos(oldPhases);
-		mode.setTodoExpanded(true);
+		mode.setTodoLayout("full");
 		mode.setTodos(newPhases);
 		settle.resolve();
 		await Promise.resolve();
@@ -569,7 +570,6 @@ describe("InteractiveMode todo HUD persistence", () => {
 		await mode.reloadTodos();
 		expect(renderTodos(mode)).toBe("");
 		expect(session.getTodoPhases()).toEqual(phases);
-		mode.todoExpanded = true;
 		await mode.handleTodoCommand("expand");
 		expect(renderTodos(mode)).toContain("ship");
 		await session.sessionManager.flush();
@@ -577,6 +577,28 @@ describe("InteractiveMode todo HUD persistence", () => {
 		await mode.reloadTodos();
 		expect(renderTodos(mode)).toContain("ship");
 		expect(session.getTodoPhases()).toEqual(phases);
+	});
+
+	it("drops the one-line summary once the HUD is auto-cleared", async () => {
+		vi.useFakeTimers();
+		setTodoClearDelay(0);
+		const phases: TodoPhase[] = [{ name: "Implementation", tasks: [{ content: "done task", status: "completed" }] }];
+		session.sessionManager.appendCustomEntry("user_todo_edit", { phases });
+		session.setTodoPhases(phases);
+		mode.setTodos(session.getTodoPhases());
+		vi.advanceTimersByTime(0);
+		await session.settleInFlightMessagePersistence();
+		await session.sessionManager.flush();
+		expect(renderTodos(mode)).toBe("");
+		expect(mode.renderCompactStatusLine(100, ["working"])).toEqual(["working"]);
+	});
+
+	it("ends a /todo layout choice with its session", async () => {
+		mode.setTodos(unfinishedPlan());
+		await mode.handleTodoCommand("compact");
+		expect(mode.todoLayout).toBe("compact");
+		await session.sessionManager.newSession();
+		expect(mode.todoLayout).toBe("preview");
 	});
 });
 
@@ -608,6 +630,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 
 	afterEach(() => {
 		mode.setTodos([]);
+		mode.setTodoLayout("preview");
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
@@ -619,6 +642,13 @@ describe("InteractiveMode todo HUD anchor", () => {
 		tempDir?.removeSync();
 		resetSettingsForTest();
 	});
+
+	function setTerminalRows(rows: number): void {
+		Object.defineProperty(mode.ui.terminal, "rows", {
+			get: () => rows,
+			configurable: true,
+		});
+	}
 
 	it("renders a Todos tree: stage progression header, active stage expanded, others collapsed", () => {
 		mode.setTodos([
@@ -744,13 +774,6 @@ describe("InteractiveMode todo HUD anchor", () => {
 	});
 
 	describe("compact todo for small terminal height (< 18 rows)", () => {
-		function setTerminalRows(rows: number): void {
-			Object.defineProperty(mode.ui.terminal, "rows", {
-				get: () => rows,
-				configurable: true,
-			});
-		}
-
 		afterEach(() => {
 			setTerminalRows(24);
 			mode.loadingAnimation = undefined;
@@ -856,6 +879,160 @@ describe("InteractiveMode todo HUD anchor", () => {
 			setTerminalRows(24);
 			expect(mode.todoContainer.render(100).length).toBeGreaterThan(0);
 			expect(mode.statusContainer.render(100)).toHaveLength(0);
+		});
+	});
+
+	describe("selectable todo HUD layout", () => {
+		/** Deterministic PRNG so a failing case reproduces from its printed seed. */
+		function mulberry32(seed: number): () => number {
+			let state = seed >>> 0;
+			return () => {
+				state = (state + 0x6d2b79f5) >>> 0;
+				let t = state;
+				t = Math.imul(t ^ (t >>> 15), t | 1);
+				t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+				return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+			};
+		}
+		const statusLine = (width: number): string => Bun.stripANSI(mode.renderCompactStatusLine(width, []).at(-1) ?? "");
+
+		afterEach(() => {
+			setTerminalRows(24);
+			cfgTodoHud.override(session.settings, "preview");
+		});
+
+		it("starts from todo.hud, lets /todo override it, and lets a todo.hud change clear the override", async () => {
+			mode.setTodos([{ name: "Tasks", tasks: [{ content: "Refactor router", status: "in_progress" }] }]);
+			cfgTodoHud.override(session.settings, "compact");
+			mode.applyTodoHudSetting();
+			expect(mode.todoLayout).toBe("compact");
+			expect(renderTodos(mode)).toBe("");
+
+			await mode.handleTodoCommand("collapse");
+			expect(mode.todoLayout).toBe("preview");
+			expect(renderTodos(mode)).toContain("Refactor router");
+
+			cfgTodoHud.override(session.settings, "preview");
+			await mode.handleTodoCommand("compact");
+			mode.applyTodoHudSetting();
+			expect(mode.todoLayout).toBe("preview");
+			expect(renderTodos(mode)).toContain("Refactor router");
+		});
+
+		it("keeps the idle status row in every layout and height when there is no plan", async () => {
+			const idle = vi.spyOn(mode, "renderIdleStatusHud").mockReturnValue(["", "IDLE"]);
+			try {
+				mode.setTodos([]);
+				for (const rows of [10, 40]) {
+					setTerminalRows(rows);
+					for (const verb of ["collapse", "compact", "expand"] as const) {
+						await mode.handleTodoCommand(verb);
+						expect({ rows, verb, lines: mode.statusContainer.render(80) }).toEqual({
+							rows,
+							verb,
+							lines: ["", "IDLE"],
+						});
+					}
+				}
+			} finally {
+				idle.mockRestore();
+			}
+		});
+
+		it("shows the one-line summary exactly when compact is selected or the terminal is short", async () => {
+			const seed = 0x70d0;
+			const rand = mulberry32(seed);
+			const verbs = ["expand", "collapse", "compact"] as const;
+			const layoutFor = { expand: "full", collapse: "preview", compact: "compact" } as const;
+			const heights = [10, 17, 18, 40];
+			mode.setTodos([
+				{
+					name: "Implementation",
+					tasks: Array.from({ length: 8 }, (_, index): TodoItem => ({
+						content: `Task ${index + 1}`,
+						status: index === 0 ? "in_progress" : "pending",
+					})),
+				},
+			]);
+			let selected: "full" | "preview" | "compact" = "preview";
+			let rows = 24;
+			const trace: string[] = [];
+			for (let step = 0; step < 200; step++) {
+				if (rand() < 0.5) {
+					const verb = verbs[Math.floor(rand() * verbs.length)]!;
+					await mode.handleTodoCommand(verb);
+					selected = layoutFor[verb];
+					trace.push(verb);
+				} else {
+					rows = heights[Math.floor(rand() * heights.length)]!;
+					setTerminalRows(rows);
+					trace.push(`rows=${rows}`);
+				}
+				const compact = selected === "compact" || rows < 18;
+				const hud = renderTodos(mode);
+				const summary = Bun.stripANSI(mode.statusContainer.render(120).at(-1) ?? "");
+				const ok =
+					mode.todoLayout === selected &&
+					(hud === "") === compact &&
+					summary.includes("TODO 0/8") === compact &&
+					(compact || hud.includes("Task 8") === (selected === "full"));
+				if (!ok) throw new Error(`seed=${seed} trace=${trace.join(",")}`);
+			}
+		});
+
+		it("fits the width and cuts the task text before the status text", () => {
+			const seed = 0x5eed;
+			const rand = mulberry32(seed);
+			for (let i = 0; i < 400; i++) {
+				const width = 20 + Math.floor(rand() * 281);
+				const taskLen = 1 + Math.floor(rand() * 400);
+				const leftLen = Math.floor(rand() * 201);
+				const blocked = rand() < 0.5;
+				const tasks: TodoItem[] = [{ content: "a".repeat(taskLen), status: "in_progress" }];
+				if (blocked) tasks.push({ content: "b", status: "blocked" });
+				mode.setTodos([{ name: "Tasks", tasks }]);
+				// Everything except the task text, measured from an uncut render.
+				const fixed = visibleWidth(statusLine(10_000).trim()) - taskLen;
+				const left = "L".repeat(leftLen);
+				const out = Bun.stripANSI(mode.renderCompactStatusLine(width, leftLen > 0 ? [left] : []).at(-1) ?? "");
+				const fits = visibleWidth(out) <= width;
+				const roomForTask = width - leftLen - 2 - fixed - 1 >= 12;
+				const leftWhole = !roomForTask || out.startsWith(left);
+				const suffixKept = !roomForTask || !blocked || out.includes("· 1 blocked");
+				if (!fits || !leftWhole || !suffixKept) {
+					throw new Error(`seed=${seed} case=${JSON.stringify({ width, taskLen, leftLen, blocked, out })}`);
+				}
+			}
+		});
+
+		it("names the first in-progress, else pending, else blocked task and counts blocked tasks", () => {
+			const seed = 0xb10c;
+			const rand = mulberry32(seed);
+			const statuses = ["pending", "in_progress", "completed", "abandoned", "blocked"] as const;
+			for (let i = 0; i < 300; i++) {
+				let n = 0;
+				const phases: TodoPhase[] = Array.from({ length: 1 + Math.floor(rand() * 3) }, (_, p) => ({
+					name: `Phase ${p}`,
+					tasks: Array.from({ length: 1 + Math.floor(rand() * 4) }, (): TodoItem => {
+						const status = statuses[Math.floor(rand() * statuses.length)]!;
+						return { content: `t${String(n++).padStart(2, "0")}x`, status };
+					}),
+				}));
+				mode.setTodos(phases);
+				const flat = phases.flatMap(phase => phase.tasks);
+				const current =
+					flat.find(task => task.status === "in_progress") ??
+					flat.find(task => task.status === "pending") ??
+					flat.find(task => task.status === "blocked");
+				const blockedCount = flat.filter(task => task.status === "blocked").length;
+				const line = statusLine(1000);
+				const named = flat.filter(task => line.includes(task.content)).map(task => task.content);
+				const ok =
+					(current ? named.length === 1 && named[0] === current.content : named.length === 0) &&
+					line.includes("done") === !current &&
+					line.includes(`· ${blockedCount} blocked`) === blockedCount > 0;
+				if (!ok) throw new Error(`seed=${seed} case=${i} phases=${JSON.stringify(phases)} line=${line}`);
+			}
 		});
 	});
 });

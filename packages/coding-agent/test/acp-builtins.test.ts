@@ -907,9 +907,9 @@ describe("wave 3 commands", () => {
 		expect(output[0]).toContain("TUI editor");
 	});
 
-	it("/todo expand: returns HUD-only usage message in ACP mode", async () => {
+	it.each(["expand", "collapse", "compact"])("/todo %s: returns HUD-only usage message in ACP mode", async verb => {
 		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/todo expand", runtime);
+		const result = await executeAcpBuiltinSlashCommand(`/todo ${verb}`, runtime);
 		expect(result).toEqual({ consumed: true });
 		expect(output[0]).toContain("interactive HUD");
 	});

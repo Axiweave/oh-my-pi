@@ -35,6 +35,8 @@ import {
 	setComposerStylePreferences,
 	setTerminalTextSizing,
 	setTuiTight,
+	sliceByColumn,
+	stripTerminalSequences,
 	TERMINAL,
 	Text,
 	type TUI,
@@ -325,6 +327,7 @@ import type {
 	InteractiveSelectorDialogOptions,
 	RenderSessionContextOptions,
 	SubmittedUserInput,
+	TodoHudLayout,
 } from "./types";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { UiHelpers } from "./utils/ui-helpers";
@@ -383,7 +386,7 @@ import {
 	cfgTuiWorkingTimer,
 	cfgTuiWorkingTimerMinSeconds,
 } from "./settings";
-import { cfgTasksTodoClearDelay } from "../tools/settings";
+import { cfgTasksTodoClearDelay, cfgTodoHud } from "../tools/settings";
 import { cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
 import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
@@ -421,6 +424,7 @@ const cfgLiveUiSettings = combine({
 	"tui.vimMode": cfgTuiVimMode,
 	"tui.vimModeDisplay": cfgTuiVimModeDisplay,
 	"display.pinnedAgents": cfgDisplayPinnedAgents,
+	"todo.hud": cfgTodoHud,
 	"compaction.idleEnabled": cfgCompactionIdleEnabled,
 	"compaction.idleThresholdTokens": cfgCompactionIdleThresholdTokens,
 	"compaction.idleTimeoutSeconds": cfgCompactionIdleTimeoutSeconds,
@@ -626,6 +630,8 @@ export interface InteractiveModeOptions {
 }
 
 export const TODO_COMPACT_TERMINAL_ROWS_THRESHOLD = 18;
+/** Cells the compact todo task keeps before the status text beside it is shortened. */
+const TODO_COMPACT_MIN_TASK_CELLS = 12;
 
 /** Holds mutable HUD and editor-adjacent chrome outside transcript history. */
 class AnchoredLiveContainer extends Container {}
@@ -741,14 +747,10 @@ class StatusHudContainer extends AnchoredLiveContainer {
 
 	#renderLines(width: number): readonly string[] {
 		const childLines = super.render(width);
-		if (!this.mode.isCompactTodoMode()) {
-			if (childLines.length === 0) {
-				const idle = this.mode.renderIdleStatusHud(width);
-				if (idle) return idle;
-			}
-			return childLines;
-		}
-		return this.mode.renderCompactStatusLine(width, childLines);
+		const lines = this.mode.isCompactTodoMode() ? this.mode.renderCompactStatusLine(width, childLines) : childLines;
+		// With no plan to fold in, the compact layout keeps the normal idle row.
+		if (lines.length === 0) return this.mode.renderIdleStatusHud(width) ?? lines;
+		return lines;
 	}
 }
 
@@ -1108,7 +1110,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	isBashMode = false;
 	toolOutputExpanded = false;
 	hideToolActivity = false;
-	todoExpanded = false;
+	/** `/todo` layout choice, tagged with the session that made it so it ends with that session. */
+	#todoLayoutOverride: { sessionId: string; layout: TodoHudLayout } | undefined;
+	/** Selected layout: this session's `/todo` choice, else `todo.hud`. Short terminals still fold to compact. */
+	get todoLayout(): TodoHudLayout {
+		const override = this.#todoLayoutOverride;
+		if (override && override.sessionId === this.sessionManager.getSessionId()) return override.layout;
+		return cfgTodoHud.get(this.settings);
+	}
 	planModeEnabled = false;
 	planModePaused = false;
 	goalModeEnabled = false;
@@ -1528,6 +1537,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		// reselecting the current value would keep showing the old override.
 		this.#pinnedHudOverride = undefined;
 		this.#renderSubagentList();
+		this.ui.requestRender();
+	}
+
+	/** Re-render the todo HUD for a `todo.hud` change; the setting wins over this session's `/todo` choice. */
+	applyTodoHudSetting(): void {
+		this.#todoLayoutOverride = undefined;
+		this.#renderTodoList();
 		this.ui.requestRender();
 	}
 
@@ -3357,6 +3373,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("composer.shape")) this.syncComposerShape();
 		if (any("tui.vimMode", "tui.vimModeDisplay")) this.#applyVimModeSetting();
 		if (any("display.pinnedAgents")) this.applyPinnedAgentsSetting();
+		if (any("todo.hud")) this.applyTodoHudSetting();
 		if (any("compaction.idleEnabled", "compaction.idleThresholdTokens", "compaction.idleTimeoutSeconds")) {
 			this.#eventController.refreshIdleCompactionTimer();
 		}
@@ -3988,7 +4005,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#todoHudHidden) return;
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return;
-		const expanded = this.todoExpanded;
+		const expanded = this.todoLayout === "full";
 		const multiPhase = phases.length > 1;
 		const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
 		// Fixed budgets keep the HUD bounded regardless of plan size / progress.
@@ -4186,10 +4203,11 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	isCompactTodoMode(): boolean {
 		const rows = this.ui?.terminal?.rows ?? process.stdout.rows ?? 24;
-		return rows < TODO_COMPACT_TERMINAL_ROWS_THRESHOLD;
+		return this.todoLayout === "compact" || rows < TODO_COMPACT_TERMINAL_ROWS_THRESHOLD;
 	}
 
 	renderCompactStatusLine(width: number, childLines: readonly string[]): readonly string[] {
+		if (this.#todoHudHidden) return childLines;
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return childLines;
 
@@ -4197,52 +4215,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		const isMatched = (todo: TodoItem): boolean =>
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
-		const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
-		const closedTasks = phases.reduce((sum, phase) => sum + phase.tasks.filter(isClosedTodo).length, 0);
-		const activeTask = nextActionableTask(phases);
+		const tasks = phases.flatMap(phase => phase.tasks);
+		const closedTasks = tasks.filter(isClosedTodo).length;
+		const blockedTasks = tasks.filter(task => task.status === "blocked").length;
+		// Only-blocked plans still name the stuck task instead of claiming done.
+		const activeTask = nextActionableTask(phases) ?? tasks.find(task => task.status === "blocked");
 
-		const header = `${theme.bold(theme.fg("accent", "TODO"))} ${theme.fg("dim", `${closedTasks}/${totalTasks}`)}`;
+		const separator = ` ${theme.fg("dim", "·")} `;
+		const header = `${theme.bold(theme.fg("accent", "TODO"))} ${theme.fg("dim", `${closedTasks}/${tasks.length}`)}${separator}`;
+		const suffix = blockedTasks > 0 ? `${separator}${theme.fg("warning", `${blockedTasks} blocked`)}` : "";
 		const taskStr = activeTask
 			? this.#formatTodoLine(activeTask, "", isMatched(activeTask))
 			: theme.fg("success", `${theme.checkbox.checked} done`);
-		const rightLine = `${header} ${theme.fg("dim", "·")} ${taskStr}`;
 
-		const rightPad = " ";
+		const rawLeft = childLines.at(-1) ?? "";
+		// Loader rows arrive padded to the full width; the padding is free space, not status text.
+		const leftWidth = visibleWidth(stripTerminalSequences(rawLeft).trimEnd());
+		const leftLine = sliceByColumn(rawLeft, 0, leftWidth);
+		const minGap = leftWidth > 0 ? 2 : 0;
+		// The task text gives way first; the status text shrinks only once the task is at its floor.
+		const fixed = visibleWidth(header) + visibleWidth(suffix) + 1;
+		const taskBudget = Math.max(TODO_COMPACT_MIN_TASK_CELLS, width - leftWidth - minGap - fixed);
+		const rightLine = header + truncateToWidth(taskStr, taskBudget) + suffix;
 		const rightWidth = visibleWidth(rightLine) + 1;
-
-		let leftLine = "";
-		if (childLines.length > 0) {
-			leftLine = childLines[childLines.length - 1] ?? "";
-		}
-
-		const leftWidth = visibleWidth(leftLine);
-		const minGap = 2;
-
-		let combinedLine: string;
-		if (leftWidth === 0) {
-			if (rightWidth <= width) {
-				const gap = Math.max(0, width - rightWidth);
-				combinedLine = " ".repeat(gap) + rightLine + rightPad;
-			} else {
-				const maxRight = Math.max(4, width - 1);
-				const truncatedRight = truncateToWidth(rightLine, maxRight);
-				const gap = Math.max(0, width - visibleWidth(truncatedRight) - 1);
-				combinedLine = " ".repeat(gap) + truncatedRight + rightPad;
-			}
-		} else {
-			if (leftWidth + minGap + rightWidth <= width) {
-				const gap = width - leftWidth - rightWidth;
-				combinedLine = leftLine + " ".repeat(gap) + rightLine + rightPad;
-			} else {
-				const maxRight = Math.min(rightWidth, Math.max(10, Math.floor(width * 0.45)));
-				const truncatedRight = truncateToWidth(rightLine, maxRight);
-				const truncatedRightWidth = visibleWidth(truncatedRight) + 1;
-				const availableLeft = Math.max(4, width - truncatedRightWidth - minGap);
-				const truncatedLeft = truncateToWidth(leftLine, availableLeft);
-				const gap = Math.max(minGap, width - visibleWidth(truncatedLeft) - truncatedRightWidth);
-				combinedLine = truncatedLeft + " ".repeat(gap) + truncatedRight + rightPad;
-			}
-		}
+		const left = truncateToWidth(leftLine, Math.max(0, width - rightWidth - minGap));
+		const gap = Math.max(minGap, width - visibleWidth(left) - rightWidth);
+		const combinedLine = truncateToWidth(`${left}${" ".repeat(gap)}${rightLine} `, width);
 
 		const leadingLines = childLines.length > 1 ? childLines.slice(0, -1) : [""];
 		return [...leadingLines, combinedLine];
@@ -8136,13 +8134,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.toggleThinkingBlockVisibility();
 	}
 
-	toggleTodoExpansion(): void {
-		this.setTodoExpanded(!this.todoExpanded);
-	}
-
-	setTodoExpanded(expanded: boolean): void {
-		this.todoExpanded = expanded;
-		if (expanded) {
+	setTodoLayout(layout: TodoHudLayout): void {
+		this.#todoLayoutOverride = { sessionId: this.sessionManager.getSessionId(), layout };
+		// Full and compact are requests to see the plan, so they reveal a dismissed HUD.
+		if (layout !== "preview") {
 			const owner = this.#todoPhasesOwner ?? this.viewSession;
 			this.#cancelTodoAutoClearTimer();
 			this.#todoHudHidden = false;

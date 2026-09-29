@@ -121,7 +121,8 @@ The same file also exposes non-tool helpers used by `/todo`:
   - Transcript block is rendered by `todoToolRenderer` and merged with the call line.
   - `event-controller` updates the visible todo panel from successful results.
   - On error, `event-controller` shows `Todo update failed...`; the visible panel may stay stale until a later successful call.
-  - `/todo expand` shows every phase and task in the sticky HUD; `/todo collapse` restores its bounded preview. Both are display-only and leave todo state unchanged.
+  - `/todo expand` shows every phase and task in the sticky HUD. `/todo collapse` restores its bounded preview. `/todo compact` folds the HUD into one status-row line: `TODO closed/total · current task · N blocked`. The current task is the first in-progress task, else the first pending task, else the first blocked task. All three verbs are display-only, leave todo state unchanged, and last until the session ends.
+  - `todo.hud` (`preview` | `compact`, default `preview`) sets the start layout. A change to it clears the session's `/todo` choice. A terminal with fewer than 18 rows always shows the one-line layout and restores the selected layout when it grows. Native checklist HUDs keep their own display.
 - Background work / cancellation
   - Session-level auto-clear of `completed`/`abandoned` tasks was removed (the timer mutated canonical phases between tool calls); the TUI todo widget still clears closed entries after `tasks.todoClearDelay` (display-only, `packages/coding-agent/src/modes/interactive-mode.ts`).
 
