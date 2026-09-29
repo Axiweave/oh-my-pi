@@ -456,14 +456,14 @@ const CYBER_SCOPES = [
 ] as const;
 
 const REVIEW_PLAN_VERBS = [
-	{ name: "on", description: "Reviews use the profile's plan model" },
-	{ name: "off", description: "Reviews use the profile's reviewer model" },
-	{ name: "status", description: "Show the state and the review model in effect" },
+	{ name: "on", description: "Run reviews on the plan model in this session" },
+	{ name: "off", description: "Run reviews on the reviewer model in this session" },
+	{ name: "status", description: "Show which model reviews use now" },
 ] as const;
 
 const REVIEW_PLAN_SCOPES = [
-	{ name: "global", description: "Also save reviewUsesPlan in ~/.omp/agent/config.yml" },
-	{ name: "project", description: "Also save reviewUsesPlan in ./.omp/config.yml" },
+	{ name: "global", description: "Also save as the default for all projects (~/.omp/agent/config.yml)" },
+	{ name: "project", description: "Also save as the default for this project (./.omp/config.yml)" },
 ] as const;
 
 type CompletionEntry = { readonly name: string; readonly description: string };

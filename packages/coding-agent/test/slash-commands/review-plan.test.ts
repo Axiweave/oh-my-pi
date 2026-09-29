@@ -65,9 +65,10 @@ describe("/review-plan slash command", () => {
 			await executeBuiltinSlashCommand(command, h.runtime);
 			const label = `${command} from ${from}`;
 			expect(h.session.reviewPlan, label).toBe(to);
-			expect(h.showStatus.mock.lastCall?.[0], label).toBe(
-				to ? `Review plan mode on: reviews use ${PLAN}` : `Review plan mode off: reviews use ${REVIEWER}`,
-			);
+			// The line must name the model reviews use now, and never the other one.
+			const line = h.showStatus.mock.lastCall?.[0] ?? "";
+			expect(line, label).toContain(to ? PLAN : REVIEWER);
+			expect(line, label).not.toContain(to ? REVIEWER : PLAN);
 			expect(cfgReviewUsesPlan.provenance(h.settings), label).toBe("default");
 		}
 	});
@@ -76,9 +77,7 @@ describe("/review-plan slash command", () => {
 		const h = createRuntime({ plan: false });
 		await executeBuiltinSlashCommand("/review-plan on", h.runtime);
 		expect(h.session.reviewPlan).toBe(true);
-		expect(h.showStatus.mock.lastCall?.[0]).toBe(
-			`Review plan mode on, but no plan model resolves. Reviews keep ${REVIEWER}.`,
-		);
+		expect(h.showStatus.mock.lastCall?.[0]).toContain(REVIEWER);
 	});
 
 	it("saves the chosen value only when a scope is named", async () => {

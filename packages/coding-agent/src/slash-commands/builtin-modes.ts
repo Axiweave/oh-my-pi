@@ -227,14 +227,15 @@ function persistReviewPlan(settings: Settings, scope: "global" | "project", enab
 	return "Saved to project config";
 }
 
-/** The `/review-plan` state line: the switch and the model reviews use now. */
+/** The `/review-plan` state line: the switch, and which role's model reviews use now. */
 function reviewPlanStateLine(session: AgentSession): string {
 	const reviewer = session.settings.getModelRole("reviewer") ?? "the agent's own model";
-	if (!session.reviewPlan) return `Review plan mode off: reviews use ${reviewer}`;
+	if (!session.reviewPlan)
+		return `Review plan mode off: reviews use the reviewer model ${reviewer}, not the plan model`;
 	if (!session.reviewPlanActive) {
-		return `Review plan mode on, but no plan model resolves. Reviews keep ${reviewer}.`;
+		return `Review plan mode on, but no plan model resolves. Reviews keep the reviewer model ${reviewer}.`;
 	}
-	return `Review plan mode on: reviews use ${session.settings.getModelRole("plan")}`;
+	return `Review plan mode on: reviews use the plan model ${session.settings.getModelRole("plan")}, not the reviewer model`;
 }
 
 /** Applies a parsed `/review-plan` argument and returns the operator feedback. */
@@ -779,12 +780,12 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "review-plan",
 		icon: "reviewPlan",
-		description: "Toggle review plan mode: reviews use the profile's plan model instead of its reviewer",
-		acpDescription: "Toggle review plan mode",
+		description: "Run reviews on the profile's plan model instead of its reviewer model",
+		acpDescription: "Run reviews on the plan model instead of the reviewer model",
 		acpInputHint: "[on|off|status] [global|project]",
 		allowArgs: true,
 		inlineHint: "[on|off|status] [global|project]",
-		getTuiAutocompleteDescription: runtime => `Review plan: ${runtime.ctx.session.reviewPlan ? "on" : "off"}`,
+		getTuiAutocompleteDescription: runtime => reviewPlanStateLine(runtime.ctx.session),
 		handle: async (command, runtime) => {
 			const resolved = resolveReviewPlanArg(command.args);
 			if (!resolved) return usage("Usage: /review-plan [on|off|status] [global|project]", runtime);

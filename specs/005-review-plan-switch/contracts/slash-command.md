@@ -13,11 +13,12 @@
 | `/review-plan status` | No change | State line |
 | Anything else | No change | `Usage: /review-plan [on\|off\|status] [global\|project]` |
 
-State line:
+State line. Each line names the role and the model that reviews use now:
 
-- On and active: `Review plan mode on: reviews use <plan selector>`
-- On, no plan model: `Review plan mode on, but no plan model resolves. Reviews keep <reviewer selector>.`
-- Off: `Review plan mode off: reviews use <reviewer selector>`
+- On and active: `Review plan mode on: reviews use the plan model <plan selector>, not the reviewer model`
+- On, no plan model: `Review plan mode on, but no plan model resolves. Reviews keep the reviewer model <reviewer selector>.`
+- Off: `Review plan mode off: reviews use the reviewer model <reviewer selector>, not the plan model`
 
-Autocomplete description: `Review plan: on` or `Review plan: off`. After `on`
-or `off`, completion offers `global` and `project`.
+Autocomplete description: the state line, so the `/` menu says what the
+command changes. After `on` or `off`, completion offers `global` and `project`,
+each with the config file it writes.
