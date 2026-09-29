@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { Api, AuthStorage, Model } from "@oh-my-pi/pi-ai";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { cfgCyberModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { runSearchQuery } from "@oh-my-pi/pi-coding-agent/web/search";
 import * as provider from "@oh-my-pi/pi-coding-agent/web/search/provider";
@@ -86,6 +88,23 @@ describe("default web chain", () => {
 		await runSearchQuery(
 			{ query: "anything", model: "web/hosted" },
 			{ authStorage, modelRegistry, sessionModel: proxied },
+		);
+
+		expect(attempted).toEqual(["anthropic/claude-sonnet-4-5"]);
+	});
+
+	it("skips a session search swap that cyber mode excludes", async () => {
+		const session = sessionModel("anthropic", "claude-sonnet-4-5");
+		expect(session.webSearchModel).toBeDefined();
+		const settings = await Settings.init();
+		cfgCyberModels.override(settings, ["anthropic/claude-sonnet-4-5"]);
+		const allowlist = resolveCyberAllowlist(settings, modelRegistry.getAvailable("all"));
+		if (!allowlist) throw new Error("expected the declared allowlist to resolve");
+		settings.applyCyberRoles("test", allowlist);
+
+		await runSearchQuery(
+			{ query: "anything", model: "web/hosted" },
+			{ authStorage, modelRegistry, sessionModel: session },
 		);
 
 		expect(attempted).toEqual(["anthropic/claude-sonnet-4-5"]);

@@ -13,10 +13,11 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { isEnoent, logger, parseImageMetadata, prompt, ptree, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import { type RoleChainCandidate, resolveModelRoleValue, resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
-import { settings } from "../config/settings";
+import { type Settings, settings } from "../config/settings";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import imageGenDescription from "../prompts/tools/image-gen.md" with { type: "text" };
 import { resolveConfiguredModelTarget } from "../session/role-models";
@@ -156,12 +157,18 @@ function resolveHostedImageCarrier(
  * own provider (its `imageModel` swap, then the session model itself when it
  * carries the hosted image tool), then the remaining built-in chain.
  */
-function defaultImageCandidates(chain: RoleChainCandidate[], sessionModel: Model | undefined, pool: Model[]): Model[] {
+function defaultImageCandidates(
+	chain: RoleChainCandidate[],
+	sessionModel: Model | undefined,
+	pool: Model[],
+	settings: Settings,
+): Model[] {
+	// Cyber mode: the companions bypass the role chain, so they get the membership check here.
 	const sessionCandidates = sessionModel
 		? [
 				resolveConfiguredModelTarget(sessionModel.imageModel, sessionModel, pool),
 				sessionModel.hostedImage ? sessionModel : undefined,
-			]
+			].filter(model => model && cyberAllowsModel(settings, model))
 		: [];
 	const ordered = [
 		...chain.filter(candidate => candidate.explicit).map(candidate => candidate.model),
@@ -242,7 +249,12 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					throw new Error(`Image model selector did not match an available image model: ${params.model}`);
 				candidates = [selected];
 			} else {
-				candidates = defaultImageCandidates(resolveRoleChain("image", effectiveSettings, pool), ctx.model, pool);
+				candidates = defaultImageCandidates(
+					resolveRoleChain("image", effectiveSettings, pool),
+					ctx.model,
+					pool,
+					effectiveSettings,
+				);
 			}
 
 			const failures: ProviderHttpError[] = [];

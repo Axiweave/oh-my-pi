@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { type Api, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { CustomToolContext, CustomToolResult } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
@@ -157,6 +158,29 @@ describe("imageGenTool catalog routing", () => {
 
 		expect(urls).toEqual(["https://xai.example/v1/images/generations"]);
 		expect(result.details?.provider).toBe("xai");
+	});
+
+	it("skips a session image swap that cyber mode excludes", async () => {
+		const openai = catalogModel("openai", "gpt-image-2", "openai-images");
+		const xai = catalogModel("xai", "grok-imagine-image", "openai-images");
+		const active = catalogModel("xai", "grok-4.5", "openai-responses", "chat");
+		const models = [openai, xai, active];
+		const settings = Settings.isolated({ cyberModels: ["openai/gpt-image-2", "xai/grok-4.5"] });
+		const allowlist = resolveCyberAllowlist(settings, models);
+		if (!allowlist) throw new Error("expected the declared allowlist to resolve");
+		settings.applyCyberRoles("test", allowlist);
+		const urls: string[] = [];
+		const fetchMock: FetchImpl = async input => {
+			urls.push(input.toString());
+			return imageResponse();
+		};
+		const ctx = createContext({ models, settings, fetch: fetchMock, activeModel: active });
+
+		const result = await imageGenTool.execute("cyber", { subject: "allowlisted only" }, undefined, ctx);
+		collectPaths(result);
+
+		expect(urls).toEqual(["https://openai.example/v1/images/generations"]);
+		expect(result.details?.provider).toBe("openai");
 	});
 
 	it("skips a candidate whose configured authentication is unavailable", async () => {
