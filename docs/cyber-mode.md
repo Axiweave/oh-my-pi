@@ -44,6 +44,7 @@ While the mode is on, every role resolves inside the list:
 - An unavailable primary never resolves to a fuzzy sibling.
 - If an excluded launch model has no approved replacement, launch leaves the active model unset and reports why.
 - The session model's `imageModel` and `webSearchModel` companions are skipped when they fall outside the list. This check covers only the companions. The tools' default fallback entries and an explicit request `model` are not filtered.
+- A headless launch whose `--model` resolves to nothing suggests only models inside the launch scope (`--models`, else `enabledModels`) and the list.
 
 ## Switch refusal
 

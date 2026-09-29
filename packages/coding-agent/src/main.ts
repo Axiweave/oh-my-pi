@@ -33,7 +33,7 @@ import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker"
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
-import { installStartupCyberMode } from "./config/cyber-mode";
+import { cyberAllowsModel, installStartupCyberMode } from "./config/cyber-mode";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
@@ -2498,9 +2498,14 @@ export async function runRootCommand(
 				const availableModels = modelRegistry.getAvailable();
 				if (parsedArgs.model && availableModels.length > 0) {
 					// Credentials work; the requested selector is what failed. Point at
-					// the nearest usable models instead of an API-key checklist.
+					// the nearest usable models instead of an API-key checklist. Usable
+					// means inside the launch scope (`--models`, else `enabledModels`)
+					// and, under cyber mode, the allowlist.
+					const scopeModels =
+						configuredScope.length > 0 ? scopedModels.map(scoped => scoped.model) : availableModels;
+					const usableModels = scopeModels.filter(model => cyberAllowsModel(settingsInstance, model));
 					const suggestions = fuzzyFilter(
-						availableModels.map(model => `${model.provider}/${model.id}`),
+						usableModels.map(model => `${model.provider}/${model.id}`),
 						parsedArgs.model,
 						selector => selector,
 					).slice(0, 5);

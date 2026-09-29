@@ -243,6 +243,9 @@ The upstream native-input harness stubs the stop-listener and session-change hoo
 - **Companion key paths and checks:** `packages/coding-agent/src/tools/image-gen.ts` and `packages/coding-agent/src/web/search/index.ts`, checked by `packages/coding-agent/test/tools/image-gen.test.ts` and `packages/coding-agent/test/web/search/default-chain.test.ts`.
 - **Known gap:** `web_search` and `generate_image` still dispatch their default `priority.json` fallback entries and an explicit request `model` without a membership check. Those entries include non-LLM search engines, so a blanket filter would disable search under cyber mode. This predates `v18.4.3`.
 
+- **Decision:** Headless "Did you mean" suggestions list only models that the launch scope (`--models`, else `enabledModels`) and the allowlist both admit.
+- **Suggestion key path and check:** `packages/coding-agent/src/main.ts`, checked by `packages/coding-agent/test/main-model-suggestions.test.ts`.
+
 ### Review plan mode
 
 - **Decision:** Keep `reviewUsesPlan` and `/review-plan`. While the switch is on and a `plan` role resolves, `@reviewer` reads `plan` in agent resolution, retry chains, and eval completion chains. Those retry views also set aside the `reviewer` chain key (`reviewPlanRetryContext`), so it cannot claim a plan-model session by YAML order.
