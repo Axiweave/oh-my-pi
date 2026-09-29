@@ -3,18 +3,21 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.4.3` on 2026-09-29.
+**Reviewed against:** `v18.4.4` on 2026-09-29.
 
-**Verification:** Source setup, `bun check`, the launcher checks, 127 focused merge checks, and every TypeScript chunk of the `bun run test` plan ran with `TMUX` unset and stdin closed.
-The focused checks cover every divergence entry plus every test file that upstream added or changed since `v18.4.2`.
-The full plan passed 28130 tests. Every remaining red test fails the same way at the pre-merge fork head, or is host state:
-the documented spelling, skills, and welcome-history cases, plus `sixel-probe`, `sdk-tool-activation`, `usage-row-turn-time`, and `eval/js-package-environment`.
+**Verification:** Source setup, `bun check`, the launcher checks, 119 focused merge check files (1965 tests), and every chunk of the `bun run test` plan ran with `TMUX` unset and stdin closed.
+The focused checks cover every divergence entry plus the fork-owned paths that this merge changed: composer, user message, history search, hotkeys, status-line segments, and input-controller paste and keybindings.
+The full plan passed 28569 tests. Every remaining red test fails the same way at the pre-merge fork head, or is host state:
+the documented spelling, skills, and welcome-history cases, plus `sixel-probe`, `sdk-tool-activation`, `usage-row-turn-time`, `resize-conpty-warp`, and `eval/js-package-environment`.
+The new upstream skill-collision tests fail only because the host's installed `~/.omp/plugins` skills leak in. With an empty `HOME`, `skills.test.ts` passes.
 `cli-non-tty-launch.test.ts` fails three print-mode cases only when a keyless local Ollama server answers. It passes with `OLLAMA_BASE_URL` pointed at a closed port.
-`acp-lazy-startup.test.ts` and `main-cross-project-resume.test.ts` fail with an open stdin pipe at the pre-merge head too. They pass with stdin closed.
-Upstream's model picker now calls `refreshIfStale()`, so the fork's `model-picker-compat-probe.ts` registry stub provides it.
 Ghostel followed source-CLI OSC 7 reports at startup and after `/move`, directly and through tmux passthrough. The parent shell directory stayed unchanged after exit.
 A source-CLI replay discovered and used two local CLIProxyAPI-shaped servers, and each server received only its own key.
-Upstream removed the `hoistProvider` option from `resolveRoleChain`. No fork caller used it.
+Upstream made the status-line `describe` hook required, so the fork `model_profile`, `cyber`, `review_plan`, and `ide_selection` segments describe themselves for native rendering.
+Upstream changed `showModelCycleTrack` to take track segments. The model-profile cycle passes one segment per profile.
+The fork hotkey rows for profile cycling and the cyber toggle moved into upstream's `hotkeyGroups` table. The composer still does not bill upstream `transient` rows.
+Three upstream tests follow fork contracts: the history picker takes the fork cwd argument, `/plan` receives the fork workflow argument, and queue chips show the original command.
+The upstream native-input harness stubs the stop-listener and session-change hooks that the fork's enhanced image paste registers.
 
 ## Maintenance
 

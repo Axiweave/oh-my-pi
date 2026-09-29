@@ -17,6 +17,8 @@ import {
 	type ViewportSize,
 } from "../tui";
 import { sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
+import type { NativeChild, NativeSurface, NativeSurfaceProvider } from "../native/node";
+import { sameItems } from "../native/memo";
 import { postmortem } from "@oh-my-pi/pi-utils";
 import { handleEditorInput } from "../../../coding-agent/src/utils/external-editor";
 import { CustomEditor } from "./custom-editor";
@@ -106,6 +108,17 @@ export interface ComposerOptions {
 	readonly now?: () => number;
 }
 
+/** How {@link Composer.setRuntimeChildren} arranges below-transcript roots. */
+export interface RuntimeChildrenOptions {
+	/**
+	 * Dock order on a TSP terminal (no status strip; the composer carries its
+	 * facts): the native dock stacks HUD pills, the working row and queued messages over
+	 * the composer in its own order, and may add describe-only roots. Defaults
+	 * to the roots below the transcript in render order.
+	 */
+	readonly nativeDock?: readonly Component[];
+}
+
 /** Controls the first terminal paint for a composer that does not already own the terminal. */
 export interface ComposerStartOptions {
 	readonly clearScrollback?: boolean;
@@ -119,7 +132,11 @@ export interface ComposerStartOptions {
 	readonly deferInput?: boolean;
 }
 
-/** Mount slot below the editor: the startup status line, then the session-aware one. */
+/**
+ * Mount slot below the editor: the startup status line, then the session-aware
+ * one. ANSI only: a TSP terminal has no status strip, the composer carries the
+ * status line's facts ({@link StatusLineComponent.describeComposerFacts}).
+ */
 class StatusHost implements Component {
 	#component: Component | undefined;
 
@@ -194,7 +211,7 @@ function rowTargetCandidates(target: Component): ((local: number) => string[]) |
  * It owns the terminal, welcome header, and editor; InteractiveMode later supplies authoritative
  * data and mounts the session-aware runtime children without replacing the visible header.
  */
-export class Composer implements TerminalFrameProvider {
+export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	readonly ui: TUI;
 	#editor: CustomEditor;
 	readonly #header = new Container();
@@ -212,6 +229,7 @@ export class Composer implements TerminalFrameProvider {
 	#headerBefore: readonly Component[] = [];
 	#headerAfter: readonly Component[] = [];
 	#runtimeChildren: readonly Component[] = [];
+	#nativeDock: readonly Component[] | undefined;
 	/** Cache-driven status line shown until {@link setStatusComponent} mounts the session's. */
 	#startupStatus: StatusLineComponent | undefined;
 	#runtimeMounted = false;
@@ -259,6 +277,8 @@ export class Composer implements TerminalFrameProvider {
 	#resizeRetiredHeaderStart: number | undefined;
 	#lastNormalRows = 0;
 	#lastInterruptAt = 0;
+	/** Last described surface; its arrays are reused while their children are unchanged. */
+	#nativeSurface: NativeSurface = { main: [], dock: [] };
 	#started = false;
 	#stopped = false;
 	#transferred = false;
@@ -493,6 +513,41 @@ export class Composer implements TerminalFrameProvider {
 		for (const span of after) shift(span, afterBase);
 		this.#lastClickSpans = spans;
 		return spans;
+	}
+
+	/**
+	 * Describe the whole surface for a TSP terminal. `main` is the flowing
+	 * document: the header (welcome, extras) and every transcript block as its
+	 * own component child. `dock` is the live chrome below the transcript in
+	 * render order: pending messages, HUDs, the working row, the editor and the
+	 * status line. There is no history/viewport split: retirement, resize
+	 * replay and hover bands are ANSI concerns.
+	 */
+	describeSurface(): NativeSurface {
+		if (!this.#started || this.#stopped) return this.#nativeSurface;
+		const main: NativeChild[] = [...this.#header.children];
+		const dock: NativeChild[] = [];
+		if (!this.#runtimeMounted) {
+			// The bootstrap gap is row spacing; the terminal owns the dock layout.
+			dock.push(this.editor);
+		} else {
+			const roots = this.#runtimeChildren;
+			const transcriptIndex = roots.findIndex(root => root instanceof TranscriptContainer);
+			if (transcriptIndex < 0) {
+				dock.push(...roots);
+			} else {
+				const transcript = roots[transcriptIndex] as TranscriptContainer;
+				main.push(...roots.slice(0, transcriptIndex), ...transcript.nativeBlocks());
+				dock.push(...(this.#nativeDock ?? roots.slice(transcriptIndex + 1)));
+			}
+		}
+		const previous = this.#nativeSurface;
+		const nextMain = sameItems(previous.main, main) ? previous.main : main;
+		const nextDock = sameItems(previous.dock, dock) ? previous.dock : dock;
+		if (nextMain !== previous.main || nextDock !== previous.dock) {
+			this.#nativeSurface = { main: nextMain, dock: nextDock };
+		}
+		return this.#nativeSurface;
 	}
 
 	/**
@@ -1041,6 +1096,7 @@ export class Composer implements TerminalFrameProvider {
 		this.#disposeStartupStatus();
 		this.#statusHost.setComponent(component);
 		this.editor.setTopBorderProvider(undefined);
+		this.editor.composerFacts = component;
 	}
 
 	#disposeStartupStatus(): void {
@@ -1049,7 +1105,7 @@ export class Composer implements TerminalFrameProvider {
 	}
 
 	/** Mount or replace session-aware root children while preserving the header and status hosts. */
-	setRuntimeChildren(children: readonly Component[]): void {
+	setRuntimeChildren(children: readonly Component[], options: RuntimeChildrenOptions = {}): void {
 		if (this.#stopped) return;
 		if (
 			this.#runtimeChildren.find(child => child instanceof TranscriptContainer) !==
@@ -1059,6 +1115,7 @@ export class Composer implements TerminalFrameProvider {
 			this.#streamingOffer = undefined;
 			this.#streamingReplayRequested ||= this.#runtimeChildren.some(child => child instanceof TranscriptContainer);
 		}
+		this.#nativeDock = options.nativeDock;
 		this.ui.removeChild(this.#statusHost);
 		if (this.#runtimeMounted) {
 			for (const child of this.#runtimeChildren) this.ui.removeChild(child);
