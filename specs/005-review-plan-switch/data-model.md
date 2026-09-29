@@ -31,6 +31,11 @@ While `reviewPlanActive` is true, the session resolves roles through
 | `reviewer` | `settings.getModelRole("plan")` | `plan` |
 | any other role | unchanged | unchanged |
 
+Retry contexts apply one more rule while the switch is active: the
+`reviewer` chain key is set aside, so it cannot claim a plan-model session.
+A session on the real reviewer model keeps only its selector-keyed chain
+(see contracts/model-resolution.md, "Session retry contexts").
+
 ## Validation rules
 
 - `reviewUsesPlan` must be a boolean. The schema handles bad values.

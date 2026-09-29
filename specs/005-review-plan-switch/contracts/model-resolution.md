@@ -39,9 +39,24 @@ Callers MUST pass both inputs from the spawning session:
 
 ## Session retry contexts
 
-- `session/turn-recovery.ts` `#retryFallbackContext`: `getModelRole` uses
-  `reviewPlanRole(role, host.reviewPlanActive())`.
-- `eval/completion-bridge.ts`: `getModelRole` uses
-  `reviewPlanRole(role, session.reviewPlanActive)`.
+Both contexts go through `reviewPlanRetryContext(context, active)`
+(`session/retry-fallback-chains.ts`):
+
+- `session/turn-recovery.ts` `#getRetryFallbackResolutionContext`, with
+  `active = host.reviewPlanActive()`.
+- `eval/completion-bridge.ts` `resolveTierCandidates`, with
+  `active = isReviewPlanActive(session.getReviewPlan?.(), session.settings)`.
+
+While `active` is true:
+
+- `getModelRole` uses `reviewPlanRole(role, true)`, so a `reviewer` role hint
+  finds the `plan` chain.
+- The `reviewer` chain key is set aside. Its primary would read the plan
+  model, so it could claim a plan-model session by YAML order and retry on the
+  exhausted reviewer provider.
+- A session or completion on the real reviewer model therefore keeps only the
+  chain keyed by its own selector.
+
+While `active` is false, the context is returned unchanged.
 
 `Settings` and the merged settings view do not change.
