@@ -153,6 +153,28 @@ describe("read and write route xd:// device URLs", () => {
 		expect(result.details?.xdev).toMatchObject({ tool: "peek", mode: "execute", tier: "read" });
 	});
 
+	it("carries the write call's lifecycle into the plan proposal handler", async () => {
+		const received: { title: string; signal: AbortSignal; toolCallId: string }[] = [];
+		const write = new WriteTool(
+			xdevSession(process.cwd(), {
+				peekPlanProposalHandler: () => async (title, context) => {
+					received.push({ title, ...context });
+					return { content: [{ type: "text", text: "Plan ready for approval." }], details: { title } };
+				},
+			}),
+		);
+		const controller = new AbortController();
+
+		const result = await write.execute(
+			"write-propose",
+			{ path: "xd://propose", content: "demo\n" },
+			controller.signal,
+		);
+
+		expect(received).toEqual([{ title: "demo", signal: controller.signal, toolCallId: "write-propose" }]);
+		expect(result.details?.xdev).toMatchObject({ tool: "propose", mode: "execute", args: { title: "demo" } });
+	});
+
 	it("resolves device dispatches against the device's user policy, falling back to write's", async () => {
 		// Like the pi-knowledge plugin in #7923: the mounted device declares no
 		// approval, so it defaults to exec tier — but a device-scoped user policy

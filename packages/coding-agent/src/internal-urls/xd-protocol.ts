@@ -86,7 +86,9 @@ export class XdProtocolHandler implements ProtocolHandler {
 			return { content: result.content, details: { xdev }, isError: result.isError, useless: result.useless };
 		}
 		if (name && isResolutionDeviceName(name)) {
-			const { result, xdev } = await dispatchResolutionDevice(session, name, content);
+			const { signal, toolCall } = context;
+			const proposal = signal && toolCall ? { signal, toolCallId: toolCall.id } : undefined;
+			const { result, xdev } = await dispatchResolutionDevice(session, name, content, proposal);
 			return { content: result.content, details: { xdev }, isError: result.isError, useless: result.useless };
 		}
 		const xdev = session.xdev;

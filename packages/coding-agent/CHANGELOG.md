@@ -33,6 +33,7 @@
 
 ### Fixed
 
+- Fixed `write xd://propose` always failing with "Plan proposal lifecycle context is unavailable." The `xd://` handler did not pass the write call's signal and tool call ID, so plan approval, the debate `plan-reviewer`, and the implementation review gate could not start.
 - Fixed the hook editor and advisor dialog stopping the TUI before the external editor handoff, which dropped the attached Emacs answer and always fell back to `$VISUAL`/`$EDITOR`.
 - Fixed the `/annotate` external editor never offering its draft to the attached Emacs, and requiring `$VISUAL`/`$EDITOR` even when Emacs accepts it.
 - Ctrl+G in the composer now warns when an editor request is already open, and names Ctrl+C as the way to cancel it, instead of doing nothing.
