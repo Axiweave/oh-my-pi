@@ -30,7 +30,7 @@ const ctx = {
 		getContextUsage: () => ({ tokens: 0 }),
 		getRoleModelCycle: () => undefined,
 		modelRegistry: {
-			refresh: async () => {},
+			refreshIfStale: async () => false,
 			getError: () => undefined,
 			getAvailable: () => [model],
 			getAll: () => [model],
