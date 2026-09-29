@@ -190,6 +190,23 @@ describe("HookEditorComponent default (hook) mode", () => {
 		expect(onCancel).toHaveBeenCalledTimes(1);
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
+
+	it("keeps the TUI running while the external editor runs, so a client can answer the handoff", async () => {
+		const tui = createTui();
+		const rendered = Promise.withResolvers<void>();
+		(tui.requestRender as Mock<any>).mockImplementation(() => rendered.resolve());
+		const { promise, resolve } = Promise.withResolvers<string | null>();
+		const externalEditor = vi.fn((_text: string) => promise);
+		const component = new HookEditorComponent(tui, "Prompt", "draft", vi.fn(), vi.fn(), { externalEditor });
+
+		component.handleInput("\x07");
+
+		expect(externalEditor).toHaveBeenCalledWith("draft");
+		expect(tui.stop).not.toHaveBeenCalled();
+		resolve("edited");
+		await rendered.promise;
+		expect(renderText(component)).toContain("edited");
+	});
 });
 
 describe("HookEditorComponent prompt-style mode", () => {

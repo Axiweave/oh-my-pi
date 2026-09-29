@@ -263,7 +263,6 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		if (!externalEditor) return;
 		const currentText = this.#editor.getExpandedText();
 		try {
-			this.#tui.stop();
 			const result = await externalEditor(currentText);
 			if (!this.#disposed && result !== null) {
 				this.#editor.setText(result);
