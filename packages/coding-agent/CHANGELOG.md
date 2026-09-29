@@ -32,6 +32,7 @@
 ### Fixed
 
 - Fixed the hook editor and advisor dialog stopping the TUI before the external editor handoff, which dropped the attached Emacs answer and always fell back to `$VISUAL`/`$EDITOR`.
+- Fixed the `/annotate` external editor never offering its draft to the attached Emacs, and requiring `$VISUAL`/`$EDITOR` even when Emacs accepts it.
 - Verified TIFF image paste now works on Linux and macOS without Bun's TIFF decoder. OMP preserves original bytes, converts model attachments to PNG, prefers offered PNG, and rejects truncated TIFF data.
 - Image paste errors now retain the declared MIME type and decoder cause, instead of telling users to copy again.
 - Verified image paste now captures its destination before receipt. Session and editor changes cancel pending receipt, including switches away and back.

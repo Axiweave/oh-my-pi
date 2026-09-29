@@ -7,7 +7,7 @@ import type {
 	TextReviewSource,
 } from "@oh-my-pi/pi-tui/overlays/annotation-types";
 import type { ResolvedReviewTarget } from "../review/target";
-import { getEditorCommand, openInEditor } from "../../../../utils/external-editor";
+import { openInEditor, takeEditorOrigin } from "../../../../utils/external-editor";
 
 const ANNOTATION_OVERLAY_OPTIONS = {
 	width: "100%",
@@ -18,9 +18,9 @@ const ANNOTATION_OVERLAY_OPTIONS = {
 } as const;
 
 async function editAnnotationDraft(tui: TUI, draft: string, commit: (text: string | null) => void): Promise<void> {
-	const editor = getEditorCommand();
-	if (!editor) throw new Error("Set $VISUAL or $EDITOR to edit an annotation externally.");
-	const result = await openInEditor(tui, draft, { origin: "", extension: ".md", apply: commit });
+	const origin = takeEditorOrigin() ?? "";
+	const result = await openInEditor(tui, draft, { origin, extension: ".md", apply: commit });
+	if (result === undefined) throw new Error("Set $VISUAL or $EDITOR to edit an annotation externally.");
 	if (result === null) commit(null);
 }
 
