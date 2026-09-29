@@ -3227,12 +3227,10 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		// when `model_profile` follows `model` in a custom preset.
 		const profileSeg = renderSegment("model_profile", ctx);
 		const cyberSeg = renderSegment("cyber", ctx);
+		const reviewPlanSeg = renderSegment("review_plan", ctx);
 		let line1Left = modelSeg.visible ? modelSeg.content : "";
-		if (profileSeg.visible && profileSeg.content) {
-			line1Left += theme.fg("statusLineSep", theme.sep.dot) + profileSeg.content;
-		}
-		if (cyberSeg.visible && cyberSeg.content) {
-			line1Left += theme.fg("statusLineSep", theme.sep.dot) + cyberSeg.content;
+		for (const seg of [profileSeg, cyberSeg, reviewPlanSeg]) {
+			if (seg.visible && seg.content) line1Left += theme.fg("statusLineSep", theme.sep.dot) + seg.content;
 		}
 		const ideSelection = renderSegment("ide_selection", ctx);
 		let line1 = line1Left;

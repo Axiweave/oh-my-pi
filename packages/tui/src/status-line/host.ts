@@ -45,6 +45,8 @@ export interface StatusLineSession {
 	settings: { getModelProfiles(): Record<string, Record<string, string>> };
 	/** Cyber-mode allowlist protection state for this session. */
 	cyberMode?: boolean;
+	/** Whether reviews run on the `plan` model: the switch is on and a `plan` role exists. */
+	reviewPlanActive?: boolean;
 	sessionManager: {
 		getSessionName(): string | undefined;
 		getSessionId(): string;

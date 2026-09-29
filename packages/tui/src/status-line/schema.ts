@@ -5,6 +5,7 @@ export const STATUS_LINE_SEGMENT_IDS = [
 	"model",
 	"model_profile",
 	"cyber",
+	"review_plan",
 	"mode",
 	"path",
 	"git",

@@ -9,6 +9,7 @@ export const STATUS_LINE_PRESETS: Record<StatusLinePreset, PresetDef> = {
 			"model",
 			"model_profile",
 			"cyber",
+			"review_plan",
 			"mode",
 			"collab",
 			"stream",

@@ -340,6 +340,15 @@ const cyberSegment: StatusLineSegment = {
 	},
 };
 
+/** Review plan indicator: reviews run on the `plan` model. Hidden when off or inactive. */
+const reviewPlanSegment: StatusLineSegment = {
+	id: "review_plan",
+	render(ctx) {
+		if (!ctx.session.reviewPlanActive) return { content: "", visible: false };
+		return { content: theme.fg("warning", withIcon(theme.icon.reviewPlan, "Review:Plan")), visible: true };
+	},
+};
+
 function formatGoalBudget(current: number, budget?: number): string {
 	const used = formatNumber(current);
 	if (budget === undefined) return used;
@@ -969,6 +978,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	model: modelSegment,
 	model_profile: modelProfileSegment,
 	cyber: cyberSegment,
+	review_plan: reviewPlanSegment,
 	mode: modeSegment,
 	path: pathSegment,
 	git: gitSegment,

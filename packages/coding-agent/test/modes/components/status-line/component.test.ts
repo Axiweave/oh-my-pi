@@ -212,6 +212,28 @@ describe("StatusLineComponent", () => {
 		expect(plain[0]).not.toContain("Cyber");
 	});
 
+	it("shows the review plan mark in the default layout and the claude footer only while active", () => {
+		// FR-010a: both layouts carry the segment without any user configuration.
+		for (const reviewPlanActive of [false, true]) {
+			const session = { ...makeSessionWithLastMessage(null), reviewPlanActive } as unknown as AgentSession;
+			const border = Bun.stripANSI(
+				statusLines.track(new StatusLineComponent(session, statusLineHost)).getTopBorder(200).content,
+			);
+			const footer = new StatusLineComponent(session, statusLineHost);
+			footer.setComposerStyle({
+				statusAttachment: "none",
+				bottomBar: "full",
+				bottomBarGap: false,
+				footerMode: "claude3",
+			});
+			const [modelLine] = footer.render(200).map(line => Bun.stripANSI(line));
+			const label = `active ${reviewPlanActive}`;
+			expect(border.includes("Review:Plan"), label).toBe(reviewPlanActive);
+			expect(modelLine, label).toContain("test-model");
+			expect(modelLine.includes("Review:Plan"), label).toBe(reviewPlanActive);
+		}
+	});
+
 	it("keeps the claude footer model on the theme model color", () => {
 		const statusLine = new StatusLineComponent(
 			makeSessionWithLastMessage(null) as unknown as AgentSession,

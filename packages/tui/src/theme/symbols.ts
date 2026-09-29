@@ -95,6 +95,7 @@ export type SymbolKey =
 	| "icon.context"
 	| "icon.cost"
 	| "icon.cyber"
+	| "icon.reviewPlan"
 	| "icon.subscription"
 	| "icon.advisor"
 	| "icon.advisorClosed"
@@ -381,6 +382,7 @@ export type SlashCommandIconName =
 	| "package"
 	| "fast"
 	| "cyber"
+	| "reviewPlan"
 	| "voice"
 	| "tools"
 	| "rule"
@@ -477,6 +479,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.context": "◫",
 	"icon.cost": "💲",
 	"icon.cyber": "⚔️",
+	"icon.reviewPlan": "⇄",
 	"icon.subscription": "(sub)",
 	"icon.advisor": "👁",
 	"icon.advisorClosed": "🙈",
@@ -852,6 +855,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.cost": "\uf155",
 	// pick: ⚔️ (crossed swords) | alt: 🛡
 	"icon.cyber": "⚔️",
+	// pick: ⇄ (review swaps to the plan model)
+	"icon.reviewPlan": "⇄",
 	// pick: 󰙺 (nf-md-currency_usd_off)
 	"icon.subscription": "\u{f067a}",
 	// pick:  (nf-cod-eye)
@@ -1258,6 +1263,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.context": "ctx:",
 	"icon.cost": "$",
 	"icon.cyber": "[C]",
+	"icon.reviewPlan": "[RP]",
 	"icon.subscription": "(sub)",
 	"icon.advisor": "(adv)",
 	"icon.advisorClosed": "(adv)",
