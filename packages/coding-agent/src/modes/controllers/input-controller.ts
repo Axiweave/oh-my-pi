@@ -54,7 +54,7 @@ import {
 	readTextFromClipboard,
 } from "../../utils/clipboard";
 import { EnhancedPasteController, type PasteImageCommit } from "../../utils/enhanced-paste";
-import { openInEditor, takeEditorOrigin } from "../../utils/external-editor";
+import { isEditorRequestPending, openInEditor, takeEditorOrigin } from "../../utils/external-editor";
 import { commandUsage, hintUsage } from "../../utils/usage-counter";
 import { loadImageInput } from "../../utils/image-loading";
 import {
@@ -2688,6 +2688,10 @@ export class InputController {
 
 	async openExternalEditor(): Promise<void> {
 		const origin = takeEditorOrigin() ?? "";
+		if (isEditorRequestPending()) {
+			this.ctx.showWarning("An editor is already open for this prompt. Finish it, or press Ctrl+C to cancel it.");
+			return;
+		}
 		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
 
 		try {
