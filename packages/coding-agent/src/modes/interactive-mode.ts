@@ -35,8 +35,6 @@ import {
 	setComposerStylePreferences,
 	setTerminalTextSizing,
 	setTuiTight,
-	sliceByColumn,
-	stripTerminalSequences,
 	TERMINAL,
 	Text,
 	type TUI,
@@ -630,7 +628,7 @@ export interface InteractiveModeOptions {
 }
 
 export const TODO_COMPACT_TERMINAL_ROWS_THRESHOLD = 18;
-/** Cells the compact todo task keeps before the status text beside it is shortened. */
+/** Cells the compact todo task keeps before the rest of the summary is shortened. */
 const TODO_COMPACT_MIN_TASK_CELLS = 12;
 
 /** Holds mutable HUD and editor-adjacent chrome outside transcript history. */
@@ -747,10 +745,8 @@ class StatusHudContainer extends AnchoredLiveContainer {
 
 	#renderLines(width: number): readonly string[] {
 		const childLines = super.render(width);
-		const lines = this.mode.isCompactTodoMode() ? this.mode.renderCompactStatusLine(width, childLines) : childLines;
-		// With no plan to fold in, the compact layout keeps the normal idle row.
-		if (lines.length === 0) return this.mode.renderIdleStatusHud(width) ?? lines;
-		return lines;
+		const lines = childLines.length > 0 ? childLines : (this.mode.renderIdleStatusHud(width) ?? childLines);
+		return this.mode.isCompactTodoMode() ? this.mode.renderCompactStatusLine(width, lines) : lines;
 	}
 }
 
@@ -4228,22 +4224,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			? this.#formatTodoLine(activeTask, "", isMatched(activeTask))
 			: theme.fg("success", `${theme.checkbox.checked} done`);
 
-		const rawLeft = childLines.at(-1) ?? "";
-		// Loader rows arrive padded to the full width; the padding is free space, not status text.
-		const leftWidth = visibleWidth(stripTerminalSequences(rawLeft).trimEnd());
-		const leftLine = sliceByColumn(rawLeft, 0, leftWidth);
-		const minGap = leftWidth > 0 ? 2 : 0;
-		// The task text gives way first; the status text shrinks only once the task is at its floor.
-		const fixed = visibleWidth(header) + visibleWidth(suffix) + 1;
-		const taskBudget = Math.max(TODO_COMPACT_MIN_TASK_CELLS, width - leftWidth - minGap - fixed);
-		const rightLine = header + truncateToWidth(taskStr, taskBudget) + suffix;
-		const rightWidth = visibleWidth(rightLine) + 1;
-		const left = truncateToWidth(leftLine, Math.max(0, width - rightWidth - minGap));
-		const gap = Math.max(minGap, width - visibleWidth(left) - rightWidth);
-		const combinedLine = truncateToWidth(`${left}${" ".repeat(gap)}${rightLine} `, width);
+		// The task text gives way first; the counts shrink only once the task is at its floor.
+		const taskBudget = Math.max(TODO_COMPACT_MIN_TASK_CELLS, width - visibleWidth(header) - visibleWidth(suffix) - 1);
+		const summary = truncateToWidth(header + truncateToWidth(taskStr, taskBudget) + suffix, Math.max(0, width - 1));
+		const summaryLine = `${" ".repeat(Math.max(0, width - visibleWidth(summary) - 1))}${summary} `;
 
-		const leadingLines = childLines.length > 1 ? childLines.slice(0, -1) : [""];
-		return [...leadingLines, combinedLine];
+		// Own row directly above the working row, so neither has to share the width.
+		const lastLine = childLines.at(-1);
+		if (lastLine === undefined) return ["", summaryLine];
+		return [...childLines.slice(0, -1), summaryLine, lastLine];
 	}
 
 	async #loadTodoList(source: AgentSession = this.session): Promise<void> {

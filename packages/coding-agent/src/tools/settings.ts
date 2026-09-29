@@ -399,7 +399,7 @@ export const cfgTodoHud = register({
 		description: "How the sticky todo HUD starts in each session",
 		options: [
 			{ value: "preview", label: "Preview", description: "Bounded task tree above the editor" },
-			{ value: "compact", label: "Compact", description: "One line on the status row" },
+			{ value: "compact", label: "Compact", description: "One line above the working row" },
 		],
 	},
 });

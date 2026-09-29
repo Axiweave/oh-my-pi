@@ -807,7 +807,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 			expect(lastLine.startsWith(" ")).toBe(true);
 		});
 
-		it("places compact todo on the right side of the active loader / intent spinner", () => {
+		it("puts the compact todo on its own row directly above the active loader", () => {
 			setTerminalRows(14);
 			mode.setTodos([
 				{
@@ -824,16 +824,13 @@ describe("InteractiveMode todo HUD anchor", () => {
 
 			expect(mode.todoContainer.render(120)).toHaveLength(0);
 
-			const rendered = mode.statusContainer.render(120);
-			expect(rendered.length).toBeGreaterThanOrEqual(2);
-			const lastLine = Bun.stripANSI(rendered[rendered.length - 1] ?? "");
-			// Left side has the intent spinner/message
-			expect(lastLine).toContain("Reading src/index.ts");
-			// Right side has the compact todo
-			expect(lastLine).toContain("TODO 0/2");
-			expect(lastLine).toContain("Inspect server");
-			// Left message comes before right todo
-			expect(lastLine.indexOf("Reading src/index.ts")).toBeLessThan(lastLine.indexOf("TODO 0/2"));
+			const rendered = mode.statusContainer.render(120).map(line => Bun.stripANSI(line));
+			const spinner = rendered.at(-1) ?? "";
+			const summary = rendered.at(-2) ?? "";
+			expect(spinner).toContain("Reading src/index.ts (esc to interrupt)");
+			expect(spinner).not.toContain("TODO");
+			expect(summary).toContain("TODO 0/2");
+			expect(summary).toContain("Inspect server");
 		});
 
 		it("shows completed summary when all tasks are done in compact mode", () => {
@@ -980,7 +977,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 			}
 		});
 
-		it("fits the width and cuts the task text before the status text", () => {
+		it("fits the width, keeps the working row whole, and cuts the task text first", () => {
 			const seed = 0x5eed;
 			const rand = mulberry32(seed);
 			for (let i = 0; i < 400; i++) {
@@ -993,14 +990,14 @@ describe("InteractiveMode todo HUD anchor", () => {
 				mode.setTodos([{ name: "Tasks", tasks }]);
 				// Everything except the task text, measured from an uncut render.
 				const fixed = visibleWidth(statusLine(10_000).trim()) - taskLen;
-				const left = "L".repeat(leftLen);
-				const out = Bun.stripANSI(mode.renderCompactStatusLine(width, leftLen > 0 ? [left] : []).at(-1) ?? "");
-				const fits = visibleWidth(out) <= width;
-				const roomForTask = width - leftLen - 2 - fixed - 1 >= 12;
-				const leftWhole = !roomForTask || out.startsWith(left);
-				const suffixKept = !roomForTask || !blocked || out.includes("· 1 blocked");
-				if (!fits || !leftWhole || !suffixKept) {
-					throw new Error(`seed=${seed} case=${JSON.stringify({ width, taskLen, leftLen, blocked, out })}`);
+				const working = ["", "L".repeat(leftLen)];
+				const lines = mode.renderCompactStatusLine(width, working);
+				const summary = Bun.stripANSI(lines.at(-2) ?? "");
+				const fits = visibleWidth(summary) <= width;
+				const workingWhole = Bun.deepEquals([lines[0], lines.at(-1)], working);
+				const suffixKept = width - fixed - 1 < 12 || !blocked || summary.includes("· 1 blocked");
+				if (!fits || !workingWhole || !suffixKept) {
+					throw new Error(`seed=${seed} case=${JSON.stringify({ width, taskLen, leftLen, blocked, lines })}`);
 				}
 			}
 		});

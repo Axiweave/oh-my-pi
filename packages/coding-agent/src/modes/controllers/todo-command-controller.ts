@@ -19,7 +19,7 @@ const USAGE = [
 	"  /todo copy                         Copy todos as Markdown to clipboard",
 	"  /todo expand                       Show every phase and task in the HUD",
 	"  /todo collapse                     Restore the bounded HUD preview",
-	"  /todo compact                      Fold the HUD into one status-row line",
+	"  /todo compact                      Fold the HUD into one line above the working row",
 	"  /todo export [<path>]              Write todos to file (default: TODO.md)",
 	"  /todo import [<path>]              Replace todos from file (default: TODO.md)",
 	"  /todo append [<phase>] <task...>   Append a task; phase fuzzy-matched or auto-created",

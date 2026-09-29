@@ -268,7 +268,7 @@ The upstream native-input harness stubs the stop-listener and session-change hoo
 
 - **Decision:** Keep `todo.hud` (`preview` | `compact`, default `preview`) and `/todo compact`. The HUD layout is `full | preview | compact`. A `/todo` choice is tagged with the main session id and ends with that session. A `todo.hud` change clears it.
 - **Decision:** The one-line summary is shared with the short-terminal fold. It shows `TODO closed/total · current task · N blocked`, falls back to the first blocked task when no task is in progress or pending, and hides with the HUD after dismissal or auto-clear.
-- **Decision:** On a narrow row, the task text shrinks first, down to 12 cells. The working row beside it is measured without its padding and shrinks only after that.
+- **Decision:** The summary takes its own row directly above the working (spinner) row, so the working text keeps its full width. On a narrow row, the task text shrinks first, down to 12 cells, before the counts.
 - **Why:** The Preview tree used 9 or more rows on long plans.
 - **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts` (`todoLayout`, `setTodoLayout`, `renderCompactStatusLine`), `packages/coding-agent/src/modes/controllers/todo-command-controller.ts`, `packages/coding-agent/src/slash-commands/helpers/todo.ts`, `packages/coding-agent/src/tools/settings.ts`.
 - **Checks:** `packages/coding-agent/test/interactive-mode-todo-clear.test.ts` (`selectable todo HUD layout` and the session and auto-clear cases), `packages/coding-agent/test/acp-builtins.test.ts`.

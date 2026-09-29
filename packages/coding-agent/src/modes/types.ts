@@ -110,7 +110,7 @@ export interface AgentHubOpenOptions {
 	initialSection?: "agents" | "activity";
 }
 
-/** Sticky todo HUD layout: every task, the bounded tree, or one status-row line. */
+/** Sticky todo HUD layout: every task, the bounded tree, or one line above the working row. */
 export type TodoHudLayout = "full" | "preview" | "compact";
 
 export interface InteractiveModeContext {
