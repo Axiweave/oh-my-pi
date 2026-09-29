@@ -25,6 +25,7 @@ This feature lets the user select the one-line layout at any time and make it th
 
 - Q: Which progress count should the one-line compact summary show? → A: The whole-plan count only (`TODO 10/12`). The summary does not show the phase name or the phase count.
 - Q: Which layout should a new session start with when the config does not set the todo layout? → A: `preview`. Compact is opt-in through the `todo.hud` config option or `/todo compact`.
+- Q: Where should the compact summary show while the agent works? → A: On its own row, directly above the working (spinner) row and below the transcript. It must not share the spinner row, because both texts were cut on a normal-width terminal.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -92,10 +93,10 @@ The user runs `/todo help` or `/todo` with a bad verb. The usage text lists `com
 ### Functional Requirements
 
 - **FR-001**: The system MUST support three todo HUD layouts: Full, Preview, and Compact.
-- **FR-002**: The Compact layout MUST use zero rows of its own. It MUST show its summary in the existing status row, in the place the short-terminal fallback uses today.
+- **FR-002**: The Compact layout MUST use exactly one row. The row MUST sit directly above the working (spinner) row, or above the idle status row when no work runs. The working row MUST keep its full width.
 - **FR-003**: The Compact summary MUST show, in this order: the `TODO` label, the closed/total task count for the whole plan, the current task text, and the blocked-task count when that count is more than zero. It MUST NOT show the phase name or a per-phase count.
 - **FR-004**: The current task MUST be the first in-progress task in plan order. If no task is in progress, it MUST be the first pending task. If no task is pending, it MUST be the first blocked task.
-- **FR-005**: The Compact summary MUST fit on one line at every terminal width. The system MUST shorten the task text before it shortens other status-row content.
+- **FR-005**: The Compact summary MUST fit on one line at every terminal width. The system MUST shorten the task text before it shortens the counts.
 - **FR-006**: Users MUST be able to select the Compact layout with `/todo compact`.
 - **FR-007**: `/todo collapse` MUST select the Preview layout from both the Full and the Compact layouts. `/todo expand` MUST select the Full layout from both other layouts.
 - **FR-008**: The system MUST provide a configuration option for the start layout with the values `preview` and `compact`. The default MUST be `preview`.
@@ -114,11 +115,11 @@ The user runs `/todo help` or `/todo` with a bad verb. The usage text lists `com
 
 ### Measurable Outcomes
 
-- **SC-001**: In the Compact layout, the text-terminal todo HUD adds 0 rows above the input editor for any plan size. The Preview layout in the reported case used 9 rows.
+- **SC-001**: In the Compact layout, the text-terminal todo HUD uses exactly 1 row for any plan size. The Preview layout in the reported case used 9 rows.
 - **SC-002**: A user can switch from any layout to the Compact layout with one command of 13 characters or fewer.
 - **SC-003**: At terminal widths from 40 to 300 columns, the Compact summary never wraps to a second line.
 - **SC-004**: After each plan change, the Compact summary shows the correct progress count and current task in 100% of checks, with no manual refresh.
-- **SC-005**: On terminals with 18 rows or more, users who do not change the configuration see no change to the todo HUD. On shorter terminals, the existing one-line summary changes in three ways only: the blocked count, the new shortening order, and a blocked task as the current task when only blocked tasks remain open.
+- **SC-005**: On terminals with 18 rows or more, users who do not change the configuration see no change to the todo HUD. On shorter terminals, the existing one-line summary changes in four ways only: its own row above the working row, the blocked count, the new shortening order, and a blocked task as the current task when only blocked tasks remain open.
 
 ## Assumptions
 
