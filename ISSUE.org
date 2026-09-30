@@ -1,0 +1,90 @@
+#+TITLE: Git-invariant audit: open issues
+#+DATE: 2026-09-30
+
+Invariant: OMP must behave the same with or without git, except for
+git-specific features.
+
+Scenarios: (A) no repository, (B) normal repository, (C) linked worktree,
+(D) no =git= binary on PATH.
+
+V1 (a linked worktree lost the main repo's =.git/info/exclude=) is fixed in
+=crates/pi-walker/src/lib.rs= (=git_exclude_path=). The items below are open.
+
+* TODO V2: ancestor =.gitignore= applies only when a repository exists  :walker:
+- Where: =crates/pi-walker/src/lib.rs=, the parent ignore-state build. The
+  test =collect_entries_ignores_parent_gitignore_above_non_repo_root= locks
+  in this behavior on purpose.
+- Repro (run): =proj/.gitignore= ignores =root-ign.txt=. The search root is
+  =proj/src=. A shows the file. B hides it. This is true for =glob=, =grep=,
+  =listWorkspace=, and =fuzzyFind=.
+- Not affected: a =.gitignore= at or below the search root applies the same
+  way in A and B (test =collect_entries_honors_gitignore_without_repo_marker=).
+- Decision needed: without git, the walker has no stop point for ancestor
+  =.gitignore= files. Choose between these options:
+  1. Apply ancestor =.gitignore= files up to =$HOME=.
+  2. Keep the current behavior as git's scope rule, and document it.
+
+* TODO V3: config walk-up stops at the repository root only when git exists  :discovery:
+- Where: these walks all stop at =repoRoot ?? home=:
+  - =packages/coding-agent/src/discovery/builtin.ts:289= (native =.omp/skills=)
+  - =packages/coding-agent/src/discovery/agents.ts:149= (=.agents/*=)
+  - =packages/coding-agent/src/discovery/claude.ts:216= (=.claude/skills=)
+  - =packages/coding-agent/src/discovery/skillshare.ts:93= (skill locks)
+  - =packages/coding-agent/src/advisor/watchdog.ts:99= (watchdog config)
+- Repro (run, native skills only): =~/work/.omp/skills/parent-skill= and
+  cwd =~/work/proj/src=. A loads the skill. After =git init ~/work/proj=, B
+  does not. The other four walks use the same boundary expression
+  [code-read, not run].
+- Context files already scan past the repository root to =$HOME= on purpose
+  (=packages/coding-agent/src/discovery/helpers.ts:716=). This means skills
+  and =.agents= also disagree with =AGENTS.md=.
+- Proposed fix: move all walks to one shared boundary helper, and use it for
+  context files too.
+
+* TODO V4: =~/AGENTS.md= is project context only without git  :discovery:
+- Where: =packages/coding-agent/src/discovery/helpers.ts:730-733=
+  (=includeBoundary= / =excludeHome=).
+- Repro (run): cwd =~/work/proj/src=. A loads =~/AGENTS.md= with level
+  ="project"=. B (=git init ~/work/proj=) does not load it.
+- Proposed fix: use the same V3 boundary helper. Exclude =$HOME= in both
+  cases, or include it in both.
+
+* TODO V5: the Hindsight memory bank uses the git root as its key  :state:
+- Where: =packages/coding-agent/src/hindsight/bank.ts:77= uses
+  =path.basename(vcs.repo(dir)?.primaryRoot() ?? dir)=.
+- Effect [code-read, not run]: a subfolder of a repository shares the
+  repository's bank, and a subfolder without git gets its own bank. A later
+  =git init= above the folder moves it to a different bank. A key that is
+  only the basename can make unrelated projects share one bank.
+- Precedent: Mnemopi removed git-root keying for this reason (#2412,
+  =packages/coding-agent/src/mnemopi/config.ts:193=). Mnemopi now keys by
+  the resolved cwd plus a path hash.
+- Decision needed: a cwd key (like Mnemopi) gives each worktree its own
+  bank. The current key makes all worktrees share the main checkout's bank.
+
+* NOTE Git-specific: allowed to depend on git
+- These stores use the repository root as a key when one exists, and
+  otherwise the cwd [code-read]:
+  - =packages/coding-agent/src/security/store.ts:173= (security review of diffs)
+  - =packages/coding-agent/src/autoresearch/storage.ts:576= (git checkpoints)
+  - =packages/coding-agent/src/utils/repo-lock.ts:16= (serializes git operations)
+- Other git features: commit generation, =/wt=, =/wtmove=, task isolation,
+  the =gh= tools, the git TUI, and the prompt note for a single child
+  repository (=packages/coding-agent/src/utils/active-repo-context.ts=).
+
+* NOTE Checked and consistent
+- Session storage keys by cwd (=packages/coding-agent/src/session/session-paths.ts=).
+- Mnemopi keys by cwd (=packages/coding-agent/src/mnemopi/config.ts:212=).
+- Discovery file scans skip git ignore rules (commit =1e5b856426=).
+- =findRepoRoot= (=packages/coding-agent/src/capability/fs.ts:88=) matches a
+  =.git= file or directory, so it finds worktrees.
+- (D) No =git= binary: =vcs= uses native =gix=. =vcs.repo()= gave the same
+  result with =PATH=/nonexistent= (run). The only =Command::new("git")= in
+  =crates/pi-vcs= is test code.
+
+* NOTE Scout claims that were wrong
+- "=findRepoRoot= misses worktrees": false. See =capability/fs.ts:88=.
+- "=.gitignore= works only inside a repository": false. Only ancestor scope
+  depends on a repository (V2).
+- "active-repo-context and repo-lock break without the =git= binary": false.
+  =vcs= does not need the binary.
