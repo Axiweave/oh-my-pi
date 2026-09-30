@@ -3274,6 +3274,44 @@ fn ignore_file_path(dir: &Path, relative: &str) -> PathBuf {
 	pi_vfs::join_path(dir, Path::new(relative))
 }
 
+/// Path of the `info/exclude` that git applies to `dir`, which holds `.git`.
+///
+/// A `.git` directory holds the file directly. A `.git` file (linked worktree
+/// or submodule) points at a git dir through `gitdir:`. Git reads
+/// `info/exclude` from that dir's `commondir` when one exists, so every linked
+/// worktree shares the main checkout's rules.
+fn git_exclude_path(fs: &BlockingFs, dir: &Path) -> Option<PathBuf> {
+	let git_entry = ignore_file_path(dir, ".git");
+	if fs.is_dir(&git_entry) {
+		return Some(ignore_file_path(&git_entry, "info/exclude"));
+	}
+	let pointer = fs.read_to_string(&git_entry).ok()?;
+	let git_dir = resolve_git_pointer(dir, pointer.strip_prefix("gitdir:")?)?;
+	let common_dir = fs
+		.read_to_string(ignore_file_path(&git_dir, "commondir"))
+		.ok()
+		.and_then(|common| resolve_git_pointer(&git_dir, &common))
+		.unwrap_or(git_dir);
+	Some(ignore_file_path(&common_dir, "info/exclude"))
+}
+
+/// Resolve a `gitdir:` or `commondir` value against `base`, as git does.
+fn resolve_git_pointer(base: &Path, value: &str) -> Option<PathBuf> {
+	let value = value
+		.strip_prefix(' ')
+		.unwrap_or(value)
+		.trim_end_matches(['\r', '\n']);
+	if value.is_empty() {
+		return None;
+	}
+	let target = Path::new(value);
+	Some(if target.is_absolute() {
+		target.to_path_buf()
+	} else {
+		pi_vfs::join_path(base, target)
+	})
+}
+
 fn ignore_line_covers_root(
 	matcher_root: &Path,
 	source: &Path,
@@ -3425,7 +3463,7 @@ impl IgnoreState {
 			load_gitignore(fs, dir, &ignore_file_path(dir, ".ignore"), None),
 			load_gitignore(fs, dir, &ignore_file_path(dir, ".gitignore"), None),
 			if has_git {
-				load_gitignore(fs, dir, &ignore_file_path(dir, ".git/info/exclude"), None)
+				git_exclude_path(fs, dir).and_then(|exclude| load_gitignore(fs, dir, &exclude, None))
 			} else {
 				None
 			},
@@ -3446,7 +3484,8 @@ impl IgnoreState {
 			load_gitignore(fs, dir, &ignore_file_path(dir, ".ignore"), explicit_root),
 			load_gitignore(fs, dir, &ignore_file_path(dir, ".gitignore"), explicit_root),
 			if has_git {
-				load_gitignore(fs, dir, &ignore_file_path(dir, ".git/info/exclude"), explicit_root)
+				git_exclude_path(fs, dir)
+					.and_then(|exclude| load_gitignore(fs, dir, &exclude, explicit_root))
 			} else {
 				None
 			},
@@ -3476,7 +3515,7 @@ impl IgnoreState {
 				None
 			},
 			if names.git_dir {
-				load_gitignore(fs, dir, &ignore_file_path(dir, ".git/info/exclude"), None)
+				git_exclude_path(fs, dir).and_then(|exclude| load_gitignore(fs, dir, &exclude, None))
 			} else {
 				None
 			},
@@ -5283,6 +5322,52 @@ mod tests {
 			!paths.iter().any(|path| path == "ignored.txt"),
 			"collect_entries should exclude .gitignore matches without a .git marker, got: {paths:?}"
 		);
+	}
+
+	#[test]
+	fn collect_entries_applies_main_repo_exclude_in_linked_worktree() {
+		let tree = temp_tree("linked-worktree-exclude");
+		let admin = tree.path().join("main/.git/worktrees/wt");
+		fs::create_dir_all(tree.path().join("main/.git/info"))
+			.expect("main info dir should be created");
+		fs::create_dir_all(&admin).expect("worktree admin dir should be created");
+		fs::write(tree.path().join("main/.git/info/exclude"), "excluded.txt\n")
+			.expect("main exclude should be written");
+		fs::write(admin.join("commondir"), "../..\n").expect("commondir should be written");
+		let worktree = tree.path().join("wt");
+		fs::create_dir_all(&worktree).expect("worktree should be created");
+		fs::write(worktree.join(".git"), "gitdir: ../main/.git/worktrees/wt\n")
+			.expect("gitdir pointer should be written");
+		fs::write(worktree.join("excluded.txt"), "x").expect("excluded file should be written");
+		fs::write(worktree.join("kept.txt"), "x").expect("kept file should be written");
+
+		// The worktree as the walk root, and as a directory found while walking its
+		// parent.
+		for (root, prefix) in [(worktree.as_path(), ""), (tree.path(), "wt/")] {
+			let scan = collect_entries(
+				root,
+				WalkOptions { use_gitignore: true, cache: false, ..test_options() },
+				|| Ok::<(), Infallible>(()),
+			)
+			.expect("collection should not fail");
+			let paths = scan
+				.entries
+				.into_iter()
+				.map(|entry| entry.path)
+				.collect::<Vec<_>>();
+			assert!(
+				paths
+					.iter()
+					.any(|path| *path == format!("{prefix}kept.txt")),
+				"worktree walk from {root:?} should include kept.txt, got: {paths:?}"
+			);
+			assert!(
+				!paths
+					.iter()
+					.any(|path| *path == format!("{prefix}excluded.txt")),
+				"worktree walk from {root:?} should apply the main repo's info/exclude, got: {paths:?}"
+			);
+		}
 	}
 
 	#[test]

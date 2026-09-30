@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed default macOS accessibility snapshots hiding Contacts and Calendar content inside unnamed split groups ([#13651](https://github.com/can1357/oh-my-pi/issues/13651)).
+- Fixed `glob`, `grep`, `fuzzyFind`, and `listWorkspace` ignoring the main repository's `.git/info/exclude` in a linked git worktree. The walker now follows the worktree's `.git` file to the main repository's `info/exclude`, as git does. The same fix applies to submodules. A file excluded in the main checkout is now also excluded in each of its worktrees.
 
 ## [18.4.4] - 2026-09-29
 
