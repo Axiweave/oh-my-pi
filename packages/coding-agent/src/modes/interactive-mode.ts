@@ -1207,13 +1207,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		return `\x1b[2;3m${sanitizeStatusText(name)}\x1b[23;22m`;
 	}
 	/** Turn elapsed ms for the working row: the running turn's, or the last
-	 * completed turn's between turns. Hidden by `tui.workingTimer`, under
-	 * `tui.workingTimerMinSeconds`, and when the status line's `pi` brand
-	 * segment already renders a turn timer. */
+	 * completed turn's between turns. Hidden by `tui.workingTimer` and under
+	 * `tui.workingTimerMinSeconds`. The running timer also hides when the status
+	 * line's `pi` brand segment renders it; that segment shows only its icon
+	 * between turns, so the last turn's time stays here. */
 	#workingTimerMs(): number | undefined {
 		if (!cfgTuiWorkingTimer.get(settings)) return undefined;
-		if (this.statusLine.showsWorkingBrand()) return undefined;
-		const ms = this.statusLine.getTurnElapsedMs() ?? this.statusLine.getLastTurnElapsedMs();
+		const running = this.statusLine.getTurnElapsedMs();
+		if (running !== null && this.statusLine.showsWorkingBrand()) return undefined;
+		const ms = running ?? this.statusLine.getLastTurnElapsedMs();
 		if (ms === null || ms < cfgTuiWorkingTimerMinSeconds.get(settings) * 1000) return undefined;
 		return ms;
 	}

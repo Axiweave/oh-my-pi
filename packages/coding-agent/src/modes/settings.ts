@@ -724,7 +724,7 @@ export const cfgTuiWorkingTimer = register({
 		group: "Display",
 		label: "Working Row Timer",
 		description:
-			"Show the elapsed time of the current turn on the right of the working row while the agent runs, and the last turn's time between turns; hidden when the status line's pi brand segment already shows a turn timer",
+			"Show the elapsed time of the current turn on the right of the working row while the agent runs, and the last turn's time between turns; the running timer hides when the status line's pi brand segment already shows it",
 	},
 });
 
