@@ -993,8 +993,8 @@ describe("InteractiveMode todo HUD anchor", () => {
 				const working = ["", "L".repeat(leftLen)];
 				const lines = mode.renderCompactStatusLine(width, working);
 				const summary = Bun.stripANSI(lines.at(-2) ?? "");
-				// Flush with the working row's right edge: exactly `width` cells.
-				const fits = visibleWidth(summary) === width;
+				// Flush with the working row's right edge: content reaches the last cell.
+				const fits = visibleWidth(summary) === width && visibleWidth(summary.trimEnd()) === width;
 				const workingWhole = Bun.deepEquals([lines[0], lines.at(-1)], working);
 				const suffixKept = width - fixed < 12 || !blocked || summary.includes("· 1 blocked");
 				if (!fits || !workingWhole || !suffixKept) {
