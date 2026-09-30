@@ -338,13 +338,11 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 		userCommandsDir
 			? loadFilesFromDir(ctx, userCommandsDir, PROVIDER_ID, "user", {
 					extensions: ["md"],
-					gitignore: false,
 					transform: transformCommand("user"),
 				})
 			: Promise.resolve({ items: [] as SlashCommand[], warnings: [] as string[] }),
 		loadFilesFromDir(ctx, projectCommandsDir, PROVIDER_ID, "project", {
 			extensions: ["md"],
-			gitignore: false,
 			transform: transformCommand("project"),
 		}),
 	]);

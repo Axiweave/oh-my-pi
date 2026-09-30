@@ -446,7 +446,6 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 		promises.push(
 			loadFilesFromDir(ctx, userCommandsDir, PROVIDER_ID, "user", {
 				extensions: ["md"],
-				gitignore: false,
 				transform: transformCommand("user"),
 			}),
 		);
@@ -456,7 +455,6 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 		promises.push(
 			loadFilesFromDir(ctx, projectCommandsDir, PROVIDER_ID, "project", {
 				extensions: ["md"],
-				gitignore: false,
 				transform: transformCommand("project"),
 			}),
 		);

@@ -405,7 +405,8 @@ async function globIf(
 	recursive: boolean = true,
 ): Promise<Array<{ path: string }>> {
 	try {
-		const result = await glob({ pattern, path: dir, gitignore: true, hidden: false, fileType, recursive });
+		// Discovery never applies git ignore rules: see loadFilesFromDir.
+		const result = await glob({ pattern, path: dir, gitignore: false, hidden: false, fileType, recursive });
 		return result.matches;
 	} catch {
 		return [];
@@ -578,7 +579,10 @@ export function expandEnvVarsDeep<T>(obj: T, extraEnv?: Record<string, string>):
 
 /**
  * Load files from a directory matching extensions.
- * Uses native glob for fast filesystem scanning with gitignore support.
+ * Uses native glob for fast filesystem scanning. Git ignore rules do not apply:
+ * a file-level rule such as `*.md` or `*.js` would otherwise hide configured
+ * items in a normal checkout, while linked worktrees skip the main repo's
+ * `.git/info/exclude`, so the same checkout would behave differently.
  */
 export async function loadFilesFromDir<T>(
 	_ctx: LoadContext,
@@ -594,8 +598,6 @@ export async function loadFilesFromDir<T>(
 		recursive?: boolean;
 		/** Registry/CLI origin forwarded to {@link SourceMeta.origin} (see {@link createSourceMeta}). */
 		origin?: string;
-		/** Honor .gitignore/.git/info/exclude rules (default: true) */
-		gitignore?: boolean;
 	},
 ): Promise<LoadResult<T>> {
 	const items: T[] = [];
@@ -611,13 +613,13 @@ export async function loadFilesFromDir<T>(
 		pattern = recursive ? "**/*" : "*";
 	}
 
-	// Use native glob for fast scanning with gitignore support
+	// Use native glob for fast scanning
 	let matches: Array<{ path: string }>;
 	try {
 		const result = await glob({
 			pattern,
 			path: dir,
-			gitignore: options.gitignore ?? true,
+			gitignore: false,
 			hidden: false,
 			fileType: FileType.File,
 			// Thread the caller's non-recursive intent explicitly: the native glob
@@ -833,7 +835,7 @@ async function readExtensionModuleManifest(
  * 3. Subdirectory with package.json: `extensions/<ext>/package.json` with "omp"/"pi" field → load declared paths
  *
  * No recursion beyond one level. Complex packages must use package.json manifest.
- * Uses native glob for fast filesystem scanning with gitignore support.
+ * Uses native glob for fast filesystem scanning, without git ignore rules.
  */
 export async function discoverExtensionModulePaths(_ctx: LoadContext, dir: string): Promise<string[]> {
 	const discovered = new Set<string>();

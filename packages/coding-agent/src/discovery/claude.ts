@@ -334,7 +334,6 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 
 		const userResult = await loadFilesFromDir<SlashCommand>(ctx, userCommandsDir, PROVIDER_ID, "user", {
 			extensions: ["md"],
-			gitignore: false,
 			recursive: true,
 			transform: (name, content, filePath, source) => ({
 				name: name.replace(/\.md$/, ""),
@@ -354,7 +353,6 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 
 		const projectResult = await loadFilesFromDir<SlashCommand>(ctx, projectCommandsDir, PROVIDER_ID, "project", {
 			extensions: ["md"],
-			gitignore: false,
 			recursive: true,
 			transform: (name, content, filePath, source) => ({
 				name: name.replace(/\.md$/, ""),
