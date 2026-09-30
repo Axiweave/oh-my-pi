@@ -166,9 +166,15 @@ export class SessionFocusController {
 		const gone = event.type === "removed";
 		const dead = event.type === "status_changed" && (event.ref.status === "parked" || event.ref.status === "aborted");
 		if (!gone && !dead) return;
-		void this.#detachToMain().then(() => {
-			this.ctx.showStatus(`Agent ${event.ref.id} is ${gone ? "gone" : event.ref.status}; returned to main session`);
-		});
+		// `#attach` rethrows replay failures; unhandled, they would kill the process.
+		void this.#detachToMain().then(
+			() => {
+				this.ctx.showStatus(`Agent ${event.ref.id} is ${gone ? "gone" : event.ref.status}; returned to main session`);
+			},
+			(error: unknown) => {
+				this.ctx.showError(`Failed to return to main session: ${error instanceof Error ? error.message : String(error)}`);
+			},
+		);
 	}
 
 	/** Retarget core, both directions: swap subscription, transcript, and status line onto `target`. */

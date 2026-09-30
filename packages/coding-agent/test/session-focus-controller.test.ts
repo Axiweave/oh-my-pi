@@ -417,6 +417,26 @@ describe("SessionFocusController", () => {
 		]);
 	});
 
+	it("reports a failed return to main after the focused agent parks instead of rejecting unhandled", async () => {
+		let replays = 0;
+		const h = makeHarness({
+			renderInitialMessages: () => {
+				if (++replays > 1) throw new Error("main replay failed");
+			},
+		});
+		const errors: string[] = [];
+		Object.assign(h.ctx, { showError: (message: string) => errors.push(message) });
+		const worker = makeSessionStub();
+		registerSub(h.registry, "Worker", worker.session, MAIN_AGENT_ID);
+		await h.controller.focusAgent("Worker");
+
+		h.registry.setStatus("Worker", "parked");
+		await flushAsync();
+
+		expect(errors).toEqual(["Failed to return to main session: main replay failed"]);
+		expect(h.controller.focusedAgentId).toBeUndefined();
+	});
+
 	it("focusing a subagent reports nothing to the IDE", async () => {
 		const h = makeHarness();
 		const worker = makeSessionStub({ isStreaming: false });

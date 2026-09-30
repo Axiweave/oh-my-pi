@@ -33,6 +33,7 @@
 
 ### Fixed
 
+- Fixed omp exiting with an unhandled-rejection crash when a focused subagent parked or disappeared and the main session replay failed; the failure now shows as an error and the main session stays attached.
 - Fixed cyber mode letting the session model's `imageModel` and `webSearchModel` companions run `generate_image` and `web_search` outside the allowlist.
 - Fixed the headless "Did you mean" list suggesting models outside the launch scope (`--models`, else `enabledModels`) or the cyber allowlist.
 - Fixed `write xd://propose` always failing with "Plan proposal lifecycle context is unavailable." The `xd://` handler did not pass the write call's signal and tool call ID, so plan approval, the debate `plan-reviewer`, and the implementation review gate could not start.
