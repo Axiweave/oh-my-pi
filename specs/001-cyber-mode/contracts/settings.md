@@ -112,5 +112,5 @@ cyberMode: false
 |---|---|
 | `cyberMode: true` and `cyberModels` empty | Startup warning; the session starts with cyber mode off |
 | `cyberMode: true` and no allowlist entry resolves | Startup warning; the session starts with cyber mode off |
-| An allowlist entry matches no available model | Startup warning; the entry is skipped and the rest apply |
+| An allowlist entry matches no available model | No warning; the entry is skipped and the rest apply |
 | Duplicate allowlist entries | Startup warning; the duplicate is ignored |

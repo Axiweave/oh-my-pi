@@ -369,9 +369,9 @@ export function planCyberChanges(
  * Report unusable `cyberModels` configuration at startup, and an on state that
  * current configuration cannot support (FR-026, FR-027).
  *
- * Unlike the profile check, selectors are resolved here: an entry that matches no
- * available model is exactly what the operator needs to hear, and the catalogue
- * is settled by the time a session is constructed.
+ * An entry that matches no available model is skipped silently: a list often names
+ * models from providers the operator is not logged in to. Only a list where no
+ * entry resolves while cyber mode is on is reported.
  */
 export function validateCyberMode(
 	settings: Settings,
@@ -382,9 +382,6 @@ export function validateCyberMode(
 	if (findings.notAList) warn("cyberModels must be a list of model selectors; ignoring it.");
 	for (const entry of findings.duplicates) {
 		warn(`cyberModels lists '${entry}' more than once; the repeat is ignored.`);
-	}
-	for (const entry of findings.unresolved) {
-		warn(`cyberModels entry '${entry}' matches no available model; ignoring it.`);
 	}
 	if (cfgCyberMode.get(settings) === true && !resolveCyberAllowlist(settings, availableModels)) {
 		warn("cyberMode is on but no cyberModels entry resolves to an available model; starting with cyber mode off.");

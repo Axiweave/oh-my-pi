@@ -304,8 +304,8 @@ cyber mode off in configuration and confirm the first session reads off.
   warning. The session record carries no list of its own, so this decision comes
   from current configuration alone.
 - **FR-027**: Unusable configuration MUST be reported as a startup warning. This
-  covers a list that is not a list of selectors, duplicate entries, and an entry
-  that matches no available model.
+  covers a list that is not a list of selectors and duplicate entries. An entry
+  that matches no available model is skipped silently.
 - **FR-028**: Switching cyber mode off MUST restore role resolution to the
   configured values exactly.
 - **FR-029**: Cyber protection belongs to the configuration state a session runs

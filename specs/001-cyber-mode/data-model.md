@@ -19,9 +19,9 @@ spelling. `anthropic/claude-sonnet-5` and an alias resolving to it are the same
 allowlist member. Duplicate spellings are tolerated and reported (FR-027).
 
 **Validation rules** (FR-027): a value that is not a list of selector strings is
-reported and ignored; duplicate entries are reported; an entry that matches no
-available model is reported. All three surface as startup warnings through the
-existing `configWarnings` path.
+reported and ignored; duplicate entries are reported. Both surface as startup
+warnings through the existing `configWarnings` path. An entry that matches no
+available model is skipped without a warning.
 
 **Relationship**: the allowlist resolves against the same available-model set the
 model picker uses, so the two can never disagree about whether a model exists.

@@ -24,6 +24,8 @@ describe("model role module graph", () => {
 			message => warnings.push(message),
 		);
 		expect(warnings).toContain("modelProfile 'missing-bundle' names no bundle in modelProfiles; ignoring it.");
-		expect(warnings).toContain("cyberModels entry 'ghost/model' matches no available model; ignoring it.");
+		expect(warnings).toContain(
+			"cyberMode is on but no cyberModels entry resolves to an available model; starting with cyber mode off.",
+		);
 	});
 });

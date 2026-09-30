@@ -32,6 +32,7 @@
 - `/guided-goal` now keeps the exact submitted slash command visible in the transcript while its rewritten interview brief remains hidden.
 - Ctrl-R history now starts with prompts from the active working directory. Press Tab to switch between current-folder and all-projects results without changing the query.
 - Prompt history now omits transient lifecycle commands and non-interactive `/mcp add` arguments that can contain credentials.
+- A `cyberModels` entry that matches no available model no longer prints a startup warning. It is still skipped. OMP still warns when `cyberMode` is on and no entry resolves.
 
 ### Fixed
 

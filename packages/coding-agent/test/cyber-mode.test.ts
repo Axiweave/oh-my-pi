@@ -391,7 +391,7 @@ describe("cyber allowlist inspection", () => {
 		expect(unresolved).toEqual({ ok: false, refusal: { reason: "unresolvable", entries: [UNKNOWN] } });
 	});
 
-	test("warns about unusable configuration and about an on state it cannot support", () => {
+	test("warns about duplicates but skips an unresolved entry silently while another resolves", () => {
 		const warnings: string[] = [];
 		validateCyberMode(
 			cyberSettings({
@@ -402,7 +402,7 @@ describe("cyber allowlist inspection", () => {
 			message => warnings.push(message),
 		);
 		expect(warnings.some(message => message.includes("more than once"))).toBe(true);
-		expect(warnings.some(message => message.includes(UNKNOWN))).toBe(true);
+		expect(warnings.some(message => message.includes(UNKNOWN))).toBe(false);
 	});
 
 	test("warns when cyberMode is on but nothing resolves", () => {
