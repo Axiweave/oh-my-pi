@@ -244,6 +244,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 	const load = (dir: string, level: "user" | "project") =>
 		loadFilesFromDir<SlashCommand>(ctx, dir, PROVIDER_ID, level, {
 			extensions: ["md"],
+			gitignore: false,
 			transform: (name, content, filePath, source) => ({
 				name: name.replace(/\.md$/, ""),
 				path: filePath,

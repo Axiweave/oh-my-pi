@@ -594,6 +594,8 @@ export async function loadFilesFromDir<T>(
 		recursive?: boolean;
 		/** Registry/CLI origin forwarded to {@link SourceMeta.origin} (see {@link createSourceMeta}). */
 		origin?: string;
+		/** Honor .gitignore/.git/info/exclude rules (default: true) */
+		gitignore?: boolean;
 	},
 ): Promise<LoadResult<T>> {
 	const items: T[] = [];
@@ -615,7 +617,7 @@ export async function loadFilesFromDir<T>(
 		const result = await glob({
 			pattern,
 			path: dir,
-			gitignore: true,
+			gitignore: options.gitignore ?? true,
 			hidden: false,
 			fileType: FileType.File,
 			// Thread the caller's non-recursive intent explicitly: the native glob

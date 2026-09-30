@@ -91,6 +91,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 		roots.map(root =>
 			loadFilesFromDir<SlashCommand>(ctx, path.join(root.path, "commands"), PROVIDER_ID, root.level, {
 				extensions: ["md"],
+				gitignore: false,
 				transform: (name, content, filePath, source) => ({
 					name: name.replace(/\.md$/, ""),
 					path: filePath,

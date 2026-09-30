@@ -33,6 +33,7 @@
 - Ctrl-R history now starts with prompts from the active working directory. Press Tab to switch between current-folder and all-projects results without changing the query.
 - Prompt history now omits transient lifecycle commands and non-interactive `/mcp add` arguments that can contain credentials.
 - A `cyberModels` entry that matches no available model no longer prints a startup warning. It is still skipped. OMP still warns when `cyberMode` is on and no entry resolves.
+- Slash-command discovery no longer applies `.gitignore` or `.git/info/exclude` rules. Before, a rule such as `*.md` hid every command file in a normal repository but not in a linked worktree. This applies to `.omp`, `.agents`, `.claude`, `.codex`, `.opencode`, and plugin command directories.
 
 ### Fixed
 
