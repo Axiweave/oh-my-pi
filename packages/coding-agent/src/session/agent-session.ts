@@ -309,6 +309,7 @@ import type {
 	SessionHandoffOptions,
 	SessionOAuthAccountList,
 	SessionStats,
+	StaleModelProfile,
 	SteerOptions,
 	UsageFallbackConfirmer,
 } from "./agent-session-types";
@@ -9809,6 +9810,11 @@ export class AgentSession implements SettingsScope {
 		return this.#models.cycleModelProfile(direction, role);
 	}
 
+	/** Takes the profile switch a resume found stale, once; the interactive UI offers it. */
+	takeStaleModelProfile(): StaleModelProfile | undefined {
+		return this.#models.takeStaleModelProfile();
+	}
+
 	/** Whether this session has cyber mode on (FR-019). */
 	get cyberMode(): boolean {
 		return this.#models.cyberMode;
@@ -11308,6 +11314,7 @@ export class AgentSession implements SettingsScope {
 			// dropped, so re-point it through the ordinary switch path (FR-024).
 			await this.#models.repointCyberModel();
 			this.#reportCyberChanges(this.#planCyberReport());
+			this.#models.warnIfProfileModelStale();
 
 			const model = this.model;
 			if (model) {

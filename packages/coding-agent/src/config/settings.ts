@@ -1975,6 +1975,11 @@ export class Settings {
 		return name;
 	}
 
+	/** Startup profile whose roles are still the runtime layer, or undefined once any role write replaced it. */
+	get installedStartupModelProfile(): string | undefined {
+		return this.#startupModelProfileName;
+	}
+
 	/**
 	 * Install cyber protection on this configuration state, owned by `owner`.
 	 *

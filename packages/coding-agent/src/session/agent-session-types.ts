@@ -471,6 +471,16 @@ export interface ModelProfileResult {
 	role: string | undefined;
 }
 
+/** Profile model a resumed session no longer runs; the UI offers to switch to it. */
+export interface StaleModelProfile {
+	/** `modelProfiles` bundle the session belongs to. */
+	profile: string;
+	/** Role the session was last on, and the one the switch activates. */
+	role: string;
+	/** Model the profile now sets for {@link role}. */
+	model: Model;
+}
+
 /** Result from AgentSession.setCyberMode(). */
 export interface CyberModeResult {
 	/** State the session is in after the operation. */

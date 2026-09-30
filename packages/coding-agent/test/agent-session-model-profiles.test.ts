@@ -313,6 +313,80 @@ describe("AgentSession model profiles", () => {
 		await written.dispose();
 	});
 
+	it("warns on resume when the profile no longer names the session's model", async () => {
+		createSession({
+			initialModelId: sonnet45().id,
+			modelProfiles: { fast: { default: selector(haiku()), plan: selector(sonnet45()) } },
+		});
+		const written = session;
+		await written.applyModelProfile("fast");
+		const resume = (modelProfiles: Record<string, Record<string, string>>, modelProfile?: string) =>
+			createSession({
+				initialModelId: haiku().id,
+				modelProfiles,
+				modelProfile,
+				sessionManager: written.sessionManager,
+				resumedConversation: true,
+			});
+		const stale = "Resumed on anthropic/claude-haiku-4-5, but model profile 'fast' now sets default";
+
+		// Profile edited since: name the new model and the fix, and offer the switch once.
+		resume({ fast: { default: selector(sonnet46()) } });
+		expect(session.configWarnings).toContain(
+			`${stale} → anthropic/claude-sonnet-4-6. Run /model-profile fast to switch.`,
+		);
+		expect(session.takeStaleModelProfile()).toEqual({ profile: "fast", role: "default", model: sonnet46() });
+		expect(session.takeStaleModelProfile()).toBeUndefined();
+
+		// The session was on `default`; another role now naming its model does not make it current.
+		resume({ fast: { default: selector(sonnet46()), plan: selector(haiku()) } });
+		expect(session.configWarnings.some(w => w.startsWith(stale))).toBe(true);
+
+		// Unchanged profile: silent, nothing to offer.
+		resume({ fast: { default: selector(haiku()) } });
+		expect(session.configWarnings.some(w => w.startsWith(stale))).toBe(false);
+		expect(session.takeStaleModelProfile()).toBeUndefined();
+
+		// Profile deleted since: say so, and do not offer the startup profile the
+		// session never belonged to.
+		resume({ other: { default: selector(sonnet46()) } }, "other");
+		expect(session.configWarnings).toContain(
+			"Model profile 'fast' from this session is no longer in modelProfiles; the session keeps its model.",
+		);
+		expect(session.takeStaleModelProfile()).toBeUndefined();
+		await written.dispose();
+	});
+
+	it("does not offer the startup profile to an untagged session reached by an in-app switch", async () => {
+		createSession({
+			initialModelId: sonnet45().id,
+			modelProfiles: { fast: { default: selector(haiku()) }, strong: { default: selector(sonnet46()) } },
+			modelProfile: "strong",
+			sessionManager: SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions")),
+		});
+		await session.applyModelProfile("fast");
+		const file = path.join(tempDir.path(), "untagged.jsonl");
+		const timestamp = "2026-09-01T00:00:00.000Z";
+		const entries = [
+			{ type: "session", version: 3, id: "untagged", timestamp, cwd: tempDir.path() },
+			{ type: "model_change", id: "m1", parentId: null, timestamp, model: selector(sonnet45()), role: "default" },
+			{
+				type: "message",
+				id: "u1",
+				parentId: "m1",
+				timestamp,
+				message: { role: "user", content: "hi", timestamp: Date.parse(timestamp) },
+			},
+		];
+		await Bun.write(file, `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`);
+
+		expect(await session.switchSession(file, { preserveLocalCwd: true })).toBe(true);
+		// The switch dropped `fast` and installed no startup roles, so `strong` is
+		// not a profile this session is on.
+		expect(session.activeModelProfile).toBeUndefined();
+		expect(session.takeStaleModelProfile()).toBeUndefined();
+	});
+
 	it("carries the active profile and model into the transcript /new starts", async () => {
 		const roles = { default: selector(sonnet45()), plan: selector(sonnet45()) };
 		const profiles = { fast: { default: selector(haiku()), plan: selector(haiku()) } };

@@ -7527,6 +7527,35 @@ export class InteractiveMode implements InteractiveModeContext {
 	}): Promise<void> {
 		await this.#uiHelpers.renderInitialMessages(options);
 		this.syncRetryHintRow();
+		// Every resume path (startup, picker, extension switch) replays the transcript here.
+		if (!this.focusedAgentId) void this.#offerStaleModelProfile();
+	}
+
+	/** Offer the profile switch a resume found stale; the session keeps its model on "No". */
+	async #offerStaleModelProfile(): Promise<void> {
+		const stale = this.session.takeStaleModelProfile();
+		if (!stale) return;
+		const current = this.session.model;
+		const target = `${stale.model.provider}/${stale.model.id}`;
+		const confirmed = await this.showHookConfirm(
+			`Switch to model profile '${stale.profile}'?`,
+			`This session runs ${current ? `${current.provider}/${current.id}` : "no model"}, but the profile now sets ${stale.role} → ${target}.`,
+		);
+		if (!confirmed) return;
+		try {
+			const result = await this.session.applyModelProfile(stale.profile, stale.role);
+			this.statusLine.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(
+				!result
+					? `Model profile ${stale.profile} is no longer configured`
+					: result.model
+						? `Model profile ${stale.profile}: now on ${result.model.provider}/${result.model.id}`
+						: `Model profile ${stale.profile}: no configured role resolved to an available model`,
+			);
+		} catch (error) {
+			this.showError(`Failed to set model profile: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 	/**
 	 * Reconcile the idle "F5 to Retry" status row with the transcript tail:

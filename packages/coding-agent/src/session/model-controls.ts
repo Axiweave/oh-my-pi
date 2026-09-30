@@ -58,6 +58,7 @@ import type {
 	ResolvedRoleModel,
 	RoleModelCycle,
 	RoleModelCycleResult,
+	StaleModelProfile,
 } from "./agent-session-types";
 import { formatRoleModelValue, resolveRoleModelFull } from "./role-models";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
@@ -99,6 +100,8 @@ export class ModelControls {
 	#serviceTierByFamily: ServiceTierByFamily;
 	/** Name of the `modelProfiles` bundle currently installed, if any. */
 	#activeModelProfile: string | undefined;
+	/** Profile switch a resumed session was offered and not yet answered; see {@link takeStaleModelProfile}. */
+	#staleModelProfile: StaleModelProfile | undefined;
 	/** Whether this session itself switched cyber mode on. */
 	#cyberMode = false;
 	/**
@@ -159,6 +162,7 @@ export class ModelControls {
 		// first lookup.
 		this.restoreCyberMode(host.sessionManager.getLastCyberMode());
 		this.restoreReviewPlan(host.sessionManager.getLastReviewPlan());
+		this.warnIfProfileModelStale();
 	}
 
 	get #model(): Model | undefined {
@@ -549,6 +553,13 @@ export class ModelControls {
 			this.#activeModelProfile = name;
 			return;
 		}
+		if (name) {
+			this.#host.emitNotice(
+				"warning",
+				`Model profile '${name}' from this session is no longer in modelProfiles; the session keeps its model.`,
+				"model-profile",
+			);
+		}
 		// A session with a conversation of its own never switched profiles, and
 		// its persisted model already outranks the config roles — claiming the
 		// startup profile here would report a bundle whose `default` model is not
@@ -565,6 +576,52 @@ export class ModelControls {
 		if (!this.#activeModelProfile) return;
 		this.#host.settings.applyModelProfileRoles(undefined);
 		this.#activeModelProfile = undefined;
+	}
+
+	/** Return and clear the pending stale-profile offer, so each resume prompts at most once. */
+	takeStaleModelProfile(): StaleModelProfile | undefined {
+		const stale = this.#staleModelProfile;
+		this.#staleModelProfile = undefined;
+		return stale;
+	}
+
+	/**
+	 * Warn when a resumed session runs a model its model profile no longer names,
+	 * e.g. after the profile was edited, and record the switch for the UI to offer.
+	 * The session keeps its model: a silent switch mid-conversation would drop the
+	 * prompt cache and surprise the operator.
+	 * A session that never recorded a profile is checked against the startup
+	 * profile only while that profile's roles are still installed for it.
+	 */
+	warnIfProfileModelStale(): void {
+		this.#staleModelProfile = undefined;
+		const model = this.#model;
+		if (!model || this.#host.agent.state.messages.length === 0) return;
+		const lastRole = this.#host.sessionManager.getLastModelChangeRole();
+		if (lastRole === "temporary" || lastRole === EPHEMERAL_MODEL_CHANGE_ROLE) return;
+		const settings = this.#host.settings;
+		// A recorded profile that was deleted is reported by restoreModelProfile;
+		// the startup profile is not what that session belonged to. A session
+		// switch that dropped the outgoing profile left no startup profile either.
+		const name = this.#host.sessionManager.getLastModelProfile() ?? settings.installedStartupModelProfile;
+		const profile = name ? settings.getModelProfiles()[name] : undefined;
+		if (!name || !profile) return;
+		// Compare against the role the transcript says the session was on: another
+		// role now naming this model does not make the recorded role current.
+		const role = lastRole && Object.hasOwn(profile, lastRole) ? lastRole : "default";
+		const selector = profile[role];
+		if (!selector) return;
+		const expected = resolveModelRoleValue(selector, this.#host.modelRegistry.getAvailable(), {
+			settings,
+			matchPreferences: getModelMatchPreferences(settings),
+		}).model;
+		if (!expected || modelsAreEqual(expected, model)) return;
+		this.#staleModelProfile = { profile: name, role, model: expected };
+		this.#host.emitNotice(
+			"warning",
+			`Resumed on ${formatModelString(model)}, but model profile '${name}' now sets ${role} → ${formatModelString(expected)}. Run /model-profile ${name} to switch.`,
+			"model-profile",
+		);
 	}
 
 	/**
