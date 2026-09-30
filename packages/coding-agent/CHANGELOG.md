@@ -35,6 +35,7 @@
 
 ### Fixed
 
+- Fixed the compact TODO row ending one cell left of the working row. Both rows now end at the right edge of the terminal.
 - Fixed omp exiting with an unhandled-rejection crash when a focused subagent parked or disappeared and the main session replay failed; the failure now shows as an error and the main session stays attached.
 - Fixed cyber mode letting the session model's `imageModel` and `webSearchModel` companions run `generate_image` and `web_search` outside the allowlist.
 - Fixed the headless "Did you mean" list suggesting models outside the launch scope (`--models`, else `enabledModels`) or the cyber allowlist.

@@ -4230,9 +4230,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			: theme.fg("success", `${theme.checkbox.checked} done`);
 
 		// The task text gives way first; the counts shrink only once the task is at its floor.
-		const taskBudget = Math.max(TODO_COMPACT_MIN_TASK_CELLS, width - visibleWidth(header) - visibleWidth(suffix) - 1);
-		const summary = truncateToWidth(header + truncateToWidth(taskStr, taskBudget) + suffix, Math.max(0, width - 1));
-		const summaryLine = `${" ".repeat(Math.max(0, width - visibleWidth(summary) - 1))}${summary} `;
+		const taskBudget = Math.max(TODO_COMPACT_MIN_TASK_CELLS, width - visibleWidth(header) - visibleWidth(suffix));
+		const summary = truncateToWidth(header + truncateToWidth(taskStr, taskBudget) + suffix, width);
+		// Dock flush right, same edge as the working row's trailer.
+		const summaryLine = `${" ".repeat(Math.max(0, width - visibleWidth(summary)))}${summary}`;
 
 		// Own row directly above the working row, so neither has to share the width.
 		const lastLine = childLines.at(-1);
