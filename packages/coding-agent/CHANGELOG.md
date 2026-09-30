@@ -5,6 +5,7 @@
 ### Added
 
 - A resumed session now shows a warning when its model profile no longer names the session model for its role, for example after you edit the profile. The session keeps its model. The warning names the new model and the `/model-profile <name>` command. The interactive TUI also asks if you want to switch now. A resumed session whose recorded profile you deleted now shows a warning instead of dropping it silently.
+- After a turn ends, the working row shows the time of that turn beside the last tok/s reading. Before, the timer showed only while the agent ran. The `tui.workingTimer` and `tui.workingTimerMinSeconds` settings apply to it. `/clear` resets it.
 - Added the verified Ghostel OSC 5522 image receiver. It checks request identity, byte count, SHA-256, and expiry before the editor commit. Busy, canceled, or incomplete transfers cannot replace the active image. Legacy terminal paste and local paste keep their existing routes.
 - Inline `@file:N` and `@file:N-M` mentions now attach selected saved lines before the first conversation model request. Literal filenames, whole-file mentions, existing limits, and full-source hashline snapshots retain their behavior.
 - Added `/wtmove` to select an existing worktree with branch/path completion while preserving session history and artifacts. It leaves checkout files and branches unchanged.

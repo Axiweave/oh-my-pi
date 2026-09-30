@@ -43,7 +43,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
-import { col, kbd, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import { col, elapsed, kbd, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import { sameItems } from "@oh-my-pi/pi-tui/native/memo";
 import { describeSegmentTrack, renderSegmentTrack, type TrackSegment } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import type { WorkingRowSpec } from "@oh-my-pi/pi-tui/components/loader";
@@ -1206,16 +1206,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!name) return undefined;
 		return `\x1b[2;3m${sanitizeStatusText(name)}\x1b[23;22m`;
 	}
-	/** Per-turn elapsed clock for the working row. Hidden by `tui.workingTimer`,
-	 * until `tui.workingTimerMinSeconds` has elapsed, between turns, and when
-	 * the status line's `pi` brand segment already renders a turn timer. */
-	#workingTimerTrailer(): string | undefined {
+	/** Turn elapsed ms for the working row: the running turn's, or the last
+	 * completed turn's between turns. Hidden by `tui.workingTimer`, under
+	 * `tui.workingTimerMinSeconds`, and when the status line's `pi` brand
+	 * segment already renders a turn timer. */
+	#workingTimerMs(): number | undefined {
 		if (!cfgTuiWorkingTimer.get(settings)) return undefined;
 		if (this.statusLine.showsWorkingBrand()) return undefined;
-		const elapsed = this.statusLine.getTurnElapsedMs();
-		if (elapsed === null) return undefined;
-		if (elapsed < cfgTuiWorkingTimerMinSeconds.get(settings) * 1000) return undefined;
-		return `\x1b[2m${formatElapsed(elapsed)}\x1b[22m`;
+		const ms = this.statusLine.getTurnElapsedMs() ?? this.statusLine.getLastTurnElapsedMs();
+		if (ms === null || ms < cfgTuiWorkingTimerMinSeconds.get(settings) * 1000) return undefined;
+		return ms;
+	}
+	#workingTimerTrailer(): string | undefined {
+		const ms = this.#workingTimerMs();
+		return ms === undefined ? undefined : `\x1b[2m${formatElapsed(ms)}\x1b[22m`;
 	}
 
 	/** Live gen tok/s for the working row: the viewed session's own meter, so a
@@ -1241,9 +1245,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (segments.length === 0) return undefined;
 		return segments.join("  ");
 	}
-	/** Idle stand-in for the working row in band mode: the last tok/s reading
-	 * and the docked title stay readable between turns, in the same spot the
-	 * loader's trailer uses. */
+	/** Idle stand-in for the working row in band mode: the last tok/s reading,
+	 * the docked title and the last turn's time stay readable between turns,
+	 * in the same spot the loader's trailer uses. */
 	renderIdleStatusHud(width: number): readonly string[] | undefined {
 		const trailer = this.#workingRowTrailer();
 		if (!trailer) return undefined;
@@ -1253,7 +1257,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#workingMessage = DEFAULT_WORKING_MESSAGE;
 	/** When the current working loader was created (the native row's `elapsed` origin). */
 	#workingStartedAt = 0;
-	#idleStatusNative: { rate: number | undefined; node: NativeNode } | undefined;
+	#idleStatusNative: { rate: number | undefined; lastTurnMs: number | undefined; node: NativeNode } | undefined;
 	#statusHudNative: { children: readonly Component[]; slot: NativeNode | undefined; node: NativeNode } | undefined;
 	/**
 	 * The todo HUD, rebuilt with its ANSI rows; undefined while hidden. A
@@ -1289,20 +1293,19 @@ export class InteractiveMode implements InteractiveModeContext {
 	interruptFromPointer(): void {
 		this.editor.onEscape?.();
 	}
-	/** Between turns: the last tok/s reading, docked right; nothing when there is none. */
+	/** Between turns: the last tok/s reading and the last turn's time, docked right; nothing when neither exists. */
 	#describeIdleStatusHud(): NativeNode | undefined {
 		const rate = this.#nativeTokenRate();
-		if (rate === undefined) return undefined;
-		if (this.#idleStatusNative?.rate !== rate) {
-			this.#idleStatusNative = {
-				rate,
-				node: row([node("rate", { value: rate, unit: "tok/s" }, undefined, "rate")], {
-					justify: "end",
-					role: "omp.working.idle",
-				}),
-			};
-		}
-		return this.#idleStatusNative.node;
+		const lastTurnMs = this.statusLine.getTurnElapsedMs() === null ? this.#workingTimerMs() : undefined;
+		if (rate === undefined && lastTurnMs === undefined) return undefined;
+		const memo = this.#idleStatusNative;
+		if (memo && memo.rate === rate && memo.lastTurnMs === lastTurnMs) return memo.node;
+		const children: NativeChild[] = [];
+		if (rate !== undefined) children.push(node("rate", { value: rate, unit: "tok/s" }, undefined, "rate"));
+		if (lastTurnMs !== undefined) children.push(elapsed(lastTurnMs, true));
+		const described = row(children, { justify: "end", gap: "sm", role: "omp.working.idle" });
+		this.#idleStatusNative = { rate, lastTurnMs, node: described };
+		return described;
 	}
 	/** The native HUD pills row: the todo HUD, the subagent pill, then the jobs pill; hidden while all are empty. */
 	describeHudPills(): NativeNode {

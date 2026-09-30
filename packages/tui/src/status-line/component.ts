@@ -485,6 +485,8 @@ function resolveWorktreeContext(cwd: string): WorktreeContext | null {
 interface ActiveMeter {
 	activeMs: number;
 	activeStartedAt: number | null;
+	/** Length of the last completed window, shown between turns; null before the first. */
+	lastTurnMs: number | null;
 	sessionFile: string | undefined;
 }
 
@@ -928,9 +930,10 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 */
 	resetActiveTime(): void {
 		const meter = this.#meter();
-		if (meter.activeMs === 0 && meter.activeStartedAt === null) return;
+		if (meter.activeMs === 0 && meter.activeStartedAt === null && meter.lastTurnMs === null) return;
 		meter.activeMs = 0;
 		meter.activeStartedAt = null;
+		meter.lastTurnMs = null;
 		this.#invalidateStatusLineRenderCache();
 	}
 
@@ -957,7 +960,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	markActivityEnd(): void {
 		const meter = this.#meter();
 		if (meter.activeStartedAt === null) return;
-		meter.activeMs += Math.max(0, Date.now() - meter.activeStartedAt);
+		meter.lastTurnMs = Math.max(0, Date.now() - meter.activeStartedAt);
+		meter.activeMs += meter.lastTurnMs;
 		meter.activeStartedAt = null;
 		this.#invalidateStatusLineRenderCache();
 	}
@@ -979,6 +983,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	getTurnElapsedMs(): number | null {
 		const startedAt = this.#meter().activeStartedAt;
 		return startedAt === null ? null : Math.max(0, Date.now() - startedAt);
+	}
+
+	/** Length of the last completed active-processing window, or null before the first one ends. */
+	getLastTurnElapsedMs(): number | null {
+		return this.#meter().lastTurnMs;
 	}
 
 	/**
@@ -1004,7 +1013,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			}
 		}
 		if (!meter) {
-			meter = { activeMs: 0, activeStartedAt: null, sessionFile: currentFile };
+			meter = { activeMs: 0, activeStartedAt: null, lastTurnMs: null, sessionFile: currentFile };
 			this.#activeMeters.set(this.session, meter);
 		}
 		return meter;
