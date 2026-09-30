@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed default macOS accessibility snapshots hiding Contacts and Calendar content inside unnamed split groups ([#13651](https://github.com/can1357/oh-my-pi/issues/13651)).
+
 ## [18.4.4] - 2026-09-29
 
 ### Fixed
