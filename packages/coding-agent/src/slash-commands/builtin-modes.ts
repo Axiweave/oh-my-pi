@@ -18,7 +18,7 @@ import { handleSecurityCommand } from "./helpers/security";
 import type { ParsedSlashCommand, SlashCommandSpec, TuiSlashCommandRuntime } from "./types";
 
 import { cfgComputerDisplay, cfgComputerEnabled, cfgComputerMaxHeight, cfgComputerMaxWidth } from "../tools/settings";
-import { cfgSkillful } from "../session/settings";
+import { cfgPrewalkInto, cfgSkillful } from "../session/settings";
 import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
@@ -1069,13 +1069,16 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		acpDescription: "Arm or restart prewalk",
 		acpInputHint: "[restart]",
-		subcommands: [{ name: "restart", description: "Return to @default and re-arm the handoff to @smol" }],
+		subcommands: [
+			{ name: "restart", description: "Return to @default and re-arm the handoff to the prewalk.into target" },
+		],
 		handle: async (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();
 			if (arg && arg !== "restart") return usage("Usage: /prewalk [restart]", runtime);
-			const target = resolveSessionModelSelector("@smol", runtime.session, runtime.settings);
+			const selector = cfgPrewalkInto.get(runtime.settings);
+			const target = resolveSessionModelSelector(selector, runtime.session, runtime.settings);
 			if (target.error || !target.model) {
-				return usage(target.error ?? 'Model "@smol" not found', runtime);
+				return usage(target.error ?? `Model "${selector}" not found`, runtime);
 			}
 			if (!runtime.session.modelRegistry.hasConfiguredAuth(target.model)) {
 				return usage(`No API key for ${target.model.provider}/${target.model.id}`, runtime);
@@ -1098,8 +1101,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const restartSource = `${source.model.provider}/${source.model.id}`;
 				await runtime.output(
 					result === "armed"
-						? `Prewalk restarted: using @default (${restartSource}) for planning, then switching to @smol (${target.model.provider}/${target.model.id}) at the next edit/write (todo-gated).`
-						: `Prewalk reset: using @default (${restartSource}); @smol resolves to the same model and thinking level, so no handoff was armed.`,
+						? `Prewalk restarted: using @default (${restartSource}) for planning, then switching to ${selector} (${target.model.provider}/${target.model.id}) at the next edit/write (todo-gated).`
+						: `Prewalk reset: using @default (${restartSource}); ${selector} resolves to the same model and thinking level, so no handoff was armed.`,
 				);
 				return commandConsumed();
 			}

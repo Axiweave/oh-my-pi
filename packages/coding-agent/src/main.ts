@@ -37,7 +37,6 @@ import { cyberAllowsModel, installStartupCyberMode } from "./config/cyber-mode";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
-	DEFAULT_PREWALK_TARGET,
 	disabledProviderIds,
 	expandRoleAlias,
 	getModelMatchPreferences,
@@ -167,6 +166,7 @@ import {
 	cfgHideThinkingBlock,
 	cfgOmitThinking,
 	cfgPrewalkEnabled,
+	cfgPrewalkInto,
 } from "./session/settings";
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelProfile } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
@@ -1528,29 +1528,20 @@ export async function buildSessionOptions(
 			? true
 			: !restoringSession && cfgPrewalkEnabled.get(activeSettings);
 	if (prewalkEnabled) {
-		const target = parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET;
-		let targetPatterns: string[];
+		const target = parsed.prewalkInto ?? cfgPrewalkInto.get(activeSettings);
+		// `--model` mutates only the session default role. Resolve prewalk
+		// aliases against the pre-mutation default while leaving all other
+		// role lookups live.
+		const preModelOverrideRoleLookup = {
+			getModelRole: (role: string) =>
+				role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
+		};
 
-		if (parsed.prewalkInto === undefined) {
-			// Preserve the existing default-prewalk behavior; this PR only needs
-			// pre-override role semantics for an explicit target.
-			targetPatterns = [expandRoleAlias(DEFAULT_PREWALK_TARGET, activeSettings)];
-		} else {
-			// `--model` mutates only the session default role. Resolve explicit
-			// prewalk aliases against the pre-mutation default while leaving all
-			// other role lookups live.
-			const preModelOverrideRoleLookup = {
-				getModelRole: (role: string) =>
-					role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
-			};
-
-			// Bare `default` is a backwards-compatible special selector handled
-			// by expandRoleAlias rather than the prefixed role-alias grammar.
-			const targetSelector =
-				target.trim() === "default" ? expandRoleAlias(target, preModelOverrideRoleLookup) : target;
-			const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, preModelOverrideRoleLookup);
-			targetPatterns = configuredPatterns.length > 0 ? configuredPatterns : [targetSelector];
-		}
+		// Bare `default` is a backwards-compatible special selector handled
+		// by expandRoleAlias rather than the prefixed role-alias grammar.
+		const targetSelector = target.trim() === "default" ? expandRoleAlias(target, preModelOverrideRoleLookup) : target;
+		const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, preModelOverrideRoleLookup);
+		const targetPatterns = configuredPatterns.length > 0 ? configuredPatterns : [targetSelector];
 
 		const selection = await resolvePrewalkTarget(
 			targetPatterns,

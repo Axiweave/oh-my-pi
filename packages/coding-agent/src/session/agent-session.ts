@@ -117,7 +117,6 @@ import { cyberAllowsModel, type CyberRoleChange, planCyberChanges } from "../con
 import type { ModelRegistry } from "../config/model-registry";
 import { validateModelRoleConfiguration } from "../config/model-roles";
 import {
-	DEFAULT_PREWALK_TARGET,
 	getModelMatchPreferences,
 	isReviewPlanActive,
 	type ResolvedModelRoleValue,
@@ -471,6 +470,7 @@ import {
 	cfgExternalThinking,
 	cfgPowerSleepPrevention,
 	cfgPrewalkEnabled,
+	cfgPrewalkInto,
 	cfgProviderAppendOnlyContext,
 	cfgProvidersCacheWarming,
 	cfgProvidersCacheRetention,
@@ -2588,9 +2588,10 @@ export class AgentSession implements SettingsScope {
 				return;
 			}
 			if (this.#prewalk.state) return;
+			const selector = cfgPrewalkInto.get(this.settings);
 			const scoped = this.scopedModels.map(entry => entry.model);
 			const resolved = resolveCliModel({
-				cliModel: DEFAULT_PREWALK_TARGET,
+				cliModel: selector,
 				modelRegistry: this.#modelRegistry,
 				availableModels: scoped.length > 0 ? scoped : undefined,
 				settings: this.settings,
@@ -2598,7 +2599,7 @@ export class AgentSession implements SettingsScope {
 			});
 			const target = resolved.model;
 			const problem = !target
-				? (resolved.error ?? `model "${DEFAULT_PREWALK_TARGET}" not found`)
+				? (resolved.error ?? `model "${selector}" not found`)
 				: cfgDisabledProviders.get(this.settings).includes(target.provider)
 					? `provider "${target.provider}" is disabled`
 					: !this.#modelRegistry.hasConfiguredAuth(target)

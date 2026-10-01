@@ -2,7 +2,7 @@
 
 Prewalk is a one-shot handoff from the active model to a faster or cheaper model after planning reaches implementation. It lets the starting model inspect the repository, create a todo list, and begin the change before the target model continues the session.
 
-Prewalk is off by default. Its default target is the model assigned to the `@smol` role.
+Prewalk is off by default. Its default target is the model assigned to the `@smol` role. Set `prewalk.into` to change it.
 
 ## Enable prewalk
 
@@ -17,6 +17,7 @@ The equivalent YAML in `~/.omp/agent/config.yml` or a project `.omp/config.yml` 
 ```yaml
 prewalk:
   enabled: true
+  into: "@default" # optional; model pattern or role, default "@smol"
 ```
 
 Session flags override the configured value:
@@ -25,7 +26,7 @@ Session flags override the configured value:
 | --- | --- |
 | `--prewalk` | Arm prewalk for the new session. |
 | `--no-prewalk` | Leave prewalk disabled for the session, even when `prewalk.enabled` is `true`. |
-| `--prewalk-into <model-or-role>` | Arm prewalk and use the supplied model pattern or role instead of `@smol`. |
+| `--prewalk-into <model-or-role>` | Arm prewalk and use the supplied model pattern or role instead of `prewalk.into`. |
 
 For example:
 
@@ -35,7 +36,7 @@ omp --prewalk-into @smol
 omp --prewalk-into openai/gpt-5-mini
 ```
 
-At startup, OMP resolves the target with the normal model-role and model-matching rules. If the target cannot be resolved or has no configured credentials, OMP prints a warning and starts with prewalk unarmed.
+At startup, OMP resolves the target with the normal model-role and model-matching rules. A role tries its configured models in order and uses the first one with credentials. `@default` means the `default` role from your config, also when `--model` sets the starting model. If the target cannot be resolved or has no configured credentials, OMP prints a warning and starts with prewalk unarmed.
 
 ## Handoff trigger
 
@@ -54,11 +55,11 @@ Run either slash command without restarting OMP:
 /prewalk restart
 ```
 
-`/prewalk` arms a one-shot handoff from the active model to the current `@smol` assignment.
+`/prewalk` arms a one-shot handoff from the active model to the current `prewalk.into` target.
 
-After a handoff, `/prewalk restart` immediately returns the session to the current `@default` assignment and re-arms the handoff to `@smol`. Both roles are resolved when the command runs, so the cycle is independent of concrete model names and does not alter either role's persisted configuration.
+After a handoff, `/prewalk restart` immediately returns the session to the current `@default` assignment and re-arms the handoff to the `prewalk.into` target. Both selectors are resolved when the command runs, so the cycle is independent of concrete model names and does not alter either role's persisted configuration. When the target resolves to the same model and thinking level as `@default`, the command only returns to `@default` and arms no handoff.
 
-If prewalk is already armed, the command leaves the existing target in place. To choose a different target at startup, use `--prewalk-into`.
+If prewalk is already armed, the command leaves the existing target in place. To choose a different target, set `prewalk.into` or use `--prewalk-into` at startup.
 
 ## Subagent prewalk
 

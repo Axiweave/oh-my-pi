@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the `prewalk.into` setting (default `@smol`). It sets the prewalk handoff target for `--prewalk`, `prewalk.enabled`, and `/prewalk`. A role keeps its fallback order. `--prewalk-into` still overrides it for one session.
 - With `composer.tokenRate` on, the pinned Subagents block shows each subagent's generation rate after its name, and the header shows the sum of the rates of the subagents that stream now. A subagent that runs a tool or waits keeps its last reading, dimmed. The rate uses the same throughput symbol as the working row, so it follows `symbolPreset`. While a subagent streams, the block redraws at least once each second, also through silent reasoning spans.
 - Added a `static` value for `tui.titleSpinner`. The terminal title shows a fixed `:` once when work starts and runs no animation timer.
 - Added the `config.hotReload` setting (default `false`). OMP no longer watches `config.yml`, project settings, and `--config` overlays for live edits by default. Set it to `true` to turn the watcher on. The change applies on the next launch.

@@ -139,7 +139,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | --- | --- |
 | `--prewalk` | Switch to a fast/cheap model at the first edit/write after the plan's todo list exists (default off; see `prewalk.enabled`). |
 | `--no-prewalk` | Disable prewalk even if `prewalk.enabled` is set. |
-| `--prewalk-into <id>` | Target model for prewalk (default the `smol` role). |
+| `--prewalk-into <id>` | Target model for prewalk (default `prewalk.into`, which defaults to the `smol` role). |
 | `--plan-yolo` | Force read-only plan mode at start, auto-approve the plan on the model's first resolve call, then switch to `--plan-yolo-into` to implement it. |
 | `--plan-yolo-into <id>` | Target model for plan-yolo execution (default the `smol` role). |
 

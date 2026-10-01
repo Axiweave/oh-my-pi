@@ -80,7 +80,20 @@ export const cfgPrewalkEnabled = register({
 		group: "Prewalk",
 		label: "Enable Prewalk",
 		description:
-			"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
+			"Start on the active model, then switch to the prewalk.into target (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
+	},
+});
+
+export const cfgPrewalkInto = register({
+	id: "prewalk.into",
+	type: "string",
+	default: "@smol",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Prewalk Target",
+		description:
+			"Model pattern or role the prewalk handoff switches to, e.g. @smol, @default, or openai/gpt-5-mini. Role aliases keep their fallback order. --prewalk-into overrides it per session.",
 	},
 });
 
