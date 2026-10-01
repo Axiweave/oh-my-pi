@@ -6,8 +6,8 @@ import * as path from "node:path";
 import { getActiveProfile, getAgentDir, getProfileRootDir } from "@oh-my-pi/pi-utils/dirs";
 import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
-import { JSONC, YAML } from "bun";
+import { parseYamlConfig, stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
+import { JSONC } from "bun";
 import { formatKeyHints } from "./key-hint-format";
 import {
 	type Keybinding,
@@ -433,7 +433,7 @@ function loadRawConfig(filePath: string): unknown {
 			return JSONC.parse(content);
 		}
 		if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) {
-			return YAML.parse(content);
+			return parseYamlConfig(content);
 		}
 		throw new Error(`Unsupported keybindings config extension: ${filePath}`);
 	} catch (error) {
@@ -447,7 +447,14 @@ function loadRawConfig(filePath: string): unknown {
 
 function writeKeybindingsConfig(filePath: string, config: KeybindingsConfig): boolean {
 	try {
-		fs.writeFileSync(filePath, stringifyYamlConfig(config), "utf-8");
+		// An existing YAML file keeps its comments and layout; a JSON migration has none to keep.
+		let source: string | undefined;
+		try {
+			source = fs.readFileSync(filePath, "utf-8");
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		fs.writeFileSync(filePath, stringifyYamlConfig(config, source), "utf-8");
 		logger.debug("Migrated keybindings config", { path: filePath });
 		return true;
 	} catch (error) {

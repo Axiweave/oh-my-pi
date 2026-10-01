@@ -30,6 +30,7 @@
 
 ### Changed
 
+- Settings saves now keep comments, blank lines, key order, and quoting in `config.yml` and project `.omp/config.yml`. A save rewrites only the values that changed. This also applies to whole-record settings such as `modelProfiles`. The rewrite of `keybindings.yml` after a legacy key rename keeps them too. These files now load and save through the `yaml` package instead of Bun's built-in YAML. `<<` merge keys keep working. For a repeated key, the last value still wins, and a save that changes it writes the key once. The first save normalizes spacing before inline comments and empty `{}`/`[]` values that an older save split across two lines.
 - CLIProxyAPI discovery now enables GPT V2 server compaction and routes Claude models through Anthropic Messages with native compaction enabled. Provider and model `remoteCompaction.enabled: false` settings opt out. Current settings override discovery defaults after cache restoration.
 - Model-profile search now matches space-separated literal terms in order without overlap, regardless of case. For example, `sol l` matches `sol-low` but not `sol`.
 - Command cards now show the submitted command in a bordered prompt with the normal user-message background and terminal prompt markers. The existing command summary remains below.

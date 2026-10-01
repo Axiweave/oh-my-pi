@@ -29,7 +29,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { isLightTheme } from "@oh-my-pi/pi-tui/theme/theme";
-import { JSONC, YAML } from "bun";
+import { JSONC } from "bun";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
@@ -41,7 +41,7 @@ import { replaceFileAtomically } from "../utils/atomic-file";
 import { isRegisteredSearchEngine } from "../web/search/provider";
 import { filterCyberChain, type ResolvedCyberAllowlist } from "./cyber-mode";
 import { getModelMatchPreferences, type ModelRoleLookup } from "./model-resolver";
-import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
+import { parseYamlConfig, stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
 import {
 	type AnySetting,
 	all as allSettings,
@@ -2135,7 +2135,7 @@ export class Settings {
 
 		let parsed: unknown;
 		try {
-			parsed = YAML.parse(content);
+			parsed = parseYamlConfig(content);
 		} catch (error) {
 			return { kind: "invalid", error, generation };
 		}
@@ -2615,7 +2615,7 @@ export class Settings {
 		}
 		let parsed: unknown;
 		try {
-			parsed = YAML.parse(content);
+			parsed = parseYamlConfig(content);
 		} catch (error) {
 			throw new Error(`Failed to parse config overlay ${filePath}: ${String(error)}`);
 		}
@@ -3632,14 +3632,15 @@ export class Settings {
 	// Saving
 	// ─────────────────────────────────────────────────────────────────────────
 
-	async #writeYamlAtomically(filePath: string, settings: RawSettings): Promise<void> {
+	/** `source` is the file text the write replaces; passing it keeps that file's comments and layout. */
+	async #writeYamlAtomically(filePath: string, settings: RawSettings, source?: string): Promise<void> {
 		const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 		let removeTemp = false;
 		try {
 			const handle = await fs.promises.open(tempPath, "wx", 0o600);
 			removeTemp = true;
 			try {
-				await handle.writeFile(stringifyYamlConfig(settings), "utf8");
+				await handle.writeFile(stringifyYamlConfig(settings, source), "utf8");
 				await handle.sync();
 			} finally {
 				await handle.close();
@@ -3777,7 +3778,11 @@ export class Settings {
 				}
 
 				if (shouldWrite) {
-					await this.#writeYamlAtomically(writePath, current);
+					await this.#writeYamlAtomically(
+						writePath,
+						current,
+						loaded.generation.kind === "content" ? loaded.generation.source : undefined,
+					);
 				}
 				this.#quarantinedYamlTargets.delete(configPath);
 				// This write changed the file only at `writtenPaths`. A change staged after this save's snapshot at
@@ -3947,7 +3952,11 @@ export class Settings {
 					setByPath(projectSettings, ["reviewUsesPlan"], getByPath(this.#project, ["reviewUsesPlan"]));
 				}
 
-				await this.#writeYamlAtomically(writePath, projectSettings);
+				await this.#writeYamlAtomically(
+					writePath,
+					projectSettings,
+					loaded.generation.kind === "content" ? loaded.generation.source : undefined,
+				);
 				this.#projectFileSettings = structuredClone(projectSettings);
 				this.#quarantinedYamlTargets.delete(projectConfigPath);
 			});

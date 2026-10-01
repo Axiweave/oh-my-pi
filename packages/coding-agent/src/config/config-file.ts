@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { OmpErrors, type Type } from "@oh-my-pi/omptype";
-import { getAgentDir, isEnoent, logger, stringifyYamlConfig } from "@oh-my-pi/pi-utils";
-import { JSONC, YAML } from "bun";
+import { getAgentDir, isEnoent, logger, parseYamlConfig, stringifyYamlConfig } from "@oh-my-pi/pi-utils";
+import { JSONC } from "bun";
 
 /** Minimal subset of the AJV ConfigSchemaError shape this module actually relies on. */
 interface ConfigSchemaError {
@@ -239,7 +239,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 			if (readPath.endsWith(".json") || readPath.endsWith(".jsonc")) {
 				parsed = JSONC.parse(content);
 			} else if (readPath.endsWith(".yml") || readPath.endsWith(".yaml")) {
-				parsed = YAML.parse(content);
+				parsed = parseYamlConfig(content);
 			} else {
 				throw new Error(`Invalid config file path: ${readPath}`);
 			}
