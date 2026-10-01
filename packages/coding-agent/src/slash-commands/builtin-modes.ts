@@ -5,6 +5,7 @@ import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import {
 	formatModelString,
 	getModelMatchPreferences,
+	parsePrewalkKeepModel,
 	resolveCliModel,
 	type ResolveCliModelResult,
 } from "../config/model-resolver";
@@ -1076,13 +1077,20 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const arg = command.args.trim().toLowerCase();
 			if (arg && arg !== "restart") return usage("Usage: /prewalk [restart]", runtime);
 			const selector = cfgPrewalkInto.get(runtime.settings);
-			const target = resolveSessionModelSelector(selector, runtime.session, runtime.settings);
-			if (target.error || !target.model) {
-				return usage(target.error ?? `Model "${selector}" not found`, runtime);
+			// `@@` keeps the model that is active when the handoff runs; no catalog lookup.
+			const keep = parsePrewalkKeepModel(selector);
+			const resolvedTarget = keep
+				? undefined
+				: resolveSessionModelSelector(selector, runtime.session, runtime.settings);
+			if (resolvedTarget) {
+				if (resolvedTarget.error || !resolvedTarget.model) {
+					return usage(resolvedTarget.error ?? `Model "${selector}" not found`, runtime);
+				}
+				if (!runtime.session.modelRegistry.hasConfiguredAuth(resolvedTarget.model)) {
+					return usage(`No API key for ${resolvedTarget.model.provider}/${resolvedTarget.model.id}`, runtime);
+				}
 			}
-			if (!runtime.session.modelRegistry.hasConfiguredAuth(target.model)) {
-				return usage(`No API key for ${target.model.provider}/${target.model.id}`, runtime);
-			}
+			const targetThinkingLevel = keep ? keep.thinkingLevel : resolvedTarget?.thinkingLevel;
 			if (arg === "restart") {
 				const source = resolveSessionModelSelector("@default", runtime.session, runtime.settings);
 				if (source.error || !source.model) {
@@ -1091,25 +1099,29 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				if (!runtime.session.modelRegistry.hasConfiguredAuth(source.model)) {
 					return usage(`No API key for ${source.model.provider}/${source.model.id}`, runtime);
 				}
+				const targetModel = resolvedTarget?.model ?? source.model;
 				const result = await runtime.session.restartPrewalk(
 					source.model,
 					source.thinkingLevel,
-					target.model,
-					target.thinkingLevel,
+					targetModel,
+					targetThinkingLevel,
+					keep !== undefined,
 				);
 				if (result === "rejected") return commandConsumed();
 				const restartSource = `${source.model.provider}/${source.model.id}`;
 				await runtime.output(
 					result === "armed"
-						? `Prewalk restarted: using @default (${restartSource}) for planning, then switching to ${selector} (${target.model.provider}/${target.model.id}) at the next edit/write (todo-gated).`
-						: `Prewalk reset: using @default (${restartSource}); ${selector} resolves to the same model and thinking level, so no handoff was armed.`,
+						? `Prewalk restarted: using @default (${restartSource}) for planning, then ${keep ? "staying on" : `switching to ${selector}`} (${targetModel.provider}/${targetModel.id}) at the next edit/write (todo-gated).`
+						: `Prewalk reset: using @default (${restartSource}); ${selector} resolves to the same model and thinking level, so no handoff was armed. Set prewalk.into to @@ to plan first on the same model.`,
 				);
 				return commandConsumed();
 			}
-			const armed = runtime.session.armPrewalk(target.model, target.thinkingLevel);
+			const targetModel = resolvedTarget?.model ?? runtime.session.model;
+			if (!targetModel) return usage("No active model to keep for prewalk", runtime);
+			const armed = runtime.session.armPrewalk(targetModel, targetThinkingLevel, keep !== undefined);
 			if (armed) {
 				await runtime.output(
-					`Prewalk on: switching to ${target.model.provider}/${target.model.id} at the next edit/write (todo-gated).`,
+					`Prewalk on: ${keep ? "staying on" : "switching to"} ${targetModel.provider}/${targetModel.id} at the next edit/write (todo-gated).`,
 				);
 			}
 			return commandConsumed();

@@ -93,7 +93,7 @@ export const cfgPrewalkInto = register({
 		group: "Prewalk",
 		label: "Prewalk Target",
 		description:
-			"Model pattern or role the prewalk handoff switches to, e.g. @smol, @default, or openai/gpt-5-mini. Role aliases keep their fallback order. --prewalk-into overrides it per session.",
+			"Model pattern or role the prewalk handoff switches to, e.g. @smol, @default, or openai/gpt-5-mini. @@ keeps the starting model (@@:low changes only the thinking level). Role aliases keep their fallback order. --prewalk-into overrides it per session.",
 	},
 });
 

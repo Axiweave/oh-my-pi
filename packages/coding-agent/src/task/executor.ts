@@ -17,6 +17,7 @@ import { ModelRegistry } from "../config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
 	formatModelStringWithRouting,
+	parsePrewalkKeepModel,
 	resolveAgentAdvisorSelection,
 	resolveAgentPrewalkPattern,
 	resolveConfiguredModelPatterns,
@@ -3849,7 +3850,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				settingsOverride: cfgTaskAgentPrewalk.get(settings)[agent.name],
 				agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
 			});
-			if (prewalkPattern) {
+			// `@@` keeps the subagent's own resolved model; only an `@@:<level>` suffix changes effort.
+			const keepPrewalk = prewalkPattern ? parsePrewalkKeepModel(prewalkPattern) : undefined;
+			if (keepPrewalk) {
+				if (model) prewalk = { target: model, thinkingLevel: keepPrewalk.thinkingLevel, keepModel: true };
+				else logger.warn("Subagent prewalk has no resolved model to keep; skipping prewalk", { agent: agent.name });
+			} else if (prewalkPattern) {
 				await awaitAbortable(modelRegistry.awaitBackgroundRefresh());
 				const resolvedPrewalk = resolveModelOverride([prewalkPattern], modelRegistry, settings);
 				const target = resolvedPrewalk.model;

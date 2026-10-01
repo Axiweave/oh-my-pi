@@ -125,6 +125,7 @@ export class PrewalkCoordinator {
 	}
 
 	#isNoop(prewalk: Prewalk): boolean {
+		if (prewalk.keepModel) return false;
 		return prewalkWouldBeNoop(
 			this.#host.model(),
 			this.#host.configuredThinkingLevel(),
@@ -201,16 +202,19 @@ export class PrewalkCoordinator {
 			await this.#host.waitForSessionMessagePersistence(toolResult);
 		}
 		this.#scrubPlanNudge(liveMessages);
-		const target = prewalk.target;
 		if (this.#isNoop(prewalk)) {
 			this.#disarmNoop(prewalk);
 			return;
 		}
-		await this.#host.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
+		// `@@` keeps whatever model is active now; only an explicit `@@:<level>` touches the session.
+		const target = prewalk.keepModel ? (this.#host.model() ?? prewalk.target) : prewalk.target;
+		if (!prewalk.keepModel || prewalk.thinkingLevel !== undefined) {
+			await this.#host.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
+		}
 		this.#clearPrewalkState();
 		this.#host.emitNotice(
 			"info",
-			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
+			`Prewalk: ${prewalk.keepModel ? "staying on" : "switched to"} ${target.provider}/${target.id} after first ${action.toolName} call.`,
 			"prewalk",
 		);
 		this.#host.agent.steer({
@@ -237,7 +241,7 @@ export class PrewalkCoordinator {
 	}
 
 	/** Arms a prewalk immediately for an explicit slash-command request. */
-	arm(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
+	arm(target: Model, thinkingLevel?: ConfiguredThinkingLevel, keepModel?: boolean): boolean {
 		const active = this.#prewalk;
 		if (active) {
 			this.#host.emitNotice(
@@ -248,10 +252,11 @@ export class PrewalkCoordinator {
 			return (
 				active.target.provider === target.provider &&
 				active.target.id === target.id &&
-				active.thinkingLevel === thinkingLevel
+				active.thinkingLevel === thinkingLevel &&
+				!!active.keepModel === !!keepModel
 			);
 		}
-		const candidate = { target, thinkingLevel };
+		const candidate: Prewalk = keepModel ? { target, thinkingLevel, keepModel } : { target, thinkingLevel };
 		if (this.#isNoop(candidate)) {
 			this.#disarmNoop(candidate);
 			return false;
@@ -270,7 +275,9 @@ export class PrewalkCoordinator {
 		});
 		this.#host.emitNotice(
 			"info",
-			`Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
+			keepModel
+				? `Prewalk: armed to stay on ${target.provider}/${target.id} — will hand off at the first edit/write once the todo list exists.`
+				: `Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
 			"prewalk",
 		);
 		return true;
@@ -285,20 +292,22 @@ export class PrewalkCoordinator {
 		sourceThinkingLevel: ConfiguredThinkingLevel | undefined,
 		target: Model,
 		targetThinkingLevel: ConfiguredThinkingLevel | undefined,
+		keepModel?: boolean,
 	): Promise<PrewalkRestartResult> {
 		const active = this.#prewalk;
 		if (
 			active &&
 			(active.target.provider !== target.provider ||
 				active.target.id !== target.id ||
-				active.thinkingLevel !== targetThinkingLevel)
+				active.thinkingLevel !== targetThinkingLevel ||
+				!!active.keepModel !== !!keepModel)
 		) {
-			this.arm(target, targetThinkingLevel);
+			this.arm(target, targetThinkingLevel, keepModel);
 			return "rejected";
 		}
 
 		await this.#host.setModelTemporary(source, sourceThinkingLevel, { ephemeral: true });
-		if (!active) return this.arm(target, targetThinkingLevel) ? "armed" : "reset";
+		if (!active) return this.arm(target, targetThinkingLevel, keepModel) ? "armed" : "reset";
 		if (this.#isNoop(active)) {
 			this.#scrubPlanNudge();
 			this.#disarmNoop(active);

@@ -40,6 +40,7 @@ import {
 	disabledProviderIds,
 	expandRoleAlias,
 	getModelMatchPreferences,
+	parsePrewalkKeepModel,
 	resolveCliModel,
 	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
@@ -1529,35 +1530,41 @@ export async function buildSessionOptions(
 			: !restoringSession && cfgPrewalkEnabled.get(activeSettings);
 	if (prewalkEnabled) {
 		const target = parsed.prewalkInto ?? cfgPrewalkInto.get(activeSettings);
-		// `--model` mutates only the session default role. Resolve prewalk
-		// aliases against the pre-mutation default while leaving all other
-		// role lookups live.
-		const preModelOverrideRoleLookup = {
-			getModelRole: (role: string) =>
-				role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
-		};
-
-		// Bare `default` is a backwards-compatible special selector handled
-		// by expandRoleAlias rather than the prefixed role-alias grammar.
-		const targetSelector = target.trim() === "default" ? expandRoleAlias(target, preModelOverrideRoleLookup) : target;
-		const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, preModelOverrideRoleLookup);
-		const targetPatterns = configuredPatterns.length > 0 ? configuredPatterns : [targetSelector];
-
-		const selection = await resolvePrewalkTarget(
-			targetPatterns,
-			target,
-			modelRegistry,
-			modelMatchPreferences,
-			disabledProviders,
-			{ deferUnregistered: true },
-		);
-		if (selection.deferred) {
-			// Preserve role fallback order until extensions have registered their providers.
-			options.deferredPrewalk = { target, patterns: targetPatterns };
+		if (parsePrewalkKeepModel(target)) {
+			// `@@` keeps the startup model, which createAgentSession picks later.
+			options.deferredPrewalk = { target, patterns: [] };
 		} else {
-			options.prewalk = selection.prewalk;
-			for (const warning of selection.warnings) {
-				process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+			// `--model` mutates only the session default role. Resolve prewalk
+			// aliases against the pre-mutation default while leaving all other
+			// role lookups live.
+			const preModelOverrideRoleLookup = {
+				getModelRole: (role: string) =>
+					role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
+			};
+
+			// Bare `default` is a backwards-compatible special selector handled
+			// by expandRoleAlias rather than the prefixed role-alias grammar.
+			const targetSelector =
+				target.trim() === "default" ? expandRoleAlias(target, preModelOverrideRoleLookup) : target;
+			const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, preModelOverrideRoleLookup);
+			const targetPatterns = configuredPatterns.length > 0 ? configuredPatterns : [targetSelector];
+
+			const selection = await resolvePrewalkTarget(
+				targetPatterns,
+				target,
+				modelRegistry,
+				modelMatchPreferences,
+				disabledProviders,
+				{ deferUnregistered: true },
+			);
+			if (selection.deferred) {
+				// Preserve role fallback order until extensions have registered their providers.
+				options.deferredPrewalk = { target, patterns: targetPatterns };
+			} else {
+				options.prewalk = selection.prewalk;
+				for (const warning of selection.warnings) {
+					process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+				}
 			}
 		}
 	}

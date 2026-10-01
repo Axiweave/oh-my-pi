@@ -38,6 +38,20 @@ omp --prewalk-into openai/gpt-5-mini
 
 At startup, OMP resolves the target with the normal model-role and model-matching rules. A role tries its configured models in order and uses the first one with credentials. `@default` means the `default` role from your config, also when `--model` sets the starting model. If the target cannot be resolved or has no configured credentials, OMP prints a warning and starts with prewalk unarmed.
 
+### Keep the starting model: `@@`
+
+The special target `@@` means "the model that the session or subagent starts on". Prewalk still runs its full flow: the planning nudge, the todo gate, and the checklist at the handoff. The handoff does not change the model. Use `@@:<level>`, for example `@@:low`, to keep the model and change only the thinking level at the handoff.
+
+```yaml
+prewalk:
+  into: "@@"
+task:
+  agentPrewalk:
+    task: "@@"
+```
+
+A normal target that resolves to the same model and thinking level is a no-op, and OMP disarms it. `@@` is never a no-op.
+
 ## Handoff trigger
 
 An armed prewalk injects a planning nudge. When the `todo` tool is active, any successful `todo` call—including the read-only `view` operation—opens the handoff gate. OMP then switches models after the first completed `edit` or `write` call.

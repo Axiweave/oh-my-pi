@@ -67,6 +67,7 @@ import {
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
+	parsePrewalkKeepModel,
 	type ModelMatchPreferences,
 	parseModelPattern,
 	pickDefaultAvailableModel,
@@ -3203,21 +3204,27 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		if (deferredPrewalk) {
 			const { target, patterns } = deferredPrewalk;
-			const discoveryInFlight = runtimeDiscoveryPromise;
-			const selection = await resolvePrewalkTarget(
-				patterns,
-				target,
-				modelRegistry,
-				modelMatchPreferences,
-				disabledProviderIds(settings),
-				{ beforeRefresh: discoveryInFlight ? () => discoveryInFlight : undefined },
-			);
-			prewalk = selection.prewalk;
-			deferredPrewalk = undefined;
-			for (const warning of selection.warnings) {
-				logger.warn("Prewalk startup warning", { warning });
-				options.onPrewalkWarning?.(warning);
+			const keep = parsePrewalkKeepModel(target);
+			if (keep) {
+				// `@@`: hand off from the startup model to itself, optionally at another thinking level.
+				prewalk = model ? { target: model, thinkingLevel: keep.thinkingLevel, keepModel: true } : undefined;
+			} else {
+				const discoveryInFlight = runtimeDiscoveryPromise;
+				const selection = await resolvePrewalkTarget(
+					patterns,
+					target,
+					modelRegistry,
+					modelMatchPreferences,
+					disabledProviderIds(settings),
+					{ beforeRefresh: discoveryInFlight ? () => discoveryInFlight : undefined },
+				);
+				prewalk = selection.prewalk;
+				for (const warning of selection.warnings) {
+					logger.warn("Prewalk startup warning", { warning });
+					options.onPrewalkWarning?.(warning);
+				}
 			}
+			deferredPrewalk = undefined;
 		}
 
 		if (model) {

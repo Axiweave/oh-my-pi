@@ -95,6 +95,8 @@ export type { ShakeMode, ShakeResult } from "./shake-types";
 export interface Prewalk {
 	target: Model;
 	thinkingLevel?: ConfiguredThinkingLevel;
+	/** `@@` target: stay on the active model at the handoff, still running the plan/todo/checklist flow. */
+	keepModel?: boolean;
 }
 
 /**

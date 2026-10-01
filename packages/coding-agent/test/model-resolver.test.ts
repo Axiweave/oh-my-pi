@@ -14,6 +14,7 @@ import {
 	resolveAgentAdvisorSelection,
 	resolveAgentModelPatterns,
 	resolveAgentModelSelection,
+	parsePrewalkKeepModel,
 	resolveAgentPrewalkPattern,
 	resolveAllowedModels,
 	resolveCliModel,
@@ -1098,6 +1099,19 @@ describe("resolveAgentPrewalkPattern", () => {
 	test("blank override falls through to the agent definition", () => {
 		expect(resolveAgentPrewalkPattern({ settingsOverride: "  ", agentPrewalk: true })).toBe("@smol");
 		expect(resolveAgentPrewalkPattern({ settingsOverride: "", agentPrewalk: false })).toBeUndefined();
+	});
+});
+describe("parsePrewalkKeepModel", () => {
+	test("accepts only @@ with an optional valid thinking level", () => {
+		expect(parsePrewalkKeepModel("@@")).toEqual({});
+		expect(parsePrewalkKeepModel(" @@ ")).toEqual({});
+		expect(parsePrewalkKeepModel("@@:low")).toEqual({ thinkingLevel: Effort.Low });
+		expect(parsePrewalkKeepModel("@@:auto")).toEqual({ thinkingLevel: "auto" });
+		expect(parsePrewalkKeepModel("@@:bogus")).toBeUndefined();
+		expect(parsePrewalkKeepModel("@@:")).toBeUndefined();
+		expect(parsePrewalkKeepModel("@@@")).toBeUndefined();
+		expect(parsePrewalkKeepModel("@smol")).toBeUndefined();
+		expect(parsePrewalkKeepModel("")).toBeUndefined();
 	});
 });
 describe("resolveAgentAdvisorSelection", () => {

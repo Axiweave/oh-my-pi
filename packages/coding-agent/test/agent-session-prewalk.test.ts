@@ -872,6 +872,66 @@ describe("AgentSession prewalk", () => {
 		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("Prewalk reset"));
 	});
 
+	it("/prewalk restart with prewalk.into @@ arms a plan-first handoff on the @default model", async () => {
+		// User scenario: target equals @default. A normal target is a no-op reset;
+		// `@@` must still arm so the session plans before it implements.
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const mock = createMockModel({
+			responses: [toolCall("todo", "todo"), toolCall("write", "write"), { content: ["done"] }],
+		});
+		const requested: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [todoTool as AgentTool, writeTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				requested.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		const settings = Settings.isolated({ "compaction.enabled": false, "prewalk.into": "@@" });
+		settings.setModelRole("default", `${primary.provider}/${primary.id}:medium`);
+		const sessionManager = SessionManager.inMemory();
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			toolRegistry,
+			thinkingLevel: Effort.Medium,
+		});
+		const notices: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "notice" && event.source === "prewalk") notices.push(event.message);
+		});
+		const showStatus = vi.fn();
+		const ctx = {
+			session,
+			sessionManager,
+			settings,
+			collabGuest: false,
+			showStatus,
+			editor: { setText: vi.fn() },
+			refreshSlashCommandState: vi.fn(),
+		} as unknown as InteractiveModeContext;
+
+		expect(await executeBuiltinSlashCommand("/prewalk restart", { ctx })).toBe(true);
+		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("Prewalk restarted"));
+		expect(session.getPrewalkState()?.keepModel).toBe(true);
+
+		await session.prompt("task");
+		expect(requested.every(model => model === `${primary.provider}/${primary.id}`)).toBe(true);
+		expect(session.thinkingLevel).toBe(Effort.Medium);
+		expect(session.getPrewalkState()).toBeUndefined();
+		expect(notices).toContain(`Prewalk: staying on ${primary.provider}/${primary.id} after first write call.`);
+	});
+
 	it("requires a fresh todo before a later explicit prewalk can hand off", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
@@ -1010,6 +1070,59 @@ describe("AgentSession prewalk", () => {
 		expect(session.thinkingLevel).toBe(Effort.Medium);
 		// The no-op is announced, not silent.
 		expect(notices.some(message => message.includes("nothing to switch"))).toBe(true);
+	});
+
+	it("a keepModel (@@) prewalk runs the plan/todo flow and hands off without changing model or effort", async () => {
+		// Same model and effort would be a no-op for a normal target; `@@` must still
+		// nudge, wait for the todo gate, and hand off at the first post-todo write.
+		const model = modelOrThrow("claude-sonnet-4-5");
+
+		const mock = createMockModel({
+			responses: [
+				toolCall("t1", "record"),
+				toolCall("t2", "write"),
+				toolCall("t3", "todo"),
+				toolCall("t4", "write"),
+				{ content: ["done"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [recordTool as AgentTool, writeTool as AgentTool, todoTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (streamModel, _context, options) => mock.stream(streamModel, _context, options),
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			thinkingLevel: Effort.Medium,
+			prewalk: { target: model, keepModel: true },
+		});
+		const notices: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "notice" && event.source === "prewalk") notices.push(event.message);
+		});
+
+		await session.prompt("do the task");
+
+		expect(session.model?.id).toBe(model.id);
+		expect(session.thinkingLevel).toBe(Effort.Medium);
+		expect(session.getPrewalkState()).toBeUndefined();
+		expect(notices.some(message => message.includes("nothing to switch"))).toBe(false);
+		expect(notices.some(message => message.includes("deep-plan nudge"))).toBe(true);
+		// Only the post-todo write hands off; the pre-todo write keeps the gate closed.
+		expect(notices.filter(message => message.includes("staying on"))).toEqual([
+			`Prewalk: staying on ${model.provider}/${model.id} after first write call.`,
+		]);
 	});
 
 	it("treats a target effort the model clamps back to the active effort as a no-op", async () => {

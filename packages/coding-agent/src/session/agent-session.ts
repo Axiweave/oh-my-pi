@@ -118,6 +118,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { validateModelRoleConfiguration } from "../config/model-roles";
 import {
 	getModelMatchPreferences,
+	parsePrewalkKeepModel,
 	isReviewPlanActive,
 	type ResolvedModelRoleValue,
 	resolveCliModel,
@@ -1439,8 +1440,8 @@ export class AgentSession implements SettingsScope {
 	/**
 	 * Arm prewalk outside the normal startup path so an explicit slash command starts immediately.
 	 */
-	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
-		return this.#prewalk.arm(target, thinkingLevel);
+	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel, keepModel?: boolean): boolean {
+		return this.#prewalk.arm(target, thinkingLevel, keepModel);
 	}
 
 	/** Restore a planning model and re-arm prewalk without partially applying a rejected restart. */
@@ -1449,8 +1450,9 @@ export class AgentSession implements SettingsScope {
 		sourceThinkingLevel: ConfiguredThinkingLevel | undefined,
 		target: Model,
 		targetThinkingLevel: ConfiguredThinkingLevel | undefined,
+		keepModel?: boolean,
 	): Promise<PrewalkRestartResult> {
-		return this.#prewalk.restart(source, sourceThinkingLevel, target, targetThinkingLevel);
+		return this.#prewalk.restart(source, sourceThinkingLevel, target, targetThinkingLevel, keepModel);
 	}
 
 	/** Validate the active plan artifact and prepare its host-independent proposal outcome. */
@@ -2589,6 +2591,12 @@ export class AgentSession implements SettingsScope {
 			}
 			if (this.#prewalk.state) return;
 			const selector = cfgPrewalkInto.get(this.settings);
+			const keep = parsePrewalkKeepModel(selector);
+			if (keep) {
+				if (this.model) this.#prewalk.arm(this.model, keep.thinkingLevel, true);
+				else this.emitNotice("warning", "Prewalk not armed: no active model to keep.", "prewalk");
+				return;
+			}
 			const scoped = this.scopedModels.map(entry => entry.model);
 			const resolved = resolveCliModel({
 				cliModel: selector,

@@ -1388,6 +1388,18 @@ export function resolveAgentModelPatterns(options: AgentModelPatternResolutionOp
 /** Default prewalk hand-off target when no explicit target is configured. */
 export const DEFAULT_PREWALK_TARGET = "@smol";
 
+/** Prewalk selector that keeps the starting model: `@@`, or `@@:<level>` to change only the thinking level. */
+export const PREWALK_KEEP_MODEL = "@@";
+
+/** Parses a `@@` prewalk selector; `undefined` for any other selector or an invalid level. */
+export function parsePrewalkKeepModel(selector: string): { thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const trimmed = selector.trim();
+	if (trimmed === PREWALK_KEEP_MODEL) return {};
+	if (!trimmed.startsWith(`${PREWALK_KEEP_MODEL}:`)) return undefined;
+	const thinkingLevel = parseConfiguredThinkingLevel(trimmed.slice(PREWALK_KEEP_MODEL.length + 1));
+	return thinkingLevel === undefined ? undefined : { thinkingLevel };
+}
+
 export interface AgentPrewalkResolutionOptions {
 	/** `task.agentPrewalk` settings value for this agent: `"on"`, `"off"`, or a model pattern. */
 	settingsOverride?: string;
