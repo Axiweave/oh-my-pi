@@ -325,6 +325,16 @@ describe("disposeTerminalTitleState", () => {
 		}
 	});
 
+	it("writes the static working title once and never ticks", () => {
+		setTerminalTitleSpinnerStyle("static");
+		resetObserved(writes, windowsTitleMock);
+		setTerminalTitleState("working");
+
+		vi.advanceTimersByTime(1000);
+
+		expect(observedTitles(writes, windowsTitleMock)).toEqual(["π : my-project"]);
+	});
+
 	it("releases the latch and re-arms a live spinner when the terminal is claimed again", () => {
 		// CONTRACT: the latch is teardown-scoped, not permanent. Claiming the
 		// terminal again owns the title, so it must resume — including a LIVE

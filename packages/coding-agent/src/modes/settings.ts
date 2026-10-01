@@ -482,7 +482,7 @@ export const cfgTuiTitleState = register({
 export const cfgTuiTitleSpinner = register({
 	id: "tui.titleSpinner",
 	type: "enum",
-	values: ["braille", "pulse", "dots", "line"] as const,
+	values: ["braille", "pulse", "dots", "line", "static"] as const,
 	default: "braille",
 	ui: {
 		tab: "appearance",
@@ -495,6 +495,7 @@ export const cfgTuiTitleSpinner = register({
 			{ value: "pulse", label: "Pulse", description: "Moon filling ○◑● then emptying" },
 			{ value: "dots", label: "Dots", description: "Single braille dots cycling" },
 			{ value: "line", label: "Line", description: "ASCII - \\ | / for fonts without braille coverage" },
+			{ value: "static", label: "Static", description: "Fixed ':' written once when work starts, no animation" },
 		],
 	},
 });

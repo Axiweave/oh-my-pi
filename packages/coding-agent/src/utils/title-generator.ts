@@ -723,20 +723,21 @@ export function setExtensionTerminalTitle(title: string): void {
 
 export type TerminalTitleState = "idle" | "working" | "attention";
 
-export type TerminalTitleSpinnerStyle = "braille" | "pulse" | "dots" | "line";
+export type TerminalTitleSpinnerStyle = "braille" | "pulse" | "dots" | "line" | "static";
 
 /**
  * Working-state spinner frames per `tui.titleSpinner` style. `braille` is the
  * historical default; `pulse` fills and empties a moon; `dots` cycles single
  * braille dots; `line` is plain ASCII (`- \ | /`) for fonts without braille
- * coverage. Every frame is a single column so the separator never reflows the
- * title.
+ * coverage; `static` is a single `:` written once with no timer. Every frame is
+ * a single column so the separator never reflows the title.
  */
 export const TERMINAL_TITLE_SPINNER_STYLES: Record<TerminalTitleSpinnerStyle, readonly string[]> = {
 	braille: SPINNER_FRAMES.unicode.activity,
 	pulse: ["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"],
 	dots: ["⠁", "⠂", "⠄", "⠠", "⠐", "⠈"],
 	line: ["-", "\\", "|", "/"],
+	static: [":"],
 };
 
 /** WSL stdout still crosses ConPTY at the `wslhost` boundary, so its working title stays static (`:`). */
@@ -882,6 +883,7 @@ function startTerminalTitleSpinner(): void {
 	if (
 		isNativeRendering() ||
 		isStaticTitleHost() ||
+		terminalTitleRuntime.style === "static" ||
 		terminalTitleRuntime.disposed ||
 		terminalTitleRuntime.timer ||
 		terminalTitleRuntime.nativeTitleFailed ||
@@ -927,7 +929,9 @@ export function setTerminalTitleStateEnabled(enabled: boolean): void {
  */
 export function setTerminalTitleSpinnerStyle(style: string | undefined): void {
 	const next: TerminalTitleSpinnerStyle =
-		style === "braille" || style === "pulse" || style === "dots" || style === "line" ? style : "braille";
+		style === "braille" || style === "pulse" || style === "dots" || style === "line" || style === "static"
+			? style
+			: "braille";
 	if (next === terminalTitleRuntime.style) return;
 	terminalTitleRuntime.style = next;
 	terminalTitleRuntime.frame = 0;
