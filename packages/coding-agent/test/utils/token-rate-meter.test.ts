@@ -48,6 +48,26 @@ describe("TokenRateMeter", () => {
 		expect(meter.rate(10_000)).toBeLessThan(100);
 	});
 
+	it("is live only while a message streams, and the reading holds after it ends", () => {
+		const meter = new TokenRateMeter(words);
+		expect(meter.live).toBe(false);
+		meter.begin(0);
+		expect(meter.live).toBe(true);
+		stream(meter, 0, 10_000, 6);
+		meter.end(600, 10_000);
+		expect(meter.live).toBe(false);
+		expect(meter.rate(70_000)).toBeCloseTo(60, 0);
+
+		const implicit = new TokenRateMeter(words);
+		implicit.push("w w", 0);
+		expect(implicit.live).toBe(true);
+		implicit.reset();
+		expect(implicit.live).toBe(false);
+		implicit.begin(0);
+		implicit.seed(600, 10_000);
+		expect(implicit.live).toBe(false);
+	});
+
 	it("holds across tool execution and is only nudged by a short burst", () => {
 		const meter = new TokenRateMeter(words);
 		const clock = settle(meter, 6);

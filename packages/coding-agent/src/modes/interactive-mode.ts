@@ -936,6 +936,8 @@ export function describeSubagentHud(sessions: ObservableSession[]): NativeNode {
 }
 
 const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
+/** Longest gap between subagent rate redraws while one streams; under 1s so drift never skips a second. */
+const SUBAGENT_HUD_RATE_REFRESH_MS = 500;
 
 /** Item rows a collapsed jump list shows before the expander. */
 const SUBAGENT_HUD_COLLAPSED_LIMIT = 3;
@@ -974,6 +976,12 @@ export function layoutPinnedHud(runningTotal: number, expanded: boolean): Pinned
 	};
 }
 
+/** A subagent's generation rate for the HUD: live while a message streams, else the held last reading. */
+export interface SubagentRate {
+	rate: number;
+	live: boolean;
+}
+
 /**
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
  * a bounded set of running-agent rows in the same `Id ⟨role⟩: description` shape
@@ -982,9 +990,16 @@ export function layoutPinnedHud(runningTotal: number, expanded: boolean): Pinned
  * `renderTreeList` rows (dim connectors) shifted right by one space.
  * Every active subagent is listed — detached background spawns and sync task
  * calls alike — so the pinned block doubles as a click jump list.
+ * `rateOf` adds each agent's tok/s after its id (muted live, dim held, dropped
+ * whole when it does not fit) and the live total to the header.
  * Returns an empty array when nothing is running so the container can clear.
  */
-export function renderSubagentHudLines(sessions: ObservableSession[], columns: number, expanded = false): string[] {
+export function renderSubagentHudLines(
+	sessions: ObservableSession[],
+	columns: number,
+	expanded = false,
+	rateOf?: (id: string) => SubagentRate | undefined,
+): string[] {
 	const running = sessions.filter(isHudSubagent);
 	if (running.length === 0) return [];
 	const layout = layoutPinnedHud(running.length, expanded);
@@ -998,16 +1013,20 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 			expanded: true,
 			renderItem: (session, context) => {
 				const rowWidth = Math.max(0, columns - visibleWidth(outerIndent) - (context.prefixWidth ?? 0));
+				const dotWidth = visibleWidth(`${dot} `);
+				const rate = rateOf?.(session.id);
+				const rateText = rate ? `${theme.icon.throughput} ${rate.rate.toFixed(1)}` : "";
+				// Reserve the rate's columns before the id and badges shrink, so it stays whole.
+				const rateReserve =
+					rateText && dotWidth + 1 + visibleWidth(rateText) <= rowWidth ? 1 + visibleWidth(rateText) : 0;
+				const headWidth = rowWidth - rateReserve;
 				const role = session.agent ?? session.progress?.agent;
-				const displayId = truncateToWidth(
-					formatTaskId(session.id),
-					Math.max(0, rowWidth - visibleWidth(`${dot} `)),
-				);
+				const displayId = truncateToWidth(formatTaskId(session.id), Math.max(0, headWidth - dotWidth));
 				const badge = truncateToWidth(
 					agentTypeBadge(role, theme),
-					Math.max(0, rowWidth - visibleWidth(`${dot} ${displayId}`)),
+					Math.max(0, headWidth - visibleWidth(`${dot} ${displayId}`)),
 				);
-				const titleBudget = Math.max(0, rowWidth - visibleWidth(`${dot} ${displayId}${badge}`));
+				const titleBudget = Math.max(0, headWidth - visibleWidth(`${dot} ${displayId}${badge}`));
 				const modelBadge = showModelBadge
 					? formatFeedModelBadge(
 							session.progress?.resolvedModelIdentity ?? session.progress?.resolvedModel,
@@ -1019,6 +1038,7 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 					: "";
 				const modelLead = modelBadge ? `${modelBadge} ` : "";
 				let line = `${dot} ${modelLead}${theme.fg("accent", theme.bold(displayId))}${badge}`;
+				if (rate && rateReserve) line += ` ${theme.fg(rate.live ? "muted" : "dim", rateText)}`;
 				const description = session.description?.trim() || session.progress?.description?.trim();
 				const distinctDescription =
 					description && !labelEchoesHandle(session.id, description) ? description : undefined;
@@ -1056,9 +1076,19 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 						"",
 					),
 				];
+	let liveTotal = 0;
+	if (rateOf) {
+		for (const session of running) {
+			const rate = rateOf(session.id);
+			if (rate?.live) liveTotal += rate.rate;
+		}
+	}
+	const header = theme.bold(theme.fg("accent", "Subagents"));
+	const headerRate =
+		liveTotal > 0 ? `  ${theme.fg("dim", `${theme.icon.throughput} ${liveTotal.toFixed(1)} tok/s`)}` : "";
 	return [
 		"",
-		truncateToWidth(theme.bold(theme.fg("accent", "Subagents")), columns),
+		truncateToWidth(`${header}${headerRate}`, columns),
 		...rows.map(line => truncateToWidth(`${outerIndent}${line}`, columns, "")),
 		...toggleRow,
 	];
@@ -1234,7 +1264,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * turns, blank until a run has produced enough tokens to measure. */
 	#tokenRateLabel(): string | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
-		const rate = this.tokenRate.rate();
+		const rate = this.#workingRate();
 		if (rate === null) return undefined;
 		return theme.fg("dim", `${theme.icon.throughput} ${rate.toFixed(1)} tok/s`);
 	}
@@ -1272,8 +1302,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Live gen tok/s for the native working row, one decimal (a steadier `rate` target). */
 	#nativeTokenRate(): number | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
-		const rate = this.tokenRate.rate();
+		const rate = this.#workingRate();
 		return rate === null ? undefined : Math.round(rate * 10) / 10;
+	}
+	/** The working row's tok/s. A focused subagent that the Subagents block
+	 * lists reuses that block's reading, so both places show one number. */
+	#workingRate(): number | null {
+		const id = this.focusedAgentId;
+		if (id !== undefined && this.#subagentHudRates.has(id)) return this.#subagentHudRates.get(id)?.rate ?? null;
+		return this.tokenRate.rate();
 	}
 	/** The key that interrupts (the working row's stop control), or undefined when Esc would not cancel. */
 	maintenanceInterruptKey(): string | undefined {
@@ -1596,6 +1633,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Mirror of `tui.mouse`, read by the TUI's per-frame inline mouse tracking probe. */
 	#mouseCapture = false;
 	#observerUiSyncTimer?: NodeJS.Timeout;
+	#subagentRateTimer?: NodeJS.Timeout;
+	/** Subagents-block readings from the last HUD render, keyed by agent id; `undefined` = no reading. */
+	#subagentHudRates = new Map<string, SubagentRate | undefined>();
 	#observerUiSyncNeedsTodoReconcile = false;
 	#runningSubagentCount = 0;
 	#agentRegistryUnsubscribe?: () => void;
@@ -3997,6 +4037,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			clearTimeout(this.#observerUiSyncTimer);
 			this.#observerUiSyncTimer = undefined;
 		}
+		clearTimeout(this.#subagentRateTimer);
+		this.#subagentRateTimer = undefined;
 		this.#observerUiSyncNeedsTodoReconcile = false;
 	}
 
@@ -4284,18 +4326,46 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Anchored HUD of in-flight subagents, mirroring the Todos block above the
-	 * editor. Driven entirely by observer-registry change events, so rows appear
-	 * on spawn and the whole block clears itself once the last subagent leaves
-	 * the "active" state.
+	 * editor. Driven by observer-registry change events, so rows appear on spawn
+	 * and the whole block clears itself once the last subagent leaves the
+	 * "active" state. With `composer.tokenRate` on, each row carries its agent's
+	 * own meter. Progress frames redraw it on every streamed delta. While any
+	 * meter is live, a heartbeat that every render restarts covers silent spans
+	 * (hidden reasoning credits tokens with no deltas), so it fires only after
+	 * 500 ms without another redraw and lapses once no meter is live.
 	 */
 	#renderSubagentList(): void {
 		this.subagentContainer.clear();
+		this.#subagentHudRates.clear();
+		clearTimeout(this.#subagentRateTimer);
+		this.#subagentRateTimer = undefined;
 		const mode = cfgDisplayPinnedAgents.get(settings);
 		if (mode === "off") return;
 		const sessions = this.#observerRegistry.getSessions();
 		const running = sessions.filter(isHudSubagent);
 		const expanded = this.#pinnedHudOverride ?? mode === "full";
-		const lines = renderSubagentHudLines(sessions, this.ui.terminal.columns, expanded);
+		let anyLive = false;
+		const rateOf = cfgComposerTokenRate.get(settings)
+			? (id: string): SubagentRate | undefined => {
+					// One reading per agent and render: rows, header sum and the focused working row agree.
+					if (this.#subagentHudRates.has(id)) return this.#subagentHudRates.get(id);
+					const meter = AgentRegistry.global().get(id)?.session?.tokenRate;
+					if (meter?.live) anyLive = true;
+					const rate = meter?.rate();
+					const reading = meter && rate != null ? { rate, live: meter.live } : undefined;
+					this.#subagentHudRates.set(id, reading);
+					return reading;
+				}
+			: undefined;
+		const lines = renderSubagentHudLines(sessions, this.ui.terminal.columns, expanded, rateOf);
+		if (anyLive) {
+			this.#subagentRateTimer = setTimeout(() => {
+				this.#subagentRateTimer = undefined;
+				this.#renderSubagentList();
+				this.ui.requestRender();
+			}, SUBAGENT_HUD_RATE_REFRESH_MS);
+			this.#subagentRateTimer.unref?.();
+		}
 		if (lines.length === 0) return;
 		const layout = layoutPinnedHud(running.length, expanded);
 		const order = running.map(session => session.id);

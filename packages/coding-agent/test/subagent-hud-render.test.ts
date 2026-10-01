@@ -8,7 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as path from "node:path";
 import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resetHangulCompatibilityJamoWidthForTests, setHangulCompatibilityJamoWidth } from "@oh-my-pi/pi-tui";
 import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
 import {
@@ -16,7 +16,10 @@ import {
 	layoutPinnedHud,
 	renderSubagentHudLines,
 	SubagentHudComponent,
+	type SubagentRate,
 } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { cfgComposerTokenRate } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { type ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -486,6 +489,144 @@ describe("subagent HUD lines", () => {
 	});
 });
 
+describe("subagent HUD rates", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
+
+	const lookup =
+		(rates: Record<string, SubagentRate>) =>
+		(id: string): SubagentRate | undefined =>
+			rates[id];
+	const rateText = (rate: number) => `${theme.icon.throughput} ${rate.toFixed(1)}`;
+
+	it("shows a live rate after the id, muted, and a held rate dimmed", () => {
+		const sessions = [
+			makeSession({ id: "LiveWorker", description: "streaming" }),
+			makeSession({ id: "HeldWorker", description: "running a tool" }),
+			makeSession({ id: "NewWorker", description: "just started" }),
+		];
+		const rateOf = lookup({
+			LiveWorker: { rate: 32.46, live: true },
+			HeldWorker: { rate: 12.04, live: false },
+		});
+		const raw = renderSubagentHudLines(sessions, 120, false, rateOf);
+		const plain = raw.map(line => Bun.stripANSI(line));
+
+		expect(plain[2]).toContain(`LiveWorker ${rateText(32.46)}: streaming`);
+		expect(raw[2]).toContain(theme.fg("muted", rateText(32.46)));
+		expect(plain[3]).toContain(`HeldWorker ${rateText(12.04)}: running a tool`);
+		expect(raw[3]).toContain(theme.fg("dim", rateText(12.04)));
+		expect(plain[4]).toContain("NewWorker: just started");
+		expect(plain[4]).not.toContain(theme.icon.throughput);
+	});
+
+	it("renders exactly the old output when no rate is available", () => {
+		const sessions = Array.from({ length: 5 }, (_, index) =>
+			makeSession({ id: `Worker${index}`, description: `job ${index}` }),
+		);
+		for (const expanded of [false, true]) {
+			const before = renderSubagentHudLines(sessions, 120, expanded);
+			expect(renderSubagentHudLines(sessions, 120, expanded, () => undefined)).toEqual(before);
+		}
+	});
+
+	const SEED = 0x5eed_0007;
+	it(`keeps every line in width, shows a rate whole or not at all, and always at 60+ columns (seed ${SEED})`, async () => {
+		let state = SEED;
+		const random = () => {
+			state = (state + 0x6d2b79f5) | 0;
+			let t = Math.imul(state ^ (state >>> 15), 1 | state);
+			t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+		};
+		try {
+			for (const badges of [false, true]) {
+				resetSettingsForTest();
+				await Settings.init({ inMemory: true, overrides: { "task.showResolvedModelBadge": badges } });
+				for (let iteration = 0; iteration < 300; iteration++) {
+					const width = 30 + Math.floor(random() * 131);
+					const rate = Math.round((0.1 + random() * 9999.8) * 100) / 100;
+					const live = random() < 0.5;
+					const id = `Worker${"x".repeat(Math.floor(random() * 30))}`;
+					const description = "d".repeat(Math.floor(random() * 300));
+					const model = `provider/${"m".repeat(Math.floor(random() * 40))}`;
+					const progress = makeProgress({
+						id,
+						resolvedModel: `${model}:high`,
+						resolvedModelIdentity: model,
+						resolvedThinkingLevel: ThinkingLevel.High,
+						advisor: random() < 0.5,
+					});
+					const lines = renderSubagentHudLines(
+						[makeSession({ id, description, agent: "scout", progress })],
+						width,
+						false,
+						() => ({ rate, live }),
+					).map(line => Bun.stripANSI(line));
+					const context = `badges=${badges} iteration=${iteration} width=${width} rate=${rate} id=${id.length} model=${model.length}`;
+					for (const line of lines) expect(Bun.stringWidth(line), context).toBeLessThanOrEqual(width);
+					const row = lines[2]!;
+					const full = rateText(rate);
+					if (width >= 60) expect(row, context).toContain(full);
+					if (!row.includes(theme.icon.throughput)) continue;
+					const at = row.indexOf(full);
+					expect(at, context).toBeGreaterThanOrEqual(0);
+					const next = row[at + full.length];
+					expect(next === undefined || next === ":", context).toBe(true);
+				}
+			}
+		} finally {
+			resetSettingsForTest();
+		}
+	});
+
+	it("sums only live rates into the header, including collapsed rows", () => {
+		const sessions = Array.from({ length: 10 }, (_, index) =>
+			makeSession({ id: `Worker${index}`, description: `job ${index}` }),
+		);
+		const rates: Record<string, SubagentRate> = {};
+		let expected = 0;
+		for (let index = 0; index < 10; index++) {
+			const rate = 10 + index + 0.25;
+			if (index % 3 === 0) {
+				rates[`Worker${index}`] = { rate, live: true };
+				expected += rate;
+			} else if (index % 3 === 1) {
+				rates[`Worker${index}`] = { rate, live: false };
+			}
+		}
+		const header = Bun.stripANSI(renderSubagentHudLines(sessions, 120, false, lookup(rates))[1]!);
+		expect(header).toBe(`Subagents  ${rateText(expected)} tok/s`);
+
+		const heldOnly = lookup({ Worker0: { rate: 40, live: false } });
+		expect(Bun.stripANSI(renderSubagentHudLines(sessions, 120, false, heldOnly)[1]!)).toBe("Subagents");
+
+		const allLive = () => ({ rate: 1234.5, live: true });
+		for (let width = 10; width <= 160; width++) {
+			const line = Bun.stripANSI(renderSubagentHudLines(sessions, width, false, allLive)[1]!);
+			expect(Bun.stringWidth(line), `width=${width}`).toBeLessThanOrEqual(width);
+		}
+	});
+
+	it("uses the working-row throughput symbol of every symbol preset", async () => {
+		const sessions = [makeSession({ id: "PresetWorker", description: "job" })];
+		try {
+			for (const preset of ["unicode", "nerd", "ascii"] as const) {
+				await initTheme(false, preset);
+				const lines = renderSubagentHudLines(sessions, 120, false, () => ({ rate: 5, live: true })).map(line =>
+					Bun.stripANSI(line),
+				);
+				expect(lines[1], preset).toContain(`${theme.icon.throughput} 5.0 tok/s`);
+				expect(lines[2], preset).toContain(`PresetWorker ${theme.icon.throughput} 5.0`);
+				expect(lines.join("\n").includes("⚡"), preset).toBe(preset === "unicode");
+			}
+		} finally {
+			await initTheme();
+		}
+	});
+});
+
 describe("SubagentHudComponent click rows", () => {
 	beforeAll(async () => {
 		await initTheme();
@@ -675,5 +816,140 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		mode.applyPinnedAgentsSetting();
 		expect(hudText()).not.toContain("Override4");
 		expect(hudText()).toContain("more — expand");
+	});
+
+	it("reads each subagent's meter fresh on every progress frame, and shows no rate with the setting off", async () => {
+		cfgComposerTokenRate.set(settings, true);
+		await mode.init({ suppressWelcomeIntro: true });
+		const registry = AgentRegistry.global();
+		registry.register({ id: "RateWorker", displayName: "RateWorker", kind: "sub", session });
+		try {
+			vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
+			vi.useFakeTimers();
+			const meter = session.tokenRate;
+			const shownRate = (): number | undefined => {
+				const hud = Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
+				const marker = `RateWorker ${theme.icon.throughput} `;
+				const at = hud.indexOf(marker);
+				return at < 0 ? undefined : Number.parseFloat(hud.slice(at + marker.length));
+			};
+			const progressFrame = () => {
+				eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, makeProgressPayload("RateWorker", 0, "streaming job"));
+				vi.advanceTimersByTime(100);
+			};
+			const streamFor = (ms: number, wordsPerTick: number) => {
+				for (let elapsed = 0; elapsed < ms; elapsed += 100) {
+					meter.push("w ".repeat(wordsPerTick), Date.now());
+					vi.advanceTimersByTime(100);
+				}
+			};
+
+			meter.begin(Date.now());
+			streamFor(10_000, 6);
+			progressFrame();
+			const slow = shownRate();
+			expect(slow).toBeGreaterThan(0);
+
+			streamFor(10_000, 60);
+			progressFrame();
+			expect(shownRate()).toBeGreaterThan(slow! * 2);
+
+			cfgComposerTokenRate.set(settings, false);
+			progressFrame();
+			expect(shownRate()).toBeUndefined();
+		} finally {
+			registry.unregister("RateWorker");
+		}
+	});
+
+	it("redraws a live rate each second through silent spans, adds no redraws between frames, and stops after the stream ends", async () => {
+		cfgComposerTokenRate.set(settings, true);
+		await mode.init({ suppressWelcomeIntro: true });
+		const registry = AgentRegistry.global();
+		registry.register({ id: "RateWorker", displayName: "RateWorker", kind: "sub", session });
+		try {
+			vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
+			vi.useFakeTimers();
+			const meter = session.tokenRate;
+			meter.begin(Date.now());
+			for (let i = 0; i < 100; i++) {
+				meter.push("w ".repeat(6), Date.now());
+				vi.advanceTimersByTime(100);
+			}
+			eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("RateWorker", 0, "streaming job"));
+			vi.advanceTimersByTime(100);
+			const rebuildHud = vi.spyOn(mode.subagentContainer, "clear");
+
+			// Silent span: no deltas, no frames.
+			for (let second = 0; second < 3; second++) {
+				rebuildHud.mockClear();
+				vi.advanceTimersByTime(1_000);
+				expect(rebuildHud.mock.calls.length, `silent second ${second}`).toBeGreaterThanOrEqual(1);
+			}
+
+			// Frames every 200 ms: each frame rebuilds once, the heartbeat never adds one.
+			rebuildHud.mockClear();
+			for (let frame = 0; frame < 10; frame++) {
+				eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, makeProgressPayload("RateWorker", 0, "streaming job"));
+				vi.advanceTimersByTime(200);
+			}
+			expect(rebuildHud.mock.calls.length).toBeLessThanOrEqual(10);
+
+			meter.end(undefined);
+			// A heartbeat armed before end() may still fire once.
+			vi.advanceTimersByTime(500);
+			rebuildHud.mockClear();
+			vi.advanceTimersByTime(2_000);
+			expect(rebuildHud).not.toHaveBeenCalled();
+		} finally {
+			registry.unregister("RateWorker");
+		}
+	});
+
+	it("shows the focused subagent's working-row rate equal to its HUD row in every frame", async () => {
+		cfgComposerTokenRate.set(settings, true);
+		await mode.init({ suppressWelcomeIntro: true });
+		const modelRegistry = new ModelRegistry(authStorage);
+		const worker = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model: modelRegistry.find("anthropic", "claude-sonnet-4-5")!,
+					systemPrompt: ["Worker"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated({ "startup.quiet": true }),
+			modelRegistry,
+		});
+		const registry = AgentRegistry.global();
+		registry.register({ id: "RateWorker", displayName: "RateWorker", kind: "sub", session: worker });
+		try {
+			vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
+			await mode.focusAgentSession("RateWorker");
+			expect(mode.focusedAgentId).toBe("RateWorker");
+			vi.useFakeTimers();
+			const meter = worker.tokenRate;
+			const hudPattern = new RegExp(`RateWorker ${theme.icon.throughput} ([\\d.]+)`);
+			const workingPattern = new RegExp(`${theme.icon.throughput} ([\\d.]+) tok/s`);
+
+			meter.begin(Date.now());
+			eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("RateWorker", 0, "streaming job"));
+			// Bursts of varied size between HUD redraws: each frame must show one number in both places.
+			for (let step = 0; step < 120; step++) {
+				meter.push("w ".repeat(1 + ((step * 7) % 23)), Date.now());
+				vi.advanceTimersByTime(130);
+				if (step < 80) continue; // warm-up: the meter needs several seconds of stream for a reading
+				const hud = Bun.stripANSI(mode.subagentContainer.render(140).join("\n")).match(hudPattern)?.[1];
+				const working = Bun.stripANSI(mode.renderIdleStatusHud(140)?.join("\n") ?? "").match(workingPattern)?.[1];
+				expect(hud, `step ${step}`).toBeDefined();
+				expect(working, `step ${step}`).toBe(hud);
+			}
+		} finally {
+			await mode.unfocusSession();
+			registry.unregister("RateWorker");
+			await worker.dispose();
+		}
 	});
 });

@@ -4,6 +4,7 @@
 
 ### Added
 
+- With `composer.tokenRate` on, the pinned Subagents block shows each subagent's generation rate after its name, and the header shows the sum of the rates of the subagents that stream now. A subagent that runs a tool or waits keeps its last reading, dimmed. The rate uses the same throughput symbol as the working row, so it follows `symbolPreset`. While a subagent streams, the block redraws at least once each second, also through silent reasoning spans.
 - Added a `static` value for `tui.titleSpinner`. The terminal title shows a fixed `:` once when work starts and runs no animation timer.
 - Added the `config.hotReload` setting (default `false`). OMP no longer watches `config.yml`, project settings, and `--config` overlays for live edits by default. Set it to `true` to turn the watcher on. The change applies on the next launch.
 - Added the `/reload-config` command. It reloads `config.yml`, project settings, and `--config` overlays from disk on demand, also when `config.hotReload` is `false`. If a file is not valid, the command shows the error and keeps the current settings.

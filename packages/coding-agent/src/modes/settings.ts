@@ -159,7 +159,7 @@ export const cfgComposerTokenRate = register({
 		group: "Composer",
 		label: "Generation Rate",
 		description:
-			"Show a live generation tok/s readout on the working row, docked right next to the session title. Estimated from streamed deltas and corrected by the provider's billed output count as each message completes.",
+			"Show a live generation tok/s readout on the working row, docked right next to the session title, and each subagent's rate plus the live total in the pinned Subagents block. Estimated from streamed deltas and corrected by the provider's billed output count as each message completes.",
 	},
 });
 

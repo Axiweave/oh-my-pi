@@ -181,6 +181,11 @@ export class TokenRateMeter {
 		this.#count = count;
 	}
 
+	/** True while a message streams (between begin and end). */
+	get live(): boolean {
+		return this.#startedAt !== null;
+	}
+
 	/** Open a message at wall time `nowMs`; a message still open is dropped unbilled. */
 	begin(nowMs: number = Date.now()): void {
 		this.#clearInflight();
