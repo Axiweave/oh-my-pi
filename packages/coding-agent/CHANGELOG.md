@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the `config.hotReload` setting (default `false`). OMP no longer watches `config.yml`, project settings, and `--config` overlays for live edits by default. Set it to `true` to turn the watcher on. The change applies on the next launch.
 - Added the `/reload-config` command. It reloads `config.yml`, project settings, and `--config` overlays from disk on demand, also when `config.hotReload` is `false`. If a file is not valid, the command shows the error and keeps the current settings.
 - A resumed session now shows a warning when its model profile no longer names the session model for its role, for example after you edit the profile. The session keeps its model. The warning names the new model and the `/model-profile <name>` command. The interactive TUI also asks if you want to switch now. A resumed session whose recorded profile you deleted now shows a warning instead of dropping it silently.
 - After a turn ends, the working row shows the time of that turn beside the last tok/s reading. Before, the timer showed only while the agent ran. The `tui.workingTimer` and `tui.workingTimerMinSeconds` settings apply to it. `/clear` resets it.

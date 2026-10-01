@@ -136,6 +136,7 @@ import { cfgToolsApprovalMode } from "./tools/settings";
 import {
 	cfgAutocompleteMaxVisible,
 	cfgAutoResume,
+	cfgConfigHotReload,
 	cfgColorBlindMode,
 	cfgComposerShape,
 	cfgDisplayStreamingScrollback,
@@ -2524,7 +2525,7 @@ export async function runRootCommand(
 				process.exit(1);
 			}
 
-			if (mode === "rpc" || mode === "rpc-ui" || isInteractive) {
+			if ((mode === "rpc" || mode === "rpc-ui" || isInteractive) && cfgConfigHotReload.get(settingsInstance)) {
 				// Long-lived hosts apply on-disk config edits (config.yml, project
 				// settings, `--config` overlays) live. No-op unless this is the
 				// persisting process-global instance.

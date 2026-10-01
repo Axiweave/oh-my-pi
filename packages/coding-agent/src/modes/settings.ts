@@ -1122,6 +1122,19 @@ export const cfgStartupCheckUpdate = register({
 	},
 });
 
+export const cfgConfigHotReload = register({
+	id: "config.hotReload",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "interaction",
+		group: "Startup & Updates",
+		label: "Hot-Reload Config",
+		description:
+			"Watch config.yml, project settings, and --config overlays and apply on-disk edits live. Changes take effect on the next launch. Use /reload-config to reload on demand.",
+	},
+});
+
 export const cfgUpdateChannel = register({
 	id: "update.channel",
 	type: "enum",
