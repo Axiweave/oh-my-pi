@@ -932,6 +932,63 @@ describe("AgentSession prewalk", () => {
 		expect(notices).toContain(`Prewalk: staying on ${primary.provider}/${primary.id} after first write call.`);
 	});
 
+	it("/prewalk off drops a pending handoff so a later todo + write stays on the active model", async () => {
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const mock = createMockModel({
+			responses: [toolCall("todo", "todo"), toolCall("write", "write"), { content: ["done"] }],
+		});
+		const requested: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [todoTool as AgentTool, writeTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				requested.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const sessionManager = SessionManager.inMemory();
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			toolRegistry,
+			thinkingLevel: Effort.Medium,
+			prewalk: { target },
+		});
+		const showStatus = vi.fn();
+		const ctx = {
+			session,
+			sessionManager,
+			settings,
+			collabGuest: false,
+			showStatus,
+			editor: { setText: vi.fn() },
+			refreshSlashCommandState: vi.fn(),
+		} as unknown as InteractiveModeContext;
+
+		expect(await executeBuiltinSlashCommand("/prewalk off", { ctx })).toBe(true);
+		expect(session.getPrewalkState()).toBeUndefined();
+		expect(showStatus).not.toHaveBeenCalledWith("Prewalk: nothing armed.");
+
+		await session.prompt("task");
+		expect(requested.every(model => model === `${primary.provider}/${primary.id}`)).toBe(true);
+		expect(session.model?.id).toBe(primary.id);
+
+		// A second off has nothing to drop and says so.
+		expect(await executeBuiltinSlashCommand("/prewalk off", { ctx })).toBe(true);
+		expect(showStatus).toHaveBeenCalledWith("Prewalk: nothing armed.");
+	});
+
 	it("requires a fresh todo before a later explicit prewalk can hand off", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");

@@ -1066,16 +1066,22 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "prewalk",
 		icon: "prewalk",
-		description: "Arm or restart a one-shot model handoff",
+		description: "Arm, restart, or drop a one-shot model handoff",
 		allowArgs: true,
-		acpDescription: "Arm or restart prewalk",
-		acpInputHint: "[restart]",
+		acpDescription: "Arm, restart, or drop prewalk",
+		acpInputHint: "[restart|off]",
 		subcommands: [
 			{ name: "restart", description: "Return to @default and re-arm the handoff to the prewalk.into target" },
+			{ name: "off", description: "Drop the pending handoff and stay on the active model" },
 		],
 		handle: async (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();
-			if (arg && arg !== "restart") return usage("Usage: /prewalk [restart]", runtime);
+			if (arg && arg !== "restart" && arg !== "off") return usage("Usage: /prewalk [restart|off]", runtime);
+			if (arg === "off") {
+				// The coordinator announces a real disarm; only the nothing-armed case needs output here.
+				if (!runtime.session.disarmPrewalk()) await runtime.output("Prewalk: nothing armed.");
+				return commandConsumed();
+			}
 			const selector = cfgPrewalkInto.get(runtime.settings);
 			// `@@` keeps the model that is active when the handoff runs; no catalog lookup.
 			const keep = parsePrewalkKeepModel(selector);

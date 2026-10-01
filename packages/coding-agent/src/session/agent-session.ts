@@ -1444,6 +1444,13 @@ export class AgentSession implements SettingsScope {
 		return this.#prewalk.arm(target, thinkingLevel, keepModel);
 	}
 
+	/** Drop a pending prewalk handoff for this session; false when none was armed. */
+	disarmPrewalk(): boolean {
+		if (!this.#prewalk.state) return false;
+		this.#prewalk.disarm();
+		return true;
+	}
+
 	/** Restore a planning model and re-arm prewalk without partially applying a rejected restart. */
 	restartPrewalk(
 		source: Model,
