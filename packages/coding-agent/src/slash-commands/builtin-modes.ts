@@ -19,7 +19,7 @@ import { handleSecurityCommand } from "./helpers/security";
 import type { ParsedSlashCommand, SlashCommandSpec, TuiSlashCommandRuntime } from "./types";
 
 import { cfgComputerDisplay, cfgComputerEnabled, cfgComputerMaxHeight, cfgComputerMaxWidth } from "../tools/settings";
-import { cfgPrewalkInto, cfgSkillful } from "../session/settings";
+import { cfgPrewalkArmNotice, cfgPrewalkInto, cfgSkillful } from "../session/settings";
 import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
@@ -1125,7 +1125,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const targetModel = resolvedTarget?.model ?? runtime.session.model;
 			if (!targetModel) return usage("No active model to keep for prewalk", runtime);
 			const armed = runtime.session.armPrewalk(targetModel, targetThinkingLevel, keep !== undefined);
-			if (armed) {
+			if (armed && cfgPrewalkArmNotice.get(runtime.settings)) {
 				await runtime.output(
 					`Prewalk on: ${keep ? "staying on" : "switching to"} ${targetModel.provider}/${targetModel.id} at the next edit/write (todo-gated).`,
 				);

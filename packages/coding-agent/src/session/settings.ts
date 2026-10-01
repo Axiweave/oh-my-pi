@@ -97,6 +97,18 @@ export const cfgPrewalkInto = register({
 	},
 });
 
+export const cfgPrewalkArmNotice = register({
+	id: "prewalk.armNotice",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Prewalk Arm Notice",
+		description: "Show a notice when prewalk arms (/prewalk, its keybinding, or turning prewalk.enabled on).",
+	},
+});
+
 function isLimitRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -78,6 +78,8 @@ If prewalk is already armed, the command leaves the existing target in place. To
 
 `/prewalk off` drops a pending handoff for this session. The session stays on the active model, and the planning nudge is removed. It does not change `prewalk.enabled`, so the next session still starts with prewalk when that setting is `true`.
 
+`/prewalk`, the `app.prewalk.toggle` key, and turning `prewalk.enabled` on show an "armed" notice. Set `prewalk.armNotice: false` to hide it.
+
 ## Subagent prewalk
 
 Task subagents have separate prewalk controls: agent frontmatter, `task.prewalk`, and per-agent `task.agentPrewalk` overrides. See [Task agent discovery](./task-agent-discovery.md) for their precedence and target selection.

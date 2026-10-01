@@ -26,6 +26,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { PlanYolo, Prewalk } from "./agent-session-types";
 import { PREWALK_PLAN_MESSAGE_TYPE } from "./messages";
 import type { SessionManager } from "./session-manager";
+import { cfgPrewalkArmNotice } from "./settings";
 const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
 const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
 
@@ -268,13 +269,15 @@ export class PrewalkCoordinator {
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
-		this.#host.emitNotice(
-			"info",
-			keepModel
-				? `Prewalk: armed to stay on ${target.provider}/${target.id} — will hand off at the first edit/write once the todo list exists.`
-				: `Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
-			"prewalk",
-		);
+		if (cfgPrewalkArmNotice.get(this.#host.settings)) {
+			this.#host.emitNotice(
+				"info",
+				keepModel
+					? `Prewalk: armed to stay on ${target.provider}/${target.id} — will hand off at the first edit/write once the todo list exists.`
+					: `Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
+				"prewalk",
+			);
+		}
 		return true;
 	}
 
