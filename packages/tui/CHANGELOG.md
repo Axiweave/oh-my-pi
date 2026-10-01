@@ -19,6 +19,7 @@
 - Start listeners now receive the current started state when they subscribe after startup. This enables terminal features after early CLI rendering.
 - `ImageBudget.acquireId` now takes an optional content tag beside the placement key. A key whose bytes changed supersedes its old graphics id (purging the stale data from the terminal store) instead of keeping an id that `shouldTransmit` had already marked sent, which made the terminal re-draw the previous image.
 - Fixed shutdown rearming a destructive history reset while flushing a provider's pending rows.
+- A non-fullscreen bottom overlay (model picker, model profile picker) no longer scrolls on-screen history into native scrollback. The overlay now paints over those rows and restores them when it closes, so the transcript no longer leaves a blank gap above the editor. History offered while the overlay is open is committed after it closes. When the on-screen rows are unknown (after a resize, or image rows), the overlay uses the alternate screen. A resize while the overlay covers history replays the history when the overlay closes.
 
 ## [18.4.4] - 2026-09-29
 

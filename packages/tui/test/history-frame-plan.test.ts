@@ -471,6 +471,61 @@ describe("terminal frame plans", () => {
 		tui.stop();
 	});
 
+	it("restores on-screen history after a bottom overlay closes instead of scrolling it away", () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const provider = new Provider({ viewport: ["live", "editor"] });
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		provider.plan = { history: { id: 1, rows: ["h1", "h2", "h3", "h4"] }, viewport: ["live", "editor"] };
+		tui.requestRender(true);
+		const screen = () => terminal.getViewport().map(row => row.trimEnd());
+		const before = screen();
+		expect(before).toEqual(["h1", "h2", "h3", "h4", "live", "editor", "", ""]);
+
+		const overlay = tui.showOverlay(
+			{ render: () => ["p1", "p2", "p3", "p4"] },
+			{ anchor: "bottom-center", width: "100%", maxHeight: "100%" },
+		);
+		tui.requestRender(true);
+		expect(screen()).toEqual(["h1", "h2", "h3", "h4", "p1", "p2", "p3", "p4"]);
+
+		overlay.hide();
+		tui.requestRender(true);
+		expect(screen()).toEqual(before);
+		expect(terminal.getBufferPosition().baseY).toBe(0);
+		expect(tui.getMutableViewport()).toEqual({ top: 4, length: 2 });
+		tui.stop();
+	});
+
+	it("defers history offered under a bottom overlay until it closes", () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const provider = new Provider({ viewport: ["live", "editor"] });
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		provider.plan = { history: { id: 1, rows: ["h1", "h2", "h3", "h4"] }, viewport: ["live", "editor"] };
+		tui.requestRender(true);
+		const screen = () => terminal.getViewport().map(row => row.trimEnd());
+
+		const overlay = tui.showOverlay(
+			{ render: () => ["p1", "p2", "p3", "p4"] },
+			{ anchor: "bottom-center", width: "100%", maxHeight: "100%" },
+		);
+		provider.plan = { history: { id: 2, rows: ["h5", "h6", "h7"] }, viewport: ["live", "editor"] };
+		tui.requestRender(true);
+		// Offered rows show above the overlay but stay unaccepted: nothing scrolls.
+		expect(screen()).toEqual(["h2", "h3", "h4", "h5", "p1", "p2", "p3", "p4"]);
+		expect(provider.acknowledged).toEqual([1]);
+		expect(terminal.getBufferPosition().baseY).toBe(0);
+
+		overlay.hide();
+		tui.requestRender(true);
+		expect(provider.acknowledged).toEqual([1, 2]);
+		expect(screen()).toEqual(["h2", "h3", "h4", "h5", "h6", "h7", "live", "editor"]);
+		const scrollback = terminal.getScrollBuffer().map(row => row.trimEnd());
+		expect(scrollback.slice(0, terminal.getBufferPosition().baseY)).toEqual(["h1"]);
+		tui.stop();
+	});
+
 	it("flushes every eligible history batch before terminal handoff", () => {
 		const terminal = new VirtualTerminal(20, 3);
 		const provider = new FlushProvider();
@@ -585,6 +640,68 @@ describe("terminal frame plans", () => {
 		expect(resized).toContain("history-one@20");
 		expect(resized).toContain("history-one@30");
 		expect(resized.slice(-2)).toEqual(["history-two@30", "editor@30"]);
+		tui.stop();
+	});
+
+	it("borrows the alt buffer for a bottom overlay after a resize hides the on-screen history", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const provider = new Provider({ viewport: ["live", "editor"] });
+		const renderScheduler = new VirtualRenderScheduler();
+		const tui = new TUI(terminal, undefined, { renderScheduler });
+		tui.setFrameProvider(provider);
+		tui.start();
+		provider.plan = { history: { id: 1, rows: ["h1", "h2", "h3", "h4"] }, viewport: ["live", "editor"] };
+		tui.requestRender(true);
+		await renderScheduler.settle(terminal);
+
+		// Default preserve mode: the terminal reflows history the TUI never repaints.
+		terminal.resize(24, 8);
+		await renderScheduler.advance(terminal, 400);
+		const scrolledBefore = terminal.getBufferPosition().baseY;
+		const before = terminal.getViewport().map(row => row.trimEnd());
+		expect(before.slice(0, 6)).toEqual(["h1", "h2", "h3", "h4", "live", "editor"]);
+
+		const overlay = tui.showOverlay(
+			{ render: () => ["p1", "p2", "p3", "p4"] },
+			{ anchor: "bottom-center", width: "100%", maxHeight: "100%" },
+		);
+		await renderScheduler.settle(terminal);
+		overlay.hide();
+		await renderScheduler.settle(terminal);
+
+		expect(terminal.getBufferPosition().baseY).toBe(scrolledBefore);
+		expect(terminal.getViewport().map(row => row.trimEnd())).toEqual(before);
+		tui.stop();
+	});
+
+	it("replays history covered by a bottom overlay when the terminal resizes under it", async () => {
+		const terminal = new VirtualTerminal(20, 6);
+		const provider = new WidthReplayProvider();
+		const renderScheduler = new VirtualRenderScheduler();
+		const tui = new TUI(terminal, undefined, { renderScheduler });
+		tui.setFrameProvider(provider);
+		tui.start();
+		await renderScheduler.settle(terminal);
+		const screen = () => terminal.getViewport().map(row => row.trimEnd());
+		expect(screen().slice(0, 3)).toEqual(["history-one@20", "history-two@20", "editor@20"]);
+
+		const overlay = tui.showOverlay(
+			{ render: () => ["p1", "p2", "p3", "p4"] },
+			{ anchor: "bottom-center", width: "100%", maxHeight: "100%" },
+		);
+		await renderScheduler.settle(terminal);
+		expect(screen()).toEqual(["history-one@20", "history-two@20", "p1", "p2", "p3", "p4"]);
+
+		terminal.resize(24, 6);
+		await renderScheduler.advance(terminal, 400);
+		overlay.hide();
+		await renderScheduler.settle(terminal);
+
+		expect(provider.resetCount).toBe(1);
+		expect(screen().slice(0, 3)).toEqual(["history-one@24", "history-two@24", "editor@24"]);
+		const buffer = plainBuffer(terminal);
+		expect(buffer.some(row => /^p\d$/.test(row))).toBe(false);
+		expect(buffer.filter(row => row.startsWith("history-one"))).toEqual(["history-one@24"]);
 		tui.stop();
 	});
 

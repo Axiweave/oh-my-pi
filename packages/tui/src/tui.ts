@@ -777,6 +777,17 @@ export class TUI extends Container {
 	// rows the paint prepended for a short viewport. Negative while prepended
 	// blanks outweigh replaced rows; zero on ordinary frames.
 	#providerViewportPadTop = 0;
+	// Committed rows still on the physical screen above #providerViewportTop,
+	// as last painted (length == #providerViewportTop). Undefined once a resize
+	// reflowed them out of our knowledge; a later paint that rewrites every row
+	// above the anchor makes them known again.
+	#screenHistory: PreparedLine[] | undefined = [];
+	// Set while a non-fullscreen overlay paints over the whole screen: the
+	// history anchor and the on-screen history rows it covers. Overlay frames
+	// run with the anchor at row 0 (so resize handling sees one live window);
+	// the first frame without the overlay repaints these rows and re-anchors,
+	// so opening a picker never scrolls history into native scrollback.
+	#overlayRestore: { top: number; rows: PreparedLine[] } | undefined;
 	// Viewport-relative row of the hardware cursor after the last normal paint
 	// (0 = parked at the viewport top). A resize reflows the normal buffer
 	// before the app hears about it; terminals keep the cursor attached to its
@@ -1690,6 +1701,8 @@ export class TUI extends Container {
 		this.#resizeBurstLastHeight = this.terminal.rows;
 		this.#resizeBurstPull += Math.max(0, this.terminal.rows - burstLastHeight);
 		this.#geometryEpoch++;
+		// The terminal reflowed the screen: cached rows above the anchor are stale.
+		this.#screenHistory = undefined;
 	}
 
 	/**
@@ -2033,6 +2046,7 @@ export class TUI extends Container {
 			fs.appendFileSync(getDebugLogPath(), msg);
 		}
 		this.#providerViewportTop = Math.min(top, Math.max(0, height - 1));
+		this.#screenHistory = undefined;
 		// Resolved geometry invalidates the replay offset with the old anchor;
 		// the forced repaint recomputes it (usually zero).
 		this.#providerViewportPadTop = 0;
@@ -2839,23 +2853,49 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Composite all visible overlays into the window slice (screen
-	 * coordinates, in stack order, later = on top). Overlays never touch the
-	 * frame: composited rows exist only in the painted window, and commits are
-	 * frozen while an overlay is visible, so overlay pixels can never enter
-	 * native scrollback.
-	 */
-	/**
 	 * Composite the visible overlays onto a full-height copy of `viewport`, or
 	 * hand it back untouched when nothing is stacked. Callers run this inside
 	 * their image-budget pass so the frame's whole image set — transcript plus
 	 * modal — reaches one reconcile, instead of leaving the overlay's graphics
 	 * outside the cap for as long as it stays up.
+	 *
+	 * With `covered` (see {@link #coverableHistory}) the window is the
+	 * whole physical screen: the on-screen history rows, any still-unaccepted
+	 * offered history, then the viewport. Otherwise the viewport grows to the
+	 * screen height, which scrolls on-screen history into native scrollback.
 	 */
-	#compositeVisibleOverlays(viewport: string[], width: number, height: number): string[] {
+	#compositeVisibleOverlays(
+		viewport: string[],
+		width: number,
+		height: number,
+		covered?: readonly PreparedLine[],
+		offeredHistory: readonly string[] = [],
+	): string[] {
 		if (this.#getTopmostVisibleOverlay() === undefined) return viewport;
+		if (covered !== undefined) {
+			viewport = [...covered.map(row => row.raw), ...offeredHistory, ...viewport];
+			if (viewport.length > height) viewport = viewport.slice(viewport.length - height);
+		}
 		while (viewport.length < height) viewport.push("");
 		return this.#compositeOverlaysIntoWindow(viewport, width, height);
+	}
+
+	/**
+	 * Known on-screen history rows above the anchor, or undefined when they
+	 * cannot be covered and restored: rows unknown after a resize, a geometry
+	 * change, a pending destructive reset, or image rows. #doRender borrows the
+	 * alt buffer for a normal-buffer overlay in that case.
+	 */
+	#coverableHistory(width: number, height: number): PreparedLine[] | undefined {
+		if (this.#clearScrollbackOnNextRender) return undefined;
+		if (!this.#hasEverRendered || this.#previousWidth !== width || this.#previousHeight !== height) return undefined;
+		if (this.#overlayRestore !== undefined) return this.#overlayRestore.rows;
+		const rows = this.#screenHistory;
+		// Image rows: restoring kitty placements on close is not wired, so they take the alt-buffer path.
+		if (rows === undefined || rows.length !== this.#providerViewportTop || rows.some(row => row.isImage)) {
+			return undefined;
+		}
+		return rows;
 	}
 
 	#compositeOverlaysIntoWindow(window: string[], termWidth: number, termHeight: number): string[] {
@@ -2995,10 +3035,15 @@ export class TUI extends Container {
 		this.#debugNextWindowTop = 0;
 		let plan: TerminalFramePlan;
 		let viewport: string[];
+		let covered: PreparedLine[] | undefined;
 		let repeat: boolean;
 		do {
 			this.#imageBudget.beginPass();
-			plan = provider.renderFrame({ columns: width, rows: height, historyRows: this.#providerViewportTop });
+			plan = provider.renderFrame({
+				columns: width,
+				rows: height,
+				historyRows: this.#overlayRestore?.top ?? this.#providerViewportTop,
+			});
 			viewport = Array.from(plan.viewport);
 			if (viewport.length > height) {
 				const message = `Frame provider returned ${viewport.length} rows for a ${height}-row viewport`;
@@ -3006,13 +3051,20 @@ export class TUI extends Container {
 				logger.error("TUI layout contract violated", { rows: viewport.length, height });
 				viewport = viewport.slice(0, height);
 			}
-			viewport = this.#compositeVisibleOverlays(viewport, width, height);
+			covered =
+				this.#getTopmostVisibleOverlay() === undefined || plan.history?.kind === "replay"
+					? undefined
+					: this.#coverableHistory(width, height);
+			viewport = this.#compositeVisibleOverlays(viewport, width, height, covered, plan.history?.rows);
 			const imagePass = this.#imageBudget.endPass();
 			const replacement = this.#prepareHistoryReplacement(plan.history);
 			repeat = imagePass || replacement;
 		} while (repeat);
 		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
-		this.#emitPlanFrame(width, height, viewport, plan.history, provider);
+		// An overlay frame leaves offered history unaccepted: the provider offers it
+		// again once the overlay closes, so overlay pixels never reach scrollback.
+		if (covered !== undefined) this.#emitPlanFrame(width, height, viewport, undefined, provider, true);
+		else this.#emitPlanFrame(width, height, viewport, plan.history, provider);
 	}
 	/**
 	 * Re-offer finalized history once after a settled resize.
@@ -3111,6 +3163,7 @@ export class TUI extends Container {
 		viewportRows: string[],
 		offered: HistoryBatch | undefined,
 		provider: TerminalFrameProvider | undefined,
+		overlayWindow = false,
 	): void {
 		// Callers composite their overlays inside the budget pass, so `viewportRows`
 		// is already the complete frame. Bound the store here rather than at
@@ -3160,6 +3213,27 @@ export class TUI extends Container {
 		// scrolls only when history + viewport overflow the physical screen, and
 		// the rows that scroll off the top are exactly the oldest history rows.
 		const geometryStable = this.#hasEverRendered && this.#previousWidth === width && this.#previousHeight === height;
+		// An overlay window frame covers the whole screen from row 0, so park the
+		// anchor there for its lifetime. The first frame without it re-anchors
+		// below the covered history rows and repaints them (see #overlayRestore).
+		let restoredRows: PreparedLine[] | undefined;
+		if (overlayWindow) {
+			if (this.#overlayRestore === undefined) {
+				this.#overlayRestore = { top: this.#providerViewportTop, rows: this.#screenHistory ?? [] };
+				this.#providerViewportTop = 0;
+				this.#forceViewportRepaintOnNextRender = true;
+			}
+		} else if (this.#overlayRestore !== undefined) {
+			const restore = this.#overlayRestore;
+			this.#overlayRestore = undefined;
+			if (!destructiveReset && geometryStable) {
+				restoredRows = restore.rows;
+				this.#providerViewportTop = restore.top;
+				this.#screenHistory = restore.rows;
+				this.#providerWindow = [];
+				this.#providerPreparedRows = [];
+			}
+		}
 		const startTop = destructiveReset ? 0 : Math.min(this.#providerViewportTop, Math.max(0, height - 1));
 		const newTop = Math.max(0, Math.min(startTop + historyRows.length, height - rows));
 		const pendingAltExit = this.#pendingAltExit;
@@ -3199,6 +3273,19 @@ export class TUI extends Container {
 		// after a settled width resize.
 		if (destructiveReset) buffer += "\x1b[H\x1b[2J\x1b[3J";
 		for (const sequence of this.#imageBudget.takeTransmits()) buffer += sequence;
+		if (restoredRows !== undefined) {
+			const restoredLines = restoredRows.map(row => row.line);
+			for (let index = 0; index < restoredRows.length; index++) {
+				buffer += `\x1b[${index + 1};1H${this.#lineRewriteSequence(
+					restoredRows[index]!,
+					width,
+					index,
+					-1,
+					-1,
+					this.#osc66SpacerGlyphWidth(restoredLines, index),
+				)}`;
+			}
+		}
 		const diffable =
 			geometryStable &&
 			historyRows.length === 0 &&
@@ -3305,6 +3392,18 @@ export class TUI extends Container {
 		else this.#recordHardwareCursorHidden();
 		this.#providerWindow = mutablePreparedLines;
 		this.#providerPreparedRows = mutablePreparedRows;
+		// Rows left above the new anchor: the surviving top of the old on-screen
+		// history, then whatever this paint wrote above the viewport.
+		const previousScreenHistory = destructiveReset ? [] : this.#screenHistory;
+		const above = [
+			...(previousScreenHistory ?? []).slice(0, startTop),
+			...preparedHistory.rows,
+			...prepared.rows.slice(0, replayViewportRows),
+		];
+		this.#screenHistory =
+			previousScreenHistory !== undefined || above.length >= mutableTop
+				? above.slice(above.length - mutableTop)
+				: undefined;
 		this.#providerViewportTop = mutableTop;
 		this.#providerViewportPadTop = replayViewportRows - replayPrependedBlanks;
 		this.#previousWidth = width;
@@ -3365,17 +3464,33 @@ export class TUI extends Container {
 			return;
 		}
 
+		// A covering overlay painted over on-screen history, and the terminal has
+		// since reflowed those rows at a new size: only a destructive replay gets
+		// the history back. The pending reset also moves the overlay to the alt
+		// buffer (see #coverableHistory), so the replay paints when it closes.
+		if (this.#overlayRestore !== undefined && (width !== this.#previousWidth || height !== this.#previousHeight)) {
+			this.#overlayRestore = undefined;
+			this.#prepareForcedRender(true);
+		}
 		// Fullscreen alt-screen short-circuit. While the topmost visible overlay
 		// requests it, borrow the terminal's alternate buffer and paint only the
 		// modal there; the normal screen and all accounting stay untouched.
 		const topOverlay = this.#getTopmostVisibleOverlay();
-		const wantAlt = topOverlay?.options?.fullscreen === true;
+		const fullscreen = topOverlay?.options?.fullscreen === true;
+		// A normal-buffer overlay that cannot cover known on-screen history (rows
+		// unknown after a resize, image rows) borrows the alt buffer instead of
+		// growing the viewport, which would scroll history away for good.
+		const wantAlt =
+			fullscreen ||
+			(topOverlay !== undefined &&
+				this.#frameProvider !== undefined &&
+				this.#coverableHistory(width, height) === undefined);
 		const wantMouse: MouseTrackingState =
 			topOverlay === undefined
 				? this.#inlineMouseProvider?.() === true
 					? "inline"
 					: "off"
-				: wantAlt && topOverlay.options?.mouseTracking !== false
+				: fullscreen && topOverlay.options?.mouseTracking !== false
 					? "full"
 					: "off";
 		if (wantAlt && !this.#altActive) {
