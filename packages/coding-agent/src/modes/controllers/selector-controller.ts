@@ -118,7 +118,12 @@ import { renderUsageReports } from "./command-controller";
 import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 
 import { cfgBranchSummaryEnabled } from "../../session/context-settings";
-import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
+import {
+	cfgCycleOrder,
+	cfgDisabledProviders,
+	cfgModelProfileSwitchNotice,
+	cfgModelRoleStorage,
+} from "../../config/model-settings";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains } from "../../session/settings";
 import {
 	cfgStatusLineCompactThinkingLevel,
@@ -695,11 +700,15 @@ export class SelectorController {
 				}
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
-				this.ctx.showStatus(
-					result.model
-						? `Model profile ${result.profile}: now on ${result.model.provider}/${result.model.id}`
-						: `Model profile ${result.profile}: no configured role resolved to an available model`,
-				);
+				if (!result.model) {
+					this.ctx.showStatus(
+						`Model profile ${result.profile}: no configured role resolved to an available model`,
+					);
+				} else if (cfgModelProfileSwitchNotice.get(this.ctx.settings)) {
+					this.ctx.showStatus(
+						`Model profile ${result.profile}: now on ${result.model.provider}/${result.model.id}`,
+					);
+				}
 				done();
 			} catch (error) {
 				done();

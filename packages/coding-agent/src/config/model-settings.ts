@@ -121,6 +121,19 @@ export const cfgModelProfileSwitchStyle = register({
 	},
 });
 
+export const cfgModelProfileSwitchNotice = register({
+	id: "modelProfileSwitchNotice",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "model",
+		group: "Prompt",
+		label: "Model Profile Switch Notice",
+		description:
+			"Show 'Model profile <name>: now on <model>' after the profile picker or the resume prompt switches profiles",
+	},
+});
+
 export const cfgModelProfiles = register({ id: "modelProfiles", type: "record", default: EMPTY_MODEL_PROFILES_RECORD });
 
 export const cfgModelTags = register({ id: "modelTags", type: "record", default: EMPTY_MODEL_TAGS_RECORD });

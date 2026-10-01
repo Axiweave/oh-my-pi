@@ -690,6 +690,7 @@ Related settings:
 - `modelProfiles` (record of named role bundles)
 - `modelProfile` (name of the bundle a session starts on)
 - `modelProfileSwitchStyle` (`picker` by default, or `cycling` for the profile keys)
+- `modelProfileSwitchNotice` (`true` by default. Set `false` to hide "Model profile <name>: now on <model>" after the profile picker or the resume prompt switches profiles)
 - `enabledModels` (scoped pattern list)
 - `modelProviderOrder` (provider precedence when equivalent concrete choices share an id)
 - `providers.kimiApiFormat` (`openai` or `anthropic` request format)

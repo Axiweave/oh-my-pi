@@ -387,7 +387,7 @@ import {
 import { cfgTasksTodoClearDelay, cfgTodoHud } from "../tools/settings";
 import { cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
-import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
+import { cfgCycleOrder, cfgModelProfileSwitchNotice, cfgModelRoles } from "../config/model-settings";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled, cfgPlanImplReview } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
@@ -7622,13 +7622,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			const result = await this.session.applyModelProfile(stale.profile, stale.role);
 			this.statusLine.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(
-				!result
-					? `Model profile ${stale.profile} is no longer configured`
-					: result.model
-						? `Model profile ${stale.profile}: now on ${result.model.provider}/${result.model.id}`
-						: `Model profile ${stale.profile}: no configured role resolved to an available model`,
-			);
+			if (!result) {
+				this.showStatus(`Model profile ${stale.profile} is no longer configured`);
+			} else if (!result.model) {
+				this.showStatus(`Model profile ${stale.profile}: no configured role resolved to an available model`);
+			} else if (cfgModelProfileSwitchNotice.get(this.settings)) {
+				this.showStatus(`Model profile ${stale.profile}: now on ${result.model.provider}/${result.model.id}`);
+			}
 		} catch (error) {
 			this.showError(`Failed to set model profile: ${error instanceof Error ? error.message : String(error)}`);
 		}
