@@ -42,8 +42,8 @@ export interface SubagentEventPayload {
 
 // Keep this explicit: ArkType serializes `unknown` as a boolean subschema, which llama.cpp grammars reject.
 const outputSchemaInputSchema = type("object | boolean | string | null");
-// Coarse per-spawn thinking effort; must stay in sync with TASK_EFFORTS in ../thinking.
-const effortRule = '"lo" | "med" | "hi"' as const;
+// Per-spawn thinking effort on the auto ladder; must stay in sync with TASK_EFFORTS in ../thinking.
+const effortRule = '"low" | "medium" | "high" | "xhigh" | "max"' as const;
 
 export const taskItemSchema = type({
 	"name?": "string",

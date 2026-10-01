@@ -23,6 +23,7 @@ import type { Settings } from "../config/settings";
 import { type JudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
 import { clampAutoThinkingEffort } from "@oh-my-pi/pi-tui/thinking";
 import { preprocessTinyMessage } from "../tiny/message-preproc";
+import { LEVEL_CRITERIA, MAX_CRITERION } from "./criteria";
 import { prompt } from "@oh-my-pi/pi-utils";
 
 import { cfgProvidersAutoThinkingMaxEffort } from "../session/settings";
@@ -44,23 +45,12 @@ const BUCKET_EFFORT: Record<Bucket, Effort> = {
 	hard: Effort.XHigh,
 };
 
-/** Levels by how open-ended the problem is; shared by request and solution-space questions. */
-const LEVEL_CRITERIA: Record<Exclude<Level, "max">, string> = {
-	low: "One obvious solution, mechanically applied: target, mapping, or fix given.",
-	medium: "A few candidates in a localized area, or one small trap: which line breaks a test, one boundary case.",
-	high: "Several viable designs or candidate causes: API shape, policy choice, a known cause whose fix needs a design choice.",
-	xhigh: "Open cause of flaky, concurrent, or stale behavior; solutions that are easy to get subtly wrong (races, invariants, cross-version compatibility).",
-};
-
 /** {@link LEVEL_CRITERIA} coarsened to the on-device buckets. */
 const BUCKET_CRITERIA: Record<Bucket, string> = {
 	trivial: LEVEL_CRITERIA.low,
 	moderate: "A few candidate causes or several viable designs: which line breaks a test, API shape, policy choice.",
 	hard: LEVEL_CRITERIA.xhigh,
 };
-
-const MAX_CRITERION =
-	"Meets xhigh and at least one of: no reproduction to work from, irreversible or data-loss operation, or a live cutover that must stay correct while running. xhigh is required; difficulty alone is insufficient.";
 
 /** Questions for one classification input kind: on-device bucket, full ladder, full ladder with `max`. */
 interface QuestionSet {

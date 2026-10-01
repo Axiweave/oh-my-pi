@@ -36,6 +36,7 @@ import taskSpawnFeedbackTemplate from "../prompts/tools/task-spawn-feedback.md" 
 import taskSpecializationAdvisoryTemplate from "../prompts/tools/task-specialization-advisory.md" with { type: "text" };
 import taskFollowUpTemplate from "../prompts/tools/task-follow-up.md" with { type: "text" };
 import { TASK_EFFORTS, type TaskEffort } from "@oh-my-pi/pi-tui/thinking";
+import { LEVEL_CRITERIA, MAX_CRITERION } from "../auto-thinking/criteria";
 import { truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
@@ -153,6 +154,12 @@ interface TaskDescriptionOptions {
 	parentSpawns: string;
 }
 
+/** Per-spawn `effort` guidance: the `auto` classifier's criteria for each task level. */
+const EFFORT_LEVELS = [
+	...Object.entries(LEVEL_CRITERIA).map(([level, criterion]) => ({ level, criterion })),
+	{ level: "max", criterion: MAX_CRITERION },
+];
+
 /** Render the tool description from a cached agent list and current settings. */
 function renderDescription(options: TaskDescriptionOptions): string {
 	const spawnPolicy = resolveSpawnPolicy(options.parentSpawns);
@@ -184,6 +191,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		effortEnabled: options.effortEnabled,
 		evalToolsEnabled: options.evalToolsEnabled,
 		asyncEnabled: options.asyncEnabled,
+		effortLevels: EFFORT_LEVELS,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
 		hasModelMentions: options.sessionAgents.length > 0,
 		ircEnabled: options.ircEnabled,
@@ -229,7 +237,7 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string 
 /** Reject an out-of-range `effort` selector on internal/stale-transcript calls that bypass the wire schema. */
 function validateEffort(effort: TaskEffort | undefined, label: string): string | undefined {
 	if (effort === undefined || TASK_EFFORTS.includes(effort)) return undefined;
-	return `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. Use "lo", "med", or "hi".`;
+	return `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. Use one of ${TASK_EFFORTS.map(level => JSON.stringify(level)).join(", ")}.`;
 }
 
 function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string | undefined {

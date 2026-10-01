@@ -254,11 +254,8 @@ export function clampAutoThinkingEffort(
 ): Effort | undefined {
 	const supported = model ? getSupportedEfforts(model) : THINKING_EFFORTS;
 	if (supported.length === 0) return undefined;
-	const lowIndex = THINKING_EFFORTS.indexOf(Effort.Low);
 	const ceilingIndex = THINKING_EFFORTS.indexOf(ceiling);
-	const atOrAboveLow = supported.filter(level => THINKING_EFFORTS.indexOf(level) >= lowIndex);
-	const floored = atOrAboveLow.length > 0 ? atOrAboveLow : supported;
-	const pool = floored.filter(level => THINKING_EFFORTS.indexOf(level) <= ceilingIndex);
+	const pool = autoEligibleEfforts(supported).filter(level => THINKING_EFFORTS.indexOf(level) <= ceilingIndex);
 	if (pool.length === 0) return undefined;
 	const requestedIndex = THINKING_EFFORTS.indexOf(effort);
 	let chosen = pool[0];
@@ -269,17 +266,24 @@ export function clampAutoThinkingEffort(
 	return chosen;
 }
 
-/** Coarse per-spawn effort selectors accepted by the task tool. */
-export const TASK_EFFORTS = ["lo", "med", "hi"] as const;
+/** Levels `auto` and task effort may pick: supported levels at or above Low, or all of them when the model maxes out below Low. */
+function autoEligibleEfforts(supported: readonly Effort[]): readonly Effort[] {
+	const lowIndex = THINKING_EFFORTS.indexOf(Effort.Low);
+	const atOrAboveLow = supported.filter(level => THINKING_EFFORTS.indexOf(level) >= lowIndex);
+	return atOrAboveLow.length > 0 ? atOrAboveLow : supported;
+}
 
-/** Coarse task-spawn effort: the lowest, middle, or highest thinking level the target model supports. */
+/** Per-spawn effort selectors accepted by the task tool: the `auto` ladder. */
+export const TASK_EFFORTS = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max] as const;
+
+/** Task-spawn effort on the `auto` ladder, mapped by position onto the target model's eligible levels. */
 export type TaskEffort = (typeof TASK_EFFORTS)[number];
 
 /**
- * Maps a coarse task effort onto the model's supported thinking range:
- * `lo` = lowest supported level, `hi` = highest (whatever the model tops out
- * at — high, xhigh, or max), `med` = the middle (lower of the two middles for
- * an even-sized range). Without a model, maps over the full canonical range.
+ * Maps a task effort onto the model's eligible levels (supported levels at or
+ * above Low, as for `auto`) by position: the request sits at i/5 on the task
+ * ladder, the k-th of n eligible levels at k/n, and the first level with
+ * k/n >= i/5 wins. Without a model, maps over the full canonical range.
  * Returns `undefined` when the model has no controllable effort surface, so
  * callers fall back to their default selector (e.g. `auto`). Throws when the
  * configured ceiling is below the model's lowest supported effort.
@@ -291,18 +295,12 @@ export function resolveTaskEffortLevel(
 ): Effort | undefined {
 	const supported = model ? getSupportedEfforts(model) : THINKING_EFFORTS;
 	if (supported.length === 0) return undefined;
-	let resolved: Effort;
-	switch (effort) {
-		case "lo":
-			resolved = supported[0];
-			break;
-		case "med":
-			resolved = supported[(supported.length - 1) >> 1];
-			break;
-		case "hi":
-			resolved = supported[supported.length - 1];
-			break;
-	}
+	const eligible = autoEligibleEfforts(supported);
+	const requested = TASK_EFFORTS.indexOf(effort) + 1;
+	// k/n >= i/5 in integers; k = n always qualifies, so the search never misses.
+	const resolved = eligible.find(
+		(_, index) => (index + 1) * TASK_EFFORTS.length >= requested * eligible.length,
+	) as Effort;
 	if (maxEffort === undefined) return resolved;
 	const maxIndex = THINKING_EFFORTS.indexOf(maxEffort);
 	const ceiling = supported.findLast(candidate => THINKING_EFFORTS.indexOf(candidate) <= maxIndex);

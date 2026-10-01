@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { classifyDifficulty } from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
@@ -15,6 +16,8 @@ import {
 	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
 	resolveTaskEffortLevel,
+	TASK_EFFORTS,
+	type TaskEffort,
 } from "@oh-my-pi/pi-tui/thinking";
 import type { TinyMemoryLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
@@ -417,47 +420,61 @@ describe("auto thinking classifier helpers", () => {
 		expect(parseConfiguredThinkingLevel("max")).toBe(ThinkingLevel.Max);
 	});
 
-	it("maps task effort selectors onto each model's supported thinking range", () => {
-		const xhighCeilingModel = buildModel({
-			id: "mock-xhigh-ceiling",
-			name: "Mock XHigh Ceiling",
-			api: "openai-completions",
+	it("maps task effort onto the next-upper eligible level of every possible supported ladder", () => {
+		const mockBase = {
+			name: "Mock",
+			api: "openai-completions" as const,
 			provider: "mock",
 			baseUrl: "https://example.com",
 			reasoning: true,
-			thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] },
-			input: ["text"],
+			input: ["text" as const],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128_000,
 			maxTokens: 4096,
-		});
+		};
+		// Slow reference: float positions, linear scan. Ties (k/n === i/5) occur at
+		// n = 5 and at the shared `max` endpoint (1 === 1); both sides are the same double.
+		const reference = (supported: Effort[], effort: TaskEffort): Effort => {
+			const atOrAboveLow = supported.filter(level => level !== Effort.Minimal);
+			const eligible = atOrAboveLow.length > 0 ? atOrAboveLow : supported;
+			const requested = (TASK_EFFORTS.indexOf(effort) + 1) / TASK_EFFORTS.length;
+			for (let k = 1; k <= eligible.length; k++) {
+				if (k / eligible.length >= requested) return eligible[k - 1]!;
+			}
+			throw new Error("unreachable: the top eligible level is always at position 1");
+		};
 
-		// hi = whatever the model tops out at; lo = its floor; med = middle of
-		// the supported range (lower-middle for an even-sized range).
-		expect(resolveTaskEffortLevel(xhighCeilingModel, "hi")).toBe(Effort.XHigh);
-		expect(resolveTaskEffortLevel(xhighCeilingModel, "lo")).toBe(Effort.Low);
-		expect(resolveTaskEffortLevel(xhighCeilingModel, "med")).toBe(Effort.Medium);
-
-		const sonnet = getBundledModel("anthropic", "claude-sonnet-4-6");
-		if (!sonnet) throw new Error("Expected bundled Claude Sonnet 4.6 model");
-		const sonnetEfforts = sonnet.thinking?.efforts ?? [];
-		expect(resolveTaskEffortLevel(sonnet, "hi")).toBe(sonnetEfforts[sonnetEfforts.length - 1]);
-		expect(resolveTaskEffortLevel(sonnet, "lo")).toBe(sonnetEfforts[0]);
+		// Every non-empty ordered subset of the canonical ladder (63 ladders).
+		for (let mask = 1; mask < 1 << THINKING_EFFORTS.length; mask++) {
+			const supported = THINKING_EFFORTS.filter((_, bit) => mask & (1 << bit));
+			const model = buildModel({
+				...mockBase,
+				id: `mock-${mask}`,
+				thinking: { mode: "effort", efforts: supported },
+			});
+			const results = TASK_EFFORTS.map(effort => resolveTaskEffortLevel(model, effort));
+			const label = `supported=[${supported.join(",")}] results=[${results.join(",")}]`;
+			TASK_EFFORTS.forEach((effort, i) => {
+				expect(results[i], `${label} effort=${effort}`).toBe(reference(supported, effort));
+			});
+			// Invariants independent of the reference.
+			for (let i = 1; i < results.length; i++) {
+				expect(THINKING_EFFORTS.indexOf(results[i]!), `${label}: monotonic`).toBeGreaterThanOrEqual(
+					THINKING_EFFORTS.indexOf(results[i - 1]!),
+				);
+			}
+			expect(results.at(-1), `${label}: max → top`).toBe(supported.at(-1));
+			const lowestAtOrAboveLow = supported.find(level => level !== Effort.Minimal);
+			expect(results[0], `${label}: low → bottom eligible`).toBe(lowestAtOrAboveLow ?? Effort.Minimal);
+			if (lowestAtOrAboveLow) expect(results, `${label}: never minimal`).not.toContain(Effort.Minimal);
+		}
 
 		const highOnlyModel = buildModel({
+			...mockBase,
 			id: "mock-high-only",
-			name: "Mock High Only",
-			api: "openai-completions",
-			provider: "mock",
-			baseUrl: "https://example.com",
-			reasoning: true,
 			thinking: { mode: "effort", efforts: [Effort.High] },
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128_000,
-			maxTokens: 4096,
 		});
-		expect(() => resolveTaskEffortLevel(highOnlyModel, "hi", Effort.Low)).toThrow(
+		expect(() => resolveTaskEffortLevel(highOnlyModel, Effort.Max, Effort.Low)).toThrow(
 			"mock/mock-high-only has no supported thinking effort at or below task.maxEffort=low",
 		);
 
@@ -475,11 +492,10 @@ describe("auto thinking classifier helpers", () => {
 			contextWindow: 128_000,
 			maxTokens: 4096,
 		} as Model;
-		expect(resolveTaskEffortLevel(devinModel, "hi")).toBeUndefined();
+		expect(resolveTaskEffortLevel(devinModel, Effort.Max)).toBeUndefined();
 
-		// No model at all → full canonical range.
-		expect(resolveTaskEffortLevel(undefined, "lo")).toBe(Effort.Minimal);
-		expect(resolveTaskEffortLevel(undefined, "hi")).toBe(Effort.Max);
+		// No model → full canonical ladder, whose eligible levels are exactly the task ladder.
+		for (const effort of TASK_EFFORTS) expect(resolveTaskEffortLevel(undefined, effort)).toBe(effort);
 	});
 
 	it("rejects inherited object keys as thinking selectors", () => {

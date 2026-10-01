@@ -407,7 +407,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 			...baseOptions,
 			agent: { ...baseAgent, model: ["@task"] },
 			id: "subagent-effort-ceiling",
-			effort: "hi",
+			effort: Effort.Max,
 			settings,
 			modelRegistry: createModelRegistry(model),
 		});
@@ -436,7 +436,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 			...baseOptions,
 			agent: { ...baseAgent, model: ["@task"] },
 			id: "subagent-effort-ceiling-below-floor",
-			effort: "hi",
+			effort: Effort.Max,
 			settings,
 			modelRegistry: createModelRegistry(model),
 		});
@@ -460,7 +460,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 			...baseOptions,
 			agent: { ...baseAgent, model: ["@task"] },
 			id: "subagent-default-effort-ceiling",
-			effort: "hi",
+			effort: Effort.Max,
 			settings,
 			modelRegistry: createModelRegistry(model),
 		});
