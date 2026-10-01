@@ -392,6 +392,29 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "reload-config",
+		icon: "restart",
+		description: "Reload config.yml, project settings, and --config overlays from disk",
+		handle: async (_command, runtime) => {
+			try {
+				await runtime.settings.reloadFromDisk();
+				await runtime.output("Config reloaded.");
+			} catch (error) {
+				await runtime.output(`Config reload failed: ${errorMessage(error)}`);
+			}
+			return commandConsumed();
+		},
+		handleTui: async (_command, runtime) => {
+			try {
+				await runtime.ctx.settings.reloadFromDisk();
+				runtime.ctx.showStatus("Config reloaded.");
+			} catch (error) {
+				runtime.ctx.showError(`Config reload failed: ${errorMessage(error)}`);
+			}
+			clearSubmittedText(runtime);
+		},
+	},
+	{
 		name: "setup",
 		aliases: ["providers"],
 		icon: "gear",
