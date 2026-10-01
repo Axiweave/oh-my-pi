@@ -965,6 +965,10 @@ describe("AgentSession prewalk", () => {
 			thinkingLevel: Effort.Medium,
 			prewalk: { target },
 		});
+		const notices: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "notice" && event.source === "prewalk") notices.push(event.message);
+		});
 		const showStatus = vi.fn();
 		const ctx = {
 			session,
@@ -978,7 +982,9 @@ describe("AgentSession prewalk", () => {
 
 		expect(await executeBuiltinSlashCommand("/prewalk off", { ctx })).toBe(true);
 		expect(session.getPrewalkState()).toBeUndefined();
-		expect(showStatus).not.toHaveBeenCalledWith("Prewalk: nothing armed.");
+		// A real disarm is silent: no notice, no status line.
+		expect(notices).toEqual([]);
+		expect(showStatus).not.toHaveBeenCalled();
 
 		await session.prompt("task");
 		expect(requested.every(model => model === `${primary.provider}/${primary.id}`)).toBe(true);

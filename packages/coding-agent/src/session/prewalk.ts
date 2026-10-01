@@ -229,15 +229,10 @@ export class PrewalkCoordinator {
 
 	/** Drops a pending prewalk hand-off (e.g. `prewalk.enabled` turned off); no-op when none is armed. */
 	disarm(): void {
-		const active = this.#prewalk;
-		if (!active) return;
+		if (!this.#prewalk) return;
+		// Silent: every caller is an explicit user action, and the status line drops its prewalk segment.
 		this.#scrubPlanNudge();
 		this.#clearPrewalkState();
-		this.#host.emitNotice(
-			"info",
-			`Prewalk: disarmed; staying on the active model instead of switching to ${active.target.provider}/${active.target.id}.`,
-			"prewalk",
-		);
 	}
 
 	/** Arms a prewalk immediately for an explicit slash-command request. */

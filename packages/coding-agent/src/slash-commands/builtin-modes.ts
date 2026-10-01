@@ -1078,7 +1078,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const arg = command.args.trim().toLowerCase();
 			if (arg && arg !== "restart" && arg !== "off") return usage("Usage: /prewalk [restart|off]", runtime);
 			if (arg === "off") {
-				// The coordinator announces a real disarm; only the nothing-armed case needs output here.
+				// A real disarm is silent (the status-line segment clears); only the nothing-armed case needs output.
 				if (!runtime.session.disarmPrewalk()) await runtime.output("Prewalk: nothing armed.");
 				return commandConsumed();
 			}
