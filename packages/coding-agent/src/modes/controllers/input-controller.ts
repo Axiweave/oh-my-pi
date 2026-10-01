@@ -697,6 +697,13 @@ export class InputController {
 				void this.ctx.handlePlanModeCommand(undefined, undefined, requestedWorkflow);
 			});
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.prewalk.toggle")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				const command = this.ctx.session.getPrewalkState() ? "/prewalk off" : "/prewalk";
+				// Detached: the key must not clear the user's draft.
+				void executeBuiltinSlashCommand(command, { ctx: this.ctx, draftDetached: true });
+			});
+		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleClearCommand());

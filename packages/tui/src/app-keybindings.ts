@@ -62,6 +62,7 @@ interface AppKeybindings {
 	"app.tree.foldOrUp": true;
 	"app.tree.unfoldOrDown": true;
 	"app.plan.toggle": true;
+	"app.prewalk.toggle": true;
 	"app.history.search": true;
 	"app.stt.toggle": true;
 	"app.live.toggle": true;
@@ -250,6 +251,10 @@ export const KEYBINDINGS = {
 	"app.plan.toggle": {
 		defaultKeys: "alt+shift+p",
 		description: "Toggle plan mode",
+	},
+	"app.prewalk.toggle": {
+		defaultKeys: [],
+		description: "Arm or drop a prewalk handoff (/prewalk, /prewalk off)",
 	},
 	"app.history.search": {
 		defaultKeys: "ctrl+r",

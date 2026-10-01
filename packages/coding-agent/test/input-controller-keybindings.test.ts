@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi }
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgPlanKeybindingWorkflow } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
+import { cfgPrewalkInto } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
@@ -380,6 +381,44 @@ describe("InputController keybinding setup", () => {
 		handler?.();
 
 		expect(ctx.handlePlanModeCommand).toHaveBeenCalledWith(undefined, undefined, expectedWorkflow);
+	});
+
+	it("prewalk key arms when idle, drops when armed, and keeps the draft", async () => {
+		const { InputController, ctx, editor, customHandlers, setKeybinding } = await createContext();
+		setKeybinding("app.prewalk.toggle", ["alt+shift+p"]);
+		cfgPrewalkInto.set(ctx.settings, "@@");
+		const model = { provider: "p", id: "m" };
+		let armed: object | undefined;
+		const armCall = Promise.withResolvers<void>();
+		const disarmCall = Promise.withResolvers<void>();
+		const armPrewalk = vi.fn(() => {
+			armed = {};
+			armCall.resolve();
+			return true;
+		});
+		const disarmPrewalk = vi.fn(() => {
+			armed = undefined;
+			disarmCall.resolve();
+			return true;
+		});
+		Object.assign(ctx.session, { model, getPrewalkState: () => armed, armPrewalk, disarmPrewalk });
+		Object.assign(ctx, { sessionManager: { getCwd: () => "/" } });
+		new InputController(ctx).setupKeyHandlers();
+		editor.setText("draft");
+
+		customHandlers.get("alt+shift+p")?.();
+		await armCall.promise;
+		expect(armPrewalk).toHaveBeenCalledWith(model, undefined, true);
+		expect(disarmPrewalk).not.toHaveBeenCalled();
+
+		customHandlers.get("alt+shift+p")?.();
+		await disarmCall.promise;
+		expect(armPrewalk).toHaveBeenCalledTimes(1);
+		// The draft clear would run after the handler returns; drain the pending command first.
+		const drained = Promise.withResolvers<void>();
+		setImmediate(drained.resolve);
+		await drained.promise;
+		expect(editor.getText()).toBe("draft");
 	});
 
 	it("does not mark pasted shell prompts as Python mode while editing", async () => {
