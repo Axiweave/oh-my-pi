@@ -39,6 +39,7 @@ import { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { OAuthManualInputManager } from "@oh-my-pi/pi-coding-agent/modes/oauth-manual-input";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TokenRateMeter } from "@oh-my-pi/pi-coding-agent/utils/token-rate";
@@ -283,6 +284,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		clearPinnedError: vi.fn(),
 		showHookInput: vi.fn(async () => undefined),
 		showHookSelector: vi.fn(async () => undefined),
+		getUserMessageText: UiHelpers.prototype.getUserMessageText,
 		addMessageToChat: vi.fn(() => []),
 		rebuildChatFromMessages: vi.fn(),
 		renderInitialMessages: vi.fn(async () => {}),

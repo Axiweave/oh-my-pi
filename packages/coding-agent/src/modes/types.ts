@@ -303,9 +303,9 @@ export interface InteractiveModeContext {
 	 */
 	present(content: Component | readonly Component[]): void;
 	/**
-	 * Mount command output immediately while idle, or defer it until the active
-	 * agent turn ends so a growing live block cannot push duplicate rows into
-	 * native scrollback.
+	 * Mount command output immediately while idle or on a Tern surface, or defer
+	 * it until the active agent turn ends so a growing live block cannot push
+	 * duplicate rows into terminal scrollback.
 	 */
 	presentCommandOutput(content: Component | readonly Component[]): void;
 	/** Show session information in a focused transient overlay; `context` adds a context-window meter natively. */
@@ -431,7 +431,7 @@ export interface InteractiveModeContext {
 	handleTodoCommand(args: string, editorOrigin?: string): Promise<void>;
 	handleSessionCommand(): Promise<void>;
 	handleAdvisorStatusCommand(): Promise<void>;
-	handleJobsCommand(): Promise<void>;
+	handleJobsCommand(options?: { full?: boolean }): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
 	handleChangelogCommand(args?: string): Promise<void>;
 	handleHotkeysCommand(): void;
@@ -576,6 +576,8 @@ export interface InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 		displayText?: string,
 	): Promise<boolean>;
+	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
+	isGuidedGoalInterviewActive(): boolean;
 	handleLoopCommand(args?: string): Promise<string | undefined>;
 	setLoopPrompt(prompt: string): void;
 	armLoopAutoSubmit(): void;

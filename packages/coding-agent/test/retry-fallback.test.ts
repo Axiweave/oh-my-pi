@@ -2,9 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model, ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import {
 	expandDefaultRetryFallbackChains,
 	findRetryFallbackCandidates,
+	installRetryFallbackRole,
 	type RetryFallbackResolutionContext,
 	resolveRetryFallbackChainKey,
 	validateRetryFallbackChains,
@@ -20,6 +22,7 @@ function createContext(
 		getBundledModel("google-vertex", "gemini-2.5-flash"),
 		getBundledModel("openrouter", "google/gemini-2.5-flash"),
 		getBundledModel("openai", "gpt-4o-mini"),
+		getBundledModel("xai-oauth", "grok-4.7"),
 	].filter(model => model !== undefined);
 	return {
 		chains,
@@ -32,6 +35,26 @@ function createContext(
 }
 
 describe("retry fallback selector resolution", () => {
+	it("restores configured roles after cyber mode ends despite a dynamic retry role install", () => {
+		const allowed = getBundledModel("google", "gemini-2.5-flash")!;
+		const excluded = getBundledModel("openai", "gpt-4o-mini")!;
+		const primary = `${allowed.provider}/${allowed.id}`;
+		const original = `${excluded.provider}/${excluded.id}`;
+		const settings = Settings.isolated({
+			cyberModels: [primary],
+			modelRoles: { default: original, reviewer: `${original}, ${primary}` },
+		});
+		const allowlist = resolveCyberAllowlist(settings, [allowed, excluded]);
+		if (!allowlist) throw new Error("The test allowlist did not resolve.");
+		settings.applyCyberRoles("parent", allowlist);
+
+		installRetryFallbackRole(settings, "subagent:review", { primary, chain: [original] });
+		expect(settings.getModelRole("default")).toBe(primary);
+		settings.clearCyberRoles("parent", { operator: true });
+		expect(settings.getModelRole("default")).toBe(original);
+		expect(settings.getModelRole("reviewer")).toBe(`${original}, ${primary}`);
+	});
+
 	it("resolves chain keys by exact model, longest wildcard, role, then default", () => {
 		const selector = "openrouter/google/gemini-2.5-flash";
 		const exactContext = createContext(
@@ -233,6 +256,30 @@ describe("retry fallback selector resolution", () => {
 			"google/gemini-2.5-flash",
 			"openai/gpt-4o-mini",
 		]);
+	});
+
+	it("keeps a role's chain when the live effort differs from the role's explicit effort (#13789)", () => {
+		const model = getBundledModel("xai-oauth", "grok-4.7");
+		const high = "xai-oauth/grok-4.7:high";
+		const xhigh = "xai-oauth/grok-4.7:xhigh";
+
+		// A spawn `effort` or `/thinking` moved the session off the role's effort.
+		const roleOnly = createContext({ task: ["openai/gpt-4o-mini"] }, { task: high });
+		expect(resolveRetryFallbackChainKey(roleOnly, xhigh, model)).toBe("task");
+		expect(findRetryFallbackCandidates(roleOnly, "task", xhigh, model).map(candidate => candidate.raw)).toEqual([
+			"openai/gpt-4o-mini",
+		]);
+
+		// A role assigned the live effort still outranks one assigned another effort.
+		const exactRole = createContext(
+			{ task: ["openai/gpt-4o-mini"], slow: ["openai/gpt-4o-mini:high"] },
+			{ task: high, slow: xhigh },
+		);
+		expect(resolveRetryFallbackChainKey(exactRole, xhigh, model)).toBe("slow");
+
+		// Model-selector keys stay effort-exact.
+		const modelKey = createContext({ [high]: ["openai/gpt-4o-mini"] });
+		expect(resolveRetryFallbackChainKey(modelKey, xhigh, model)).toBeUndefined();
 	});
 });
 

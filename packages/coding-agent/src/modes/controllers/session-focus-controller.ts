@@ -169,10 +169,14 @@ export class SessionFocusController {
 		// `#attach` rethrows replay failures; unhandled, they would kill the process.
 		void this.#detachToMain().then(
 			() => {
-				this.ctx.showStatus(`Agent ${event.ref.id} is ${gone ? "gone" : event.ref.status}; returned to main session`);
+				this.ctx.showStatus(
+					`Agent ${event.ref.id} is ${gone ? "gone" : event.ref.status}; returned to main session`,
+				);
 			},
 			(error: unknown) => {
-				this.ctx.showError(`Failed to return to main session: ${error instanceof Error ? error.message : String(error)}`);
+				this.ctx.showError(
+					`Failed to return to main session: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			},
 		);
 	}

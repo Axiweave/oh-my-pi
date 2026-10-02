@@ -3,21 +3,19 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.4.4` on 2026-09-29.
+**Reviewed against:** `v18.4.10` on 2026-10-02.
 
-**Verification:** Source setup, `bun check`, the launcher checks, 119 focused merge check files (1965 tests), and every chunk of the `bun run test` plan ran with `TMUX` unset and stdin closed.
-The focused checks cover every divergence entry plus the fork-owned paths that this merge changed: composer, user message, history search, hotkeys, status-line segments, and input-controller paste and keybindings.
-The full plan passed 28569 tests. Every remaining red test fails the same way at the pre-merge fork head, or is host state:
-the documented spelling, skills, and welcome-history cases, plus `sixel-probe`, `sdk-tool-activation`, `usage-row-turn-time`, `resize-conpty-warp`, and `eval/js-package-environment`.
-The new upstream skill-collision tests fail only because the host's installed `~/.omp/plugins` skills leak in. With an empty `HOME`, `skills.test.ts` passes.
-`cli-non-tty-launch.test.ts` fails three print-mode cases only when a keyless local Ollama server answers. It passes with `OLLAMA_BASE_URL` pointed at a closed port.
+**Verification:** Source setup, `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.4.10`.
+All 89 focused files passed in separate test processes (1989 tests). They cover every listed divergence and the merge integration changes.
+The full `bun run test` plan ran all 201 commands with `TMUX` unset. Initially, 193 commands passed and eight failed.
+The merge adapted two test fixtures: the shared controller context now exposes user-message text, and the MCP reconnect check no longer counts unrelated logger timers.
+The extension suite passed alone after timing out in pooled runs. The upstream `SpawnRun` GC check also passed in a separate test process.
+Four remaining full-plan failure groups reproduce at pre-merge commit `2e90b76b1c`: `sixel-probe`, `welcome-history-resize`, `sdk-tool-activation` (missing Cursor credentials), and `eval/js-package-environment`.
+The pre-merge extension suite also passes. No cancellation-runtime changes were needed.
 Ghostel followed source-CLI OSC 7 reports at startup and after `/move`, directly and through tmux passthrough. The parent shell directory stayed unchanged after exit.
-A source-CLI replay discovered and used two local CLIProxyAPI-shaped servers, and each server received only its own key.
-Upstream made the status-line `describe` hook required, so the fork `model_profile`, `cyber`, `review_plan`, and `ide_selection` segments describe themselves for native rendering.
-Upstream changed `showModelCycleTrack` to take track segments. The model-profile cycle passes one segment per profile.
-The fork hotkey rows for profile cycling and the cyber toggle moved into upstream's `hotkeyGroups` table. The composer still does not bill upstream `transient` rows.
-Three upstream tests follow fork contracts: the history picker takes the fork cwd argument, `/plan` receives the fork workflow argument, and queue chips show the original command.
-The upstream native-input harness stubs the stop-listener and session-change hooks that the fork's enhanced image paste registers.
+A source-CLI replay discovered and used two local CLIProxyAPI-shaped servers. Each server received only its own test key.
+Warm subagent revival preserves cyber protection claims. Retry-role installation preserves raw configured chains rather than writing filtered chains back.
+The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
 ## Maintenance
 
@@ -99,6 +97,13 @@ The upstream native-input harness stubs the stop-listener and session-change hoo
 - **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/modes/settings.ts`, and `packages/utils/src/format.ts`.
 - **Checks:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts` and `packages/utils/test/format.test.ts`.
 
+### Subagent generation rates
+
+- **Decision:** With `composer.tokenRate` on, show each pinned subagent's live or last generation rate and the live total.
+- **Decision:** Preserve rates alongside upstream live tool previews. Quiet streaming spans still refresh rates, and a focused subagent uses the same reading.
+- **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts`.
+- **Check:** `packages/coding-agent/test/subagent-hud-render.test.ts`.
+
 ### IDE selection and open-file context
 
 - **Decision:** Read IDE MCP notifications for selections and open files.
@@ -179,9 +184,18 @@ The upstream native-input harness stubs the stop-listener and session-change hoo
 - **Decision:** Support startup selection, cycling, CLI selection, and `/model-profile` changes.
 - **Decision:** Preserve project profiles during discovery reloads and restore the profile default after plan mode.
 - **Decision:** Nested session construction must not replace a live session's role bundle. Explicit session restoration still applies the incoming session's profile policy.
+- **Decision:** Keep `modelProfileSwitchNotice` (default `true`). When disabled, picker and resume-prompt switches omit success notices without hiding errors.
 - **Why:** One action must switch the complete role-model set for a workflow.
 - **Key paths:** `packages/coding-agent/src/config/model-roles.ts`, `packages/coding-agent/src/config/settings.ts`, `packages/coding-agent/src/session/model-controls.ts`, and `packages/coding-agent/src/session/agent-session.ts`.
-- **Checks:** `packages/coding-agent/test/agent-session-model-profiles.test.ts`, `packages/coding-agent/test/sdk-nested-session-shared-settings.test.ts`, `packages/coding-agent/test/cli-model-profile-flag.test.ts`, and `packages/coding-agent/test/slash-commands/model-profile.test.ts`.
+- **Checks:** `packages/coding-agent/test/agent-session-model-profiles.test.ts`, `packages/coding-agent/test/sdk-nested-session-shared-settings.test.ts`, `packages/coding-agent/test/cli-model-profile-flag.test.ts`, `packages/coding-agent/test/model-profile-picker.test.ts`, and `packages/coding-agent/test/slash-commands/model-profile.test.ts`.
+
+### Prewalk controls
+
+- **Decision:** Keep `prewalk.into`, including `@@` to keep the active model and `@@:<level>` to change only its thinking level.
+- **Decision:** Keep `/prewalk off` and the unbound-by-default `app.prewalk.toggle` action. The key preserves the editor draft.
+- **Decision:** Disarming is silent. `prewalk.armNotice` (default `true`) controls the arm notice and slash-command success output.
+- **Key paths:** `packages/coding-agent/src/session/prewalk.ts`, `packages/coding-agent/src/session/settings.ts`, `packages/coding-agent/src/slash-commands/builtin-modes.ts`, and `packages/coding-agent/src/modes/controllers/input-controller.ts`.
+- **Checks:** `packages/coding-agent/test/agent-session-prewalk.test.ts`, `packages/coding-agent/test/input-controller-keybindings.test.ts`, `packages/coding-agent/test/prewalk-discovery-provider.test.ts`, and `packages/coding-agent/test/task/executor-prewalk.test.ts`.
 
 ### Per-model compaction thresholds
 
@@ -235,6 +249,8 @@ The upstream native-input harness stubs the stop-listener and session-change hoo
 - **Decision:** Failed session switches restore outgoing protection and notice history. Publish cyber notices only after a successful switch. Resumed active-model substitutions use the startup warning channel.
 - **Decision:** Send print/RPC startup warnings to stderr at CLI session creation. Publish ACP warnings after registration, excluding temporary-session transitions.
 - **Decision:** Keep protection on shared configuration state. An implicit clear removes only its owner's claim. An explicit operator switch-off clears all claims.
+- **Decision:** Parked subagent settings retain their exact protection claims during warm revival. Dynamic retry-role installation preserves raw configured chains.
+- **Revival and retry checks:** `packages/coding-agent/test/task/parked-subagent-session-release.test.ts` and `packages/coding-agent/test/retry-fallback.test.ts`.
 - **Decision:** Apply installed membership checks to background overrides, fallback traversal, cache-warm replays, and dispatch. A retained callback re-checks protection before it dispatches, and a session that shares another session's protection stays constrained while its own indicator is off.
 - **Why:** Operators need to restrict cyber work to approved models. This allowlist does not bypass provider safety restrictions. Preserve the filtering, switch guard, `cyber` status-line segment, and lifecycle rules.
 - **Key paths:** `packages/coding-agent/src/config/cyber-mode.ts`, `packages/coding-agent/src/config/model-resolver.ts`, `packages/coding-agent/src/config/settings.ts`, `packages/coding-agent/src/config/model-roles.ts`, `packages/coding-agent/src/session/model-controls.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/session/turn-recovery.ts`, `packages/coding-agent/src/session/session-advisors.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, `packages/coding-agent/src/eval/completion-bridge.ts`, `packages/coding-agent/src/tiny/online-candidates.ts`, `packages/coding-agent/src/judgment/index.ts`, `packages/coding-agent/src/mnemopi/backend.ts`, `packages/coding-agent/src/sdk.ts`, `packages/tui/src/status-line/segments.ts`, `packages/coding-agent/src/slash-commands/builtin-modes.ts`, and `docs/cyber-mode.md`.
@@ -258,7 +274,7 @@ The upstream native-input harness stubs the stop-listener and session-change hoo
 ### CLIProxyAPI catalog discovery
 
 - **Decision:** Support `discovery.type: cliproxyapi` for any named provider entry in `models.yml`.
-- **Decision:** Read `/v1/models?client_version=pi` for advertised limits, modalities, and reasoning efforts. Keep inference on the configured API.
+- **Decision:** Read `/v1/models?client_version=pi` for advertised limits, modalities, and reasoning efforts. Claude models use `anthropic-messages` and family-specific compaction. Other models retain the configured API.
 - **Decision:** Keep credentials and caches separate for each provider. Do not import catalog prompts or tool policy.
 - **Why:** Multiple proxy servers need independent connections without copies of a single-connection Pi extension.
 - **Key paths:** `packages/coding-agent/src/config/model-discovery.ts`, `packages/coding-agent/src/config/model-registry.ts`, and `packages/coding-agent/src/config/models-config-schema-bundle.ts`.

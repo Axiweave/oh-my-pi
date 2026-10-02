@@ -8,6 +8,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import {
 	cfgModelProfile,
 	cfgModelProfiles,
+	cfgModelProfileSwitchNotice,
 	cfgModelProfileSwitchStyle,
 } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -127,6 +128,20 @@ describe("model profile keys", () => {
 		expect(h.state.activeModelProfile).toBe("work");
 		expect(h.hide).toHaveBeenCalledTimes(2);
 		expect(cfgModelProfile.get(h.settings)).toBe("");
+	});
+
+	it("switches profiles without a success notice when disabled", async () => {
+		const h = harness();
+		cfgModelProfileSwitchNotice.override(h.settings, false);
+		await h.editor.onCycleModelProfileForward!();
+		const picker = h.overlays.at(-1)!;
+		for (const key of "work") picker.handleInput(key);
+		picker.handleInput("\r");
+		await h.closed[0];
+
+		expect(h.state.activeModelProfile).toBe("work");
+		expect(h.hide).toHaveBeenCalledTimes(1);
+		expect(h.showStatus).not.toHaveBeenCalled();
 	});
 
 	it("matches literal terms in order without overlap, regardless of case or surrounding spaces", async () => {

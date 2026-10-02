@@ -252,10 +252,10 @@ function applyProtocolDefaults(host: ProtocolHost, targetSettings: Settings = se
 	}
 }
 
-/** `--no-ui` only applies to `--mode rpc`; reject it elsewhere (exit 1). */
+/** `--no-ui` only applies to RPC modes; reject it elsewhere (exit 1). */
 function rejectNoUiWithoutRpc(args: Pick<Args, "noUi" | "mode">): void {
-	if (!args.noUi || args.mode === "rpc") return;
-	process.stderr.write(`${chalk.red("Error: --no-ui requires --mode rpc")}\n`);
+	if (!args.noUi || args.mode === "rpc" || args.mode === "rpc-ui") return;
+	process.stderr.write(`${chalk.red("Error: --no-ui requires --mode rpc or --mode rpc-ui")}\n`);
 	process.exit(1);
 }
 
@@ -2281,6 +2281,9 @@ export async function runRootCommand(
 			// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
 			const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
 			stopStartupWatchdog();
+			// Startup is over: stop recording spans, or every later session and subagent
+			// appends to the timing tree for the life of the server.
+			logger.endTiming();
 			await runAcpMode(createAcpSession);
 		} else {
 			// Resolve extension-registered CLI flags before creating the session so a
@@ -2535,6 +2538,7 @@ export async function runRootCommand(
 				// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
 				const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
 				stopStartupWatchdog();
+				logger.endTiming();
 				await runRpcMode(session, {
 					setToolUIContext: mode === "rpc-ui" ? setToolUIContext : undefined,
 					headless: parsedArgs.noUi === true,
@@ -2598,6 +2602,9 @@ export async function runRootCommand(
 			} else {
 				// Branch-only single-shot runner: keep print-mode code out of normal interactive startup.
 				stopStartupWatchdog();
+				// PI_TIMING prints the tree after the run; otherwise stop recording now so a
+				// long `-p` run's subagents do not keep growing it.
+				if (!$env.PI_TIMING) logger.endTiming();
 				const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
 				const exitCode = await runPrintMode(session, {
 					mode,

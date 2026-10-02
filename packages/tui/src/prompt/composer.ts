@@ -111,6 +111,7 @@ export interface ComposerOptions {
 /** How {@link Composer.setRuntimeChildren} arranges below-transcript roots. */
 export interface RuntimeChildrenOptions {
 	/**
+
 	 * Dock order on a TSP terminal (no status strip; the composer carries its
 	 * facts): the native dock stacks HUD pills, the working row and queued messages over
 	 * the composer in its own order, and may add describe-only roots. Defaults
@@ -276,6 +277,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#retiredHeaderStart = 0;
 	#resizeRetiredHeaderStart: number | undefined;
 	#lastNormalRows = 0;
+	#anchorAfterInlineRetirement = false;
 	#lastInterruptAt = 0;
 	/** Last described surface; its arrays are reused while their children are unchanged. */
 	#nativeSurface: NativeSurface = { main: [], dock: [] };
@@ -419,8 +421,16 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const afterRoots = roots.slice(transcriptIndex + 1);
 		const after: string[] = [];
 		const afterSpans: ViewportClickSpan[] = [];
+		let decisionPanelOpen = false;
 		for (const root of afterRoots) {
+			const chrome: Component = root;
 			this.#renderBelowRoot(root, width, after, afterSpans);
+			if (
+				chrome.retireDisplacedTranscript ||
+				(root instanceof Container && root.children.some(child => child.retireDisplacedTranscript))
+			) {
+				decisionPanelOpen = true;
+			}
 		}
 		if (this.#preferences.streamingScrollback) {
 			const history = this.#streamingOffer
@@ -451,6 +461,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// one open frame renders each of them once for both.
 		transcript.beginFrame(frame);
 		const history = this.#offerHistory(transcript, width, rows, preRoots.length + after.length);
+		if (decisionPanelOpen && history !== undefined) this.#anchorAfterInlineRetirement = true;
 		const headerVisible = !this.#headerRetired && this.#offeredHistory?.source !== "header";
 		const headerRows = headerVisible ? this.#header.render(width) : [];
 		const before = [...headerRows, ...preRoots];
@@ -466,6 +477,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			const visibleHeaderRows = Math.max(0, rows - before.length - active.length - after.length);
 			this.#retiredHeaderStart = Math.max(0, history.rows.length - visibleHeaderRows);
 		}
+		if (!decisionPanelOpen && before.length + active.length + after.length >= rows) {
+			this.#anchorAfterInlineRetirement = false;
+		}
 		// Pad the live tail with blank rows so the composer group (`after`) stays
 		// glued to the viewport bottom instead of floating up when the
 		// transcript is shorter than the available space. Applied after the
@@ -475,7 +489,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// itself offering history: `capacity` (and `historyTop`) describe the
 		// pre-offer geometry, not the anchor the writer will settle on after
 		// appending it.
-		if (this.#preferences.pinBottom && history === undefined) {
+		if ((this.#preferences.pinBottom || this.#anchorAfterInlineRetirement) && history === undefined) {
 			// Account for anchored history so filler never forces another scroll.
 			const spareCapacity = Math.max(0, rows - before.length - after.length - historyTop);
 			if (active.length < spareCapacity) active = active.concat(new Array(spareCapacity - active.length).fill(""));
@@ -1107,6 +1121,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	/** Mount or replace session-aware root children while preserving the header and status hosts. */
 	setRuntimeChildren(children: readonly Component[], options: RuntimeChildrenOptions = {}): void {
 		if (this.#stopped) return;
+		this.#anchorAfterInlineRetirement = false;
 		if (
 			this.#runtimeChildren.find(child => child instanceof TranscriptContainer) !==
 			children.find(child => child instanceof TranscriptContainer)

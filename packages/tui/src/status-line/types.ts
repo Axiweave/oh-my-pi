@@ -139,6 +139,8 @@ export interface SegmentContext {
 		orchestrationCacheRead: number;
 		premiumRequests: number;
 		cost: number;
+		/** Portion of `cost` carried by completed subagent task results. */
+		subagentCost?: number;
 		tokensPerSecond: number | null;
 	};
 	/** Context usage percent, or null when unknown (e.g. right after compaction). */
@@ -155,6 +157,11 @@ export interface SegmentContext {
 	ideSelection: IDESelection | null;
 	/** Current file path from the IDE, even without an active selection (cursor-only). */
 	ideFile: string | null;
+	/**
+	 * Spend of every subagent under the main session (descendants included),
+	 * from the Agent Hub projection; 0 while a subagent is focused or unknown.
+	 */
+	subagentTreeCost?: number;
 	/**
 	 * Active processing time accumulated this session, in ms — the union of
 	 * every `agent_start`→`agent_end` window plus the currently-streaming
@@ -229,7 +236,11 @@ export interface SegmentView {
  * and branch, and the composer the rest.
  */
 export interface ComposerFacts {
-	/** `meter` (role `omp.composer.context`): context usage along the composer's top edge. */
+	/**
+	 * `meter` (role `omp.composer.context`): context usage along the composer's top edge,
+	 * the whole window wide, with the speculation and compaction points as icon marks,
+	 * the share as `label` and the window as `total`.
+	 */
 	readonly context: NativeNode;
 	/** The model chip's label: name plus the advisor, fast-mode and slow-mode marks. */
 	readonly model: SegmentView;
@@ -238,7 +249,7 @@ export interface ComposerFacts {
 	 * segments as `seg`s; the bar's flexible space, so present even when empty.
 	 */
 	readonly extras: NativeNode;
-	/** `text` (role `omp.composer.usage`): the context share of the window and the session cost. */
+	/** `text` (role `omp.composer.usage`): the session cost (empty when there is none). */
 	readonly usage: NativeNode;
 }
 

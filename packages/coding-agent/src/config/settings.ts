@@ -301,6 +301,11 @@ interface OwnLayers {
 	overrides: RawSettings;
 }
 
+/** An overlay's local layers and cyber claims. See {@link Settings.overlayLayers}. */
+export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides">> & {
+	readonly cyber?: { readonly allowlist: ResolvedCyberAllowlist; readonly owners: readonly string[] };
+};
+
 /** A persisted layer re-read from disk: its new value, the file(s) it came from, and the read-side state it commits. */
 interface LayerRefresh {
 	layer: "global" | "project" | "configOverlay";
@@ -828,6 +833,30 @@ export class Settings {
 		return child;
 	}
 
+	/**
+	 * Copy this overlay's local layers and cyber claims without retaining the live child.
+	 * Keep the allowlist reference because its catalog can contain model callbacks.
+	 * {@link restoreOverlay} on the same parent restores these layers and claims.
+	 */
+	overlayLayers(): OverlayLayers {
+		return {
+			...structuredClone({ global: this.#global, overrides: this.#overrides }),
+			cyber: this.#cyber ? { allowlist: this.#cyber.allowlist, owners: [...this.#cyber.owners] } : undefined,
+		};
+	}
+
+	/** {@link overlay} of this instance whose own layers are `layers` (from {@link overlayLayers}). */
+	restoreOverlay(layers: OverlayLayers): Settings {
+		const child = this.overlay();
+		child.#global = structuredClone(layers.global);
+		child.#overrides = structuredClone(layers.overrides);
+		if (layers.cyber) {
+			child.#cyber = { allowlist: layers.cyber.allowlist, owners: [...layers.cyber.owners] };
+		}
+		child.#rebuildMerged();
+		return child;
+	}
+
 	/** Re-merges after a parent change and forwards it unless the child's own layers pin the value. */
 	#applyParentChange(setting: AnySetting): void {
 		this.#syncParent();
@@ -921,14 +950,17 @@ export class Settings {
 		}
 		if (layer === "override") this.#softPins.delete(setting);
 		const prev = setting.get(this);
+		// Re-setting the persisted global value is a no-op for config.yml: staging it would still
+		// queue a full re-read, rewrite, fsync, and rename of the file.
+		const persistGlobal = layer === "global" && !this.#globalWriteIsNoop(setting.segments, value);
 		if (layer === "global") {
-			this.#stageGlobal(setting.segments, value);
+			if (persistGlobal) this.#stageGlobal(setting.segments, value);
 			this.#releaseSoftPin(setting);
 		} else {
 			setByPath(this.#overrides, setting.segments, value);
 		}
 		this.#rebuildMerged();
-		if (layer === "global") this.#queueSave();
+		if (persistGlobal) this.#queueSave();
 		this.#fireIfChanged(setting, prev);
 	}
 
@@ -960,7 +992,11 @@ export class Settings {
 		if (setting.type !== "record") throw new Error(`Setting ${setting.id} is not a record`);
 		if (value !== undefined) setting.assertWritable({ [key]: value });
 		const record = getByPath(this.#global, setting.segments);
-		const staged = value !== undefined || (isRecord(record) && Object.hasOwn(record, key));
+		// An entry re-set to its persisted value stages nothing (no config.yml rewrite).
+		const staged =
+			value !== undefined
+				? !this.#globalWriteIsNoop([...setting.segments, key], value)
+				: isRecord(record) && Object.hasOwn(record, key);
 		if (!staged && !this.#softPins.has(setting)) return;
 		const prev = setting.get(this);
 		this.#releaseSoftPin(setting);
@@ -1710,22 +1746,26 @@ export class Settings {
 	 */
 	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		const prev = cfgModelRoles.get(this);
-		const current = this.#modelRolesFromLayer(this.#global);
-		this.#captureGlobalMutation(role, this.#modifiedGlobalModelRoleMutations, current[role]);
-		if (modelId === undefined) {
-			delete current[role];
-		} else {
-			current[role] = modelId;
+		// Re-setting the persisted role (or clearing an absent one) stages no config.yml rewrite;
+		// the runtime-override sync below still applies.
+		if (!this.#globalWriteIsNoop(["modelRoles", role], modelId)) {
+			const current = this.#modelRolesFromLayer(this.#global);
+			this.#captureGlobalMutation(role, this.#modifiedGlobalModelRoleMutations, current[role]);
+			if (modelId === undefined) {
+				delete current[role];
+			} else {
+				current[role] = modelId;
+			}
+			// Persist per-role rather than marking the whole `modelRoles` path
+			// modified: #saveNow merges only the changed role into the re-read
+			// file, so a concurrent external edit to a sibling role is not
+			// clobbered by this process's stale in-memory snapshot.
+			setByPath(this.#global, ["modelRoles"], current);
+			this.#modifiedGlobalModelRoles.add(role);
+			this.#persistedMutationGeneration++;
+			this.#rebuildMerged();
+			this.#queueSave();
 		}
-		// Persist per-role rather than marking the whole `modelRoles` path
-		// modified: #saveNow merges only the changed role into the re-read
-		// file, so a concurrent external edit to a sibling role is not
-		// clobbered by this process's stale in-memory snapshot.
-		setByPath(this.#global, ["modelRoles"], current);
-		this.#modifiedGlobalModelRoles.add(role);
-		this.#persistedMutationGeneration++;
-		this.#rebuildMerged();
-		this.#queueSave();
 		this.#fireIfChanged(cfgModelRoles, prev);
 		if (this.isProjectModelRoleRuntimeOverrideActive(role)) {
 			return;
@@ -1846,6 +1886,36 @@ export class Settings {
 		if (this.getProjectModelRole(role)) return "project";
 		if (this.getGlobalModelRole(role)) return "global";
 		return "default";
+	}
+
+	/**
+	 * Raw `modelPresets` entry for `name` from the highest-precedence layer that
+	 * defines it (runtime override → config overlay → project → global), whole —
+	 * same-name entries are NOT deep-merged across layers. A `null` entry on a
+	 * tombstoning layer (runtime, overlay) hides the preset; a `null` anywhere
+	 * else counts as unset. Falls back to the parent chain like the model-role
+	 * layer helpers.
+	 */
+	getOwnedModelPreset(
+		name: string,
+	): { entry: unknown; source: "runtime" | "overlay" | "project" | "global" } | undefined {
+		const layers = [
+			{ layer: this.#overrides, source: "runtime", tombstone: true },
+			{ layer: this.#configOverlay, source: "overlay", tombstone: true },
+			{ layer: projectLayerForMerge(this.#project), source: "project", tombstone: false },
+			{ layer: this.#global, source: "global", tombstone: false },
+		] as const;
+		for (const { layer, source, tombstone } of layers) {
+			const presets = getByPath(layer, ["modelPresets"]);
+			if (!isRecord(presets) || !Object.hasOwn(presets, name)) continue;
+			const entry = presets[name];
+			if (entry === null || entry === undefined) {
+				if (tombstone) return undefined;
+				continue;
+			}
+			return { entry, source };
+		}
+		return this.#parent?.getOwnedModelPreset(name);
 	}
 
 	/**
@@ -2107,6 +2177,29 @@ export class Settings {
 			generation: this.#readYamlGeneration(this.#configPath),
 			baseValue: structuredClone(baseValue),
 		});
+	}
+
+	/**
+	 * Whether a global write of `value` at `segments` would leave config.yml unchanged: the global
+	 * layer already holds it and so does the file on disk (unparseable, legacy-shaped, or externally
+	 * edited files report false, so the write is staged and the save re-reads and merges as usual).
+	 */
+	#globalWriteIsNoop(segments: readonly string[], value: unknown): boolean {
+		if (!settingValuesEqual(getByPath(this.#global, segments), value)) return false;
+		if (!this.#persist || !this.#configPath) return true;
+		let source: string;
+		try {
+			source = fs.readFileSync(this.#configPath, "utf8");
+		} catch (error) {
+			return isEnoent(error) && value === undefined;
+		}
+		let onDisk: unknown;
+		try {
+			onDisk = parseYamlConfig(source);
+		} catch {
+			return false;
+		}
+		return settingValuesEqual(isRecord(onDisk) ? getByPath(onDisk, segments) : undefined, value);
 	}
 
 	async #loadYaml(filePath: string): Promise<RawSettings> {
@@ -2664,7 +2757,7 @@ export class Settings {
 
 		if (migrated && Object.keys(settings).length > 0) {
 			try {
-				await this.#writeYamlAtomically(this.#configPath, settings);
+				await this.#writeYamlAtomically(this.#configPath, stringifyYamlConfig(settings));
 				logger.debug("Settings: migrated to config.yml", { path: this.#configPath });
 			} catch (error) {
 				logger.warn("Settings: failed to write migrated config.yml", {
@@ -3632,15 +3725,14 @@ export class Settings {
 	// Saving
 	// ─────────────────────────────────────────────────────────────────────────
 
-	/** `source` is the file text the write replaces; passing it keeps that file's comments and layout. */
-	async #writeYamlAtomically(filePath: string, settings: RawSettings, source?: string): Promise<void> {
+	async #writeYamlAtomically(filePath: string, content: string): Promise<void> {
 		const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 		let removeTemp = false;
 		try {
 			const handle = await fs.promises.open(tempPath, "wx", 0o600);
 			removeTemp = true;
 			try {
-				await handle.writeFile(stringifyYamlConfig(settings, source), "utf8");
+				await handle.writeFile(content, "utf8");
 				await handle.sync();
 			} finally {
 				await handle.close();
@@ -3778,11 +3870,15 @@ export class Settings {
 				}
 
 				if (shouldWrite) {
-					await this.#writeYamlAtomically(
-						writePath,
+					// A reverted change or an external edit can leave the file unchanged.
+					// Preserve its comments and layout before comparing the serialized text.
+					const content = stringifyYamlConfig(
 						current,
 						loaded.generation.kind === "content" ? loaded.generation.source : undefined,
 					);
+					if (loaded.generation.kind !== "content" || loaded.generation.source !== content) {
+						await this.#writeYamlAtomically(writePath, content);
+					}
 				}
 				this.#quarantinedYamlTargets.delete(configPath);
 				// This write changed the file only at `writtenPaths`. A change staged after this save's snapshot at
@@ -3954,8 +4050,10 @@ export class Settings {
 
 				await this.#writeYamlAtomically(
 					writePath,
-					projectSettings,
-					loaded.generation.kind === "content" ? loaded.generation.source : undefined,
+					stringifyYamlConfig(
+						projectSettings,
+						loaded.generation.kind === "content" ? loaded.generation.source : undefined,
+					),
 				);
 				this.#projectFileSettings = structuredClone(projectSettings);
 				this.#quarantinedYamlTargets.delete(projectConfigPath);

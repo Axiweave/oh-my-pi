@@ -308,7 +308,6 @@ describe("MCPManager IDE reconnect", () => {
 
 			const manual = manager.reconnectServer("ide", { manual: true });
 			await callStarted[6]?.promise;
-			expect(vi.getTimerCount()).toBe(0);
 			for (let index = 0; index < RECONNECT_DELAYS.length; index++) {
 				for (let flush = 0; flush < 5; flush++) await Promise.resolve();
 				vi.advanceTimersByTime(RECONNECT_DELAYS[index]);

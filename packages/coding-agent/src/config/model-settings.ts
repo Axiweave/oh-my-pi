@@ -2,8 +2,9 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { register } from "./registry";
+import { register, type SettingValueOf } from "./registry";
 import type { AuthAccountPolicies } from "@oh-my-pi/pi-ai/auth-storage";
+import type { cfgDefaultThinkingLevel } from "../session/settings";
 
 /** Named model-role bundles (`modelProfiles`): profile name → role → model id. */
 export interface ModelProfilesSettings {
@@ -21,11 +22,22 @@ export interface ModelTagDef {
 /** Model tags keyed by tag id (`modelTags`). */
 export type ModelTagsSettings = Record<string, ModelTagDef>;
 
+/**
+ * One saved model preset (`modelPresets.<name>`): the role assignments and default thinking level
+ * captured by `/modelpreset save` or the model hub, re-applied as a whole by `/modelpreset switch`.
+ */
+export interface ModelPreset {
+	modelRoles: Record<string, string>;
+	/** `defaultThinkingLevel` at save time; absent in hand-written presets that leave it alone. */
+	defaultThinkingLevel?: SettingValueOf<typeof cfgDefaultThinkingLevel>;
+}
+
 const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
 const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const EMPTY_MODEL_PROFILES_RECORD: ModelProfilesSettings = {};
+const EMPTY_MODEL_PRESETS_RECORD: Record<string, ModelPreset> = {};
 const EMPTY_AUTH_ACCOUNT_POLICIES: AuthAccountPolicies = [];
 
 // Auth broker — credentials proxied through a remote `omp auth-broker serve`
@@ -135,6 +147,13 @@ export const cfgModelProfileSwitchNotice = register({
 });
 
 export const cfgModelProfiles = register({ id: "modelProfiles", type: "record", default: EMPTY_MODEL_PROFILES_RECORD });
+
+/** Named model presets; no settings-panel UI — managed by `/modelpreset` and the model hub. */
+export const cfgModelPresets = register({
+	id: "modelPresets",
+	type: "record",
+	default: EMPTY_MODEL_PRESETS_RECORD,
+});
 
 export const cfgModelTags = register({ id: "modelTags", type: "record", default: EMPTY_MODEL_TAGS_RECORD });
 
