@@ -476,7 +476,7 @@ export const cfgTuiTitleState = register({
 		group: "Display",
 		label: "Terminal Title Run State",
 		description:
-			"Show the agent run state in the terminal title's separator — an animated spinner while working (a static ':' under WSL), '>' when it's your turn, '!' when the agent is waiting on you",
+			"Show the agent run state in the terminal title's separator — an animated spinner while working (a static ':' under WSL), '>' when it's your turn, '!' when the agent is waiting on you, '✓' after a finished turn, '✗' after a failed one",
 	},
 });
 

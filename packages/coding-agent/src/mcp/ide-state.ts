@@ -1,5 +1,6 @@
 import { getProjectDir, logger, onProjectDirChanged } from "@oh-my-pi/pi-utils";
 import type { MCPManager } from "./manager";
+import { setTerminalTitleIdeState } from "../utils/title-generator";
 
 /** Session lifecycle state shown by IDE integrations such as claude-code-ide.el. */
 export type IdeSessionState = "idle" | "working" | "needs-input" | "done" | "failed";
@@ -100,8 +101,13 @@ function flush(manager: MCPManager, entry: IdeStateEntry): void {
 		});
 }
 
-/** Publish STATE to MANAGER's `ide` server. Coalesces to the newest state while a send is in flight. */
+/**
+ * Publish STATE to MANAGER's `ide` server. Coalesces to the newest state while a send is in flight.
+ * The terminal title mirrors STATE first, even without an `ide` connection, so an IDE that only
+ * sees the terminal (a remote session) reads the same lifecycle.
+ */
 export function publishIdeSessionState(manager: MCPManager | undefined, state: IdeSessionState): void {
+	setTerminalTitleIdeState(state);
 	if (!manager) return;
 	const entry = entryFor(manager);
 	entry.state = state;

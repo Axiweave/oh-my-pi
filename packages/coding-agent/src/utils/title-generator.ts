@@ -18,6 +18,7 @@ import { isNativeRendering, onNativeRenderingChange } from "@oh-my-pi/pi-tui/nat
 import { SPINNER_FRAMES } from "@oh-my-pi/pi-tui/theme/symbols";
 import { $env, isTerminalHeadless, isWsl, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
+import type { IdeSessionState } from "../mcp/ide-state";
 
 import { roleCandidatePool } from "../config/model-roles";
 import { formatModelStringWithRouting } from "../config/model-resolver";
@@ -721,7 +722,13 @@ export function setExtensionTerminalTitle(title: string): void {
 	emitTerminalTitle();
 }
 
-export type TerminalTitleState = "idle" | "working" | "attention";
+/**
+ * Title run state. `done` and `failed` never come from callers of
+ * {@link setTerminalTitleState}: {@link resolveTerminalTitleState} derives them
+ * from the published IDE session state so the title carries the same
+ * lifecycle an IDE receives over MCP.
+ */
+export type TerminalTitleState = "idle" | "working" | "attention" | "done" | "failed";
 
 export type TerminalTitleSpinnerStyle = "braille" | "pulse" | "dots" | "line" | "static";
 
@@ -751,6 +758,10 @@ const TITLE_SPINNER_INTERVAL_MS = 80;
 const TITLE_IDLE_SEPARATOR = ">";
 /** Agent blocked on the user (ask / approval prompt). */
 const TITLE_ATTENTION_SEPARATOR = "!";
+/** The last turn finished cleanly and the user has not started another. */
+const TITLE_DONE_SEPARATOR = "✓";
+/** The last turn ended on an error. */
+const TITLE_FAILED_SEPARATOR = "✗";
 
 const terminalTitleRuntime: {
 	label: string | undefined;
@@ -761,6 +772,8 @@ const terminalTitleRuntime: {
 	/** Unsubscribes the native-rendering watch taken by `initTerminalTitleState()`. */
 	unwatchNative: (() => void) | undefined;
 	state: TerminalTitleState;
+	/** Newest IDE session state from `publishIdeSessionState`; see {@link resolveTerminalTitleState}. */
+	ideState: IdeSessionState;
 	frame: number;
 	enabled: boolean;
 	style: TerminalTitleSpinnerStyle;
@@ -788,6 +801,7 @@ const terminalTitleRuntime: {
 	pullRequest: undefined,
 	unwatchNative: undefined,
 	state: "idle",
+	ideState: "idle",
 	frame: 0,
 	enabled: true,
 	style: "braille",
@@ -828,7 +842,11 @@ export function buildTerminalTitleWithState(
 				: frames[frame % frames.length]
 			: state === "attention"
 				? TITLE_ATTENTION_SEPARATOR
-				: TITLE_IDLE_SEPARATOR;
+				: state === "done"
+					? TITLE_DONE_SEPARATOR
+					: state === "failed"
+						? TITLE_FAILED_SEPARATOR
+						: TITLE_IDLE_SEPARATOR;
 	return label ? `${DEFAULT_TERMINAL_TITLE} ${separator} ${label}` : `${DEFAULT_TERMINAL_TITLE} ${separator}`;
 }
 
@@ -842,19 +860,35 @@ export function buildNativeTerminalTitle(sessionName: string | undefined, pullRe
 	return pullRequest === undefined ? name : `${name} · #${pullRequest}`;
 }
 
+/**
+ * Combine the title's own run state with the published IDE session state.
+ * A pending prompt from either source shows attention, so a dialog that opens
+ * mid-run still reads as blocked. Working stays working. Otherwise a finished
+ * turn shows `done` or `failed` until the next run, so a terminal that only sees
+ * the title (a remote IDE session) gets the same lifecycle as an IDE connected
+ * over MCP. A stale `needs-input` at the next `agent_start` resolves to the
+ * `!` already shown, so the deduping sink writes nothing before IDE `working`.
+ */
+export function resolveTerminalTitleState(state: TerminalTitleState, ideState: IdeSessionState): TerminalTitleState {
+	if (state === "attention" || ideState === "needs-input") return "attention";
+	if (state === "working") return "working";
+	return ideState === "done" || ideState === "failed" ? ideState : "idle";
+}
+
 function emitTerminalTitle(): void {
 	// The teardown latch lives at the sink (`writeTerminalTitle`), so every path
 	// here is covered without a second check.
 	// An extension override owns the terminal verbatim; the terminal sink
 	// deduplicates repeated state updates.
 	const native = isNativeRendering();
+	const state = resolveTerminalTitleState(terminalTitleRuntime.state, terminalTitleRuntime.ideState);
 	const next =
 		terminalTitleRuntime.extensionOverride ??
 		(native
 			? buildNativeTerminalTitle(terminalTitleRuntime.sessionName, terminalTitleRuntime.pullRequest)
 			: buildTerminalTitleWithState(
 					terminalTitleRuntime.label,
-					terminalTitleRuntime.state,
+					state,
 					terminalTitleRuntime.frame,
 					terminalTitleRuntime.enabled,
 					process.platform,
@@ -868,7 +902,7 @@ function emitTerminalTitle(): void {
 	const recomposeStaticOnFailure =
 		!native &&
 		terminalTitleRuntime.extensionOverride === undefined &&
-		terminalTitleRuntime.state === "working" &&
+		state === "working" &&
 		terminalTitleRuntime.enabled &&
 		!isStaticTitleHost();
 	writeTerminalTitle(next, recomposeStaticOnFailure);
@@ -904,12 +938,21 @@ function startTerminalTitleSpinner(): void {
 /**
  * Reflect the agent run state in the terminal title's separator: `working`
  * animates (static `:` under WSL), `idle` shows `>` (your turn), and
- * `attention` shows `!` (agent blocked on you). Gated off by `tui.titleState`.
+ * `attention` shows `!` (agent blocked on you). A finished turn shows `✓`
+ * (done) or `✗` (failed) through {@link setTerminalTitleIdeState}. Gated off by
+ * `tui.titleState`.
  */
 export function setTerminalTitleState(state: TerminalTitleState): void {
 	terminalTitleRuntime.state = state;
 	if (state === "working" && terminalTitleRuntime.enabled) startTerminalTitleSpinner();
 	else stopTerminalTitleSpinner();
+	emitTerminalTitle();
+}
+
+/** Mirror the published IDE session STATE into the title; see {@link resolveTerminalTitleState}. */
+export function setTerminalTitleIdeState(state: IdeSessionState): void {
+	if (terminalTitleRuntime.ideState === state) return;
+	terminalTitleRuntime.ideState = state;
 	emitTerminalTitle();
 }
 

@@ -6,6 +6,7 @@ import {
 	initTerminalTitleState,
 	setSessionTerminalTitle,
 	setTerminalTitleSpinnerStyle,
+	setTerminalTitleIdeState,
 	setTerminalTitleState,
 } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
@@ -17,8 +18,14 @@ const LABEL = "my-project";
 const BRAND = "π";
 
 describe("buildTerminalTitleWithState", () => {
-	it("separates brand and label with '>' when idle/done (your turn)", () => {
+	it("separates brand and label with '>' when idle (your turn)", () => {
 		expect(buildTerminalTitleWithState(LABEL, "idle", 0, true)).toBe(`${BRAND} > ${LABEL}`);
+	});
+
+	it("marks a finished turn with '✓' and a failed turn with '✗'", () => {
+		expect(buildTerminalTitleWithState(LABEL, "done", 0, true)).toBe(`${BRAND} ✓ ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "failed", 0, true)).toBe(`${BRAND} ✗ ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "done", 0, false)).toBe(`${BRAND}: ${LABEL}`);
 	});
 
 	it("separates brand and label with '!' when the agent needs attention", () => {
@@ -152,6 +159,7 @@ describe("disposeTerminalTitleState", () => {
 		setTerminalTitleSpinnerStyle("braille");
 		setSessionTerminalTitle("my-project");
 		setTerminalTitleState("idle");
+		setTerminalTitleIdeState("idle");
 		resetObserved(writes, windowsTitleMock);
 	});
 
@@ -354,5 +362,43 @@ describe("disposeTerminalTitleState", () => {
 		resetObserved(writes, windowsTitleMock);
 		vi.advanceTimersByTime(400);
 		expect(observedTitles(writes, windowsTitleMock).length).toBeGreaterThan(0);
+	});
+
+	// The calls below replay EventController's real order: `turn_end` publishes the
+	// turn result before `agent_end` writes title `idle`, and `agent_start` writes
+	// title `working` before it publishes IDE `working`. A remote IDE reads only
+	// these titles, so each sequence must emit exactly the lifecycle an MCP IDE sees.
+	it("mirrors the IDE lifecycle into the title in event order", () => {
+		setTerminalTitleSpinnerStyle("static");
+		const run = (steps: Array<() => void>): string[] => {
+			resetObserved(writes, windowsTitleMock);
+			for (const step of steps) step();
+			return observedTitles(writes, windowsTitleMock).map(title => title.split(" ")[1]);
+		};
+		const agentStart = [() => setTerminalTitleState("working"), () => setTerminalTitleIdeState("working")];
+		const agentEnd = (result: "done" | "failed" | "idle" | "needs-input") => [
+			() => setTerminalTitleIdeState(result),
+			() => setTerminalTitleState("idle"),
+			() => setTerminalTitleIdeState(result),
+		];
+
+		// A clean turn ends on done with no idle flicker between turn_end and agent_end.
+		expect(run([...agentStart, ...agentEnd("done")])).toEqual([":", "✓"]);
+		// An error ends on failed; an abort clears the old result to idle.
+		expect(run([...agentStart, ...agentEnd("failed")])).toEqual([":", "✗"]);
+		expect(run([...agentStart, ...agentEnd("idle")])).toEqual([":", ">"]);
+		// A question left for the user shows attention, and the next run goes
+		// straight to working without a stale attention frame.
+		expect(run([...agentStart, ...agentEnd("needs-input")])).toEqual([":", "!"]);
+		expect(run(agentStart)).toEqual([":"]);
+		// A dialog that opens mid-run shows attention, then working again.
+		expect(run([() => setTerminalTitleIdeState("needs-input"), () => setTerminalTitleIdeState("working")])).toEqual([
+			"!",
+			":",
+		]);
+		// An ask/approval tool shows attention until it resolves.
+		expect(
+			run([() => setTerminalTitleState("attention"), () => setTerminalTitleState("working"), ...agentEnd("done")]),
+		).toEqual(["!", ":", "✓"]);
 	});
 });

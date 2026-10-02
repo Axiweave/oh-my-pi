@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ideTurnState, publishIdeSessionState, subscribeIdeState } from "@oh-my-pi/pi-coding-agent/mcp/ide-state";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { McpConnectionStatusEvent } from "@oh-my-pi/pi-coding-agent/mcp/startup-events";
-import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import {
+	disposeTerminalTitleState,
+	initTerminalTitleState,
+	setSessionTerminalTitle,
+	setTerminalTitleSpinnerStyle,
+	setTerminalTitleState,
+} from "@oh-my-pi/pi-coding-agent/utils/title-generator";
+import { getProjectDir, setProjectDir, setTerminalHeadless } from "@oh-my-pi/pi-utils";
 
 /** Shared fake `ide` MCP connection: `sent` collects `params.state` in call order. */
 function fakeIdeManager({
@@ -318,4 +325,40 @@ describe("publishIdeSessionState / subscribeIdeState", () => {
 			expect(sent).toEqual(["idle", "done", "done"]);
 		});
 	}
+});
+
+// A remote IDE has no `ide` MCP connection and reads only the terminal title,
+// so publishing must reach the title even with no manager at all.
+describe("publishIdeSessionState title mirror", () => {
+	it("writes each published state into the terminal title without a manager", () => {
+		const prevHeadless = setTerminalHeadless(false);
+		const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		const titles: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+			const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk as Uint8Array);
+			const title = /\x1b\]0;([\s\S]*?)\x07/.exec(text)?.[1];
+			if (title !== undefined) titles.push(title);
+			return true;
+		});
+		try {
+			initTerminalTitleState();
+			setTerminalTitleSpinnerStyle("static");
+			setSessionTerminalTitle("proj");
+			setTerminalTitleState("idle");
+			publishIdeSessionState(undefined, "idle");
+			titles.length = 0;
+
+			for (const state of ["needs-input", "done", "failed", "idle"] as const) {
+				publishIdeSessionState(undefined, state);
+			}
+			expect(titles).toEqual(["π ! proj", "π ✓ proj", "π ✗ proj", "π > proj"]);
+		} finally {
+			disposeTerminalTitleState();
+			stdoutSpy.mockRestore();
+			if (ttyDescriptor) Object.defineProperty(process.stdout, "isTTY", ttyDescriptor);
+			else Reflect.deleteProperty(process.stdout, "isTTY");
+			setTerminalHeadless(prevHeadless);
+		}
+	});
 });
