@@ -24,6 +24,10 @@ export const launchHelp = {
 		"model-profile": Flags.string({
 			description: "Start on a modelProfiles bundle, overriding the modelProfile config field",
 		}),
+		goal: Flags.string({
+			description:
+				"Start fresh in goal mode (interactive only; bypasses autoResume; no positional prompt, startup plan mode, or explicit resume)",
+		}),
 		prewalk: Flags.boolean({
 			description:
 				"Switch from the active model to a fast/cheap model at the first edit/write after the plan's todo list exists (default off; see prewalk.enabled)",
@@ -121,6 +125,7 @@ export const launchHelp = {
 	examples: [
 		`# Interactive mode\n  ${APP_NAME}`,
 		`# Interactive mode with initial prompt\n  ${APP_NAME} "List all .ts files in src/"`,
+		`# Start working on a goal immediately\n  ${APP_NAME} --goal "Investigate the importer"`,
 		`# Include files in initial message\n  ${APP_NAME} @prompt.md @image.png "What color is the sky?"`,
 		`# Non-interactive mode (process and exit)\n  ${APP_NAME} -p "List all .ts files in src/"`,
 		`# Continue previous session\n  ${APP_NAME} --continue "What did we discuss?"`,

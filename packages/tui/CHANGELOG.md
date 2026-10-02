@@ -21,6 +21,26 @@
 - Fixed shutdown rearming a destructive history reset while flushing a provider's pending rows.
 - A non-fullscreen bottom overlay (model picker, model profile picker) no longer scrolls on-screen history into native scrollback. The overlay now paints over those rows and restores them when it closes, so the transcript no longer leaves a blank gap above the editor. History offered while the overlay is open is committed after it closes. When the on-screen rows are unknown (after a resize, or image rows), the overlay uses the alternate screen. A resize while the overlay covers history replays the history when the overlay closes.
 
+## [18.4.12] - 2026-10-02
+
+### Changed
+
+- Changed Ctrl+Z in Tern's native composer to undo the last edit (TSP `undo` event) instead of suspending
+
+## [18.4.11] - 2026-10-02
+
+### Added
+
+- Added subagent completion percentages to the agent tree, task, and wait views.
+
+### Changed
+
+- Updated notebook evaluation cells in native hosts to use directional gutter indicators for inputs and outputs, with a progress indicator while a cell is running.
+
+### Fixed
+
+- Fixed multiline paste on Windows so pasted line breaks are inserted correctly instead of terminal escape sequences.
+
 ## [18.4.10] - 2026-10-02
 
 ### Added
