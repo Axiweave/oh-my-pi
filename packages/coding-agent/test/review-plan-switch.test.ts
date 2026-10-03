@@ -122,9 +122,9 @@ describe("review plan switch model resolution", () => {
 				expect(on.patterns, label).toContain(PLAN);
 				expect(on.role, label).toBe("plan");
 			} else {
-				// Everything else resolves as before, with any `@reviewer` entry read as `plan`.
+				// Non-review spawns retain their role and inherited effort while model aliases move.
 				const moved = off.patterns.map(pattern => (pattern === REVIEWER ? PLAN : pattern));
-				expect(on, label).toEqual({ patterns: moved, role: off.role });
+				expect(on, label).toEqual({ ...off, patterns: moved });
 			}
 		}
 	});

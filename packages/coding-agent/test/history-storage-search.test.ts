@@ -132,7 +132,7 @@ describe("HistoryStorage.search", () => {
 			await storage.add("other folder prompt", "/projects/other");
 			await storage.add("prompt without a folder");
 
-			expect(storage.getRecent(10, "/projects/current")).toEqual([
+			expect(storage.getRecent(10, { cwd: "/projects/current" })).toEqual([
 				expect.objectContaining({
 					prompt: "current folder prompt",
 					cwd: "/projects/current",
@@ -146,11 +146,11 @@ describe("HistoryStorage.search", () => {
 			await storage.add("commit only current", "/projects/current");
 			await storage.add("commit and amend other", "/projects/other");
 
-			expect(storage.search("com", 10, "/projects/current").map(entry => entry.prompt)).toEqual([
+			expect(storage.search("com", 10, { cwd: "/projects/current" }).map(entry => entry.prompt)).toEqual([
 				"commit only current",
 				"commit and amend current",
 			]);
-			expect(storage.search("mit amend", 10, "/projects/current").map(entry => entry.prompt)).toEqual([
+			expect(storage.search("mit amend", 10, { cwd: "/projects/current" }).map(entry => entry.prompt)).toEqual([
 				"commit and amend current",
 			]);
 		});
@@ -171,7 +171,7 @@ describe("HistoryStorage.search", () => {
 				db.close();
 			}
 
-			expect(storage.getRecent(1, "/projects/a/../a")).toEqual([
+			expect(storage.getRecent(1, { cwd: "/projects/a/../a" })).toEqual([
 				expect.objectContaining({
 					prompt: "shared prompt",
 					created_at: 30,
@@ -179,7 +179,7 @@ describe("HistoryStorage.search", () => {
 					sessionId: "a-session",
 				}),
 			]);
-			expect(storage.getRecent(10, "/projects/b").map(entry => entry.prompt)).toEqual(["shared prompt"]);
+			expect(storage.getRecent(10, { cwd: "/projects/b" }).map(entry => entry.prompt)).toEqual(["shared prompt"]);
 
 			const globalShared = storage.getRecent(10).filter(entry => entry.prompt === "shared prompt");
 			expect(globalShared).toHaveLength(1);
@@ -187,6 +187,23 @@ describe("HistoryStorage.search", () => {
 				cwd: "/projects/b",
 				sessionId: "b-session",
 			});
+		});
+
+		it("filters the latest session within a project without losing shared prompts", async () => {
+			const storage = await freshStorage();
+			await storage.add("commit shared patch", "/projects/a", "a-session");
+			await storage.add("commit other patch", "/projects/a", "other-session");
+			await storage.add("commit shared patch", "/projects/b", "b-session");
+
+			const filter = { cwd: "/projects/a/./", sessionId: "a-session" };
+			expect(storage.getRecent(10, filter).map(entry => entry.prompt)).toEqual(["commit shared patch"]);
+			expect(storage.search("com", 10, filter).map(entry => entry.prompt)).toEqual(["commit shared patch"]);
+			expect(storage.search("mit patch", 10, filter).map(entry => entry.prompt)).toEqual(["commit shared patch"]);
+			expect(storage.getRecent(10, { sessionId: "a-session" })).toEqual([]);
+			expect(storage.search("mit patch", 10, { sessionId: "b-session" }).map(entry => entry.prompt)).toEqual([
+				"commit shared patch",
+			]);
+			expect(storage.getRecent(10, { cwd: "/projects/b", sessionId: "a-session" })).toEqual([]);
 		});
 	});
 });

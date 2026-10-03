@@ -24,7 +24,7 @@ import { handleEditorInput } from "../../../coding-agent/src/utils/external-edit
 import { CustomEditor } from "./custom-editor";
 import type { WordCompletionMethod } from "./word-completion";
 import { type AnimationFrame, isRowPrefix, TranscriptContainer } from "../chrome/transcript-container";
-import { type LspServerInfo, type RecentSession, WelcomeComponent } from "./welcome";
+import { WelcomeComponent } from "./welcome";
 import { queueShorthandBodyStart } from "./queue-input";
 import { ensureThemeSync, getEditorTheme, theme } from "../theme/theme";
 
@@ -75,11 +75,6 @@ export const COMPOSER_DEFAULTS: ComposerPreferences = {
 /** Welcome data that can be supplied initially or patched as startup resolves it. */
 export interface ComposerWelcomeUpdate {
 	readonly version?: string;
-	readonly modelName?: string;
-	readonly providerName?: string;
-	readonly recentSessions?: readonly RecentSession[];
-	/** Detected project servers; `null` means LSP is disabled and hides the welcome section. */
-	readonly lspServers?: readonly LspServerInfo[] | null;
 }
 
 /**
@@ -110,8 +105,9 @@ export interface ComposerOptions {
 
 /** How {@link Composer.setRuntimeChildren} arranges below-transcript roots. */
 export interface RuntimeChildrenOptions {
+	/** Roots such as command reports that clip the viewport without retiring transcript rows. */
+	readonly transient?: readonly Component[];
 	/**
-
 	 * Dock order on a TSP terminal (no status strip; the composer carries its
 	 * facts): the native dock stacks HUD pills, the working row and queued messages over
 	 * the composer in its own order, and may add describe-only roots. Defaults
@@ -223,10 +219,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#preferences: ComposerPreferences;
 	#welcome: WelcomeComponent | undefined;
 	#version = "";
-	#modelName = "";
-	#providerName = "";
-	#recentSessions: RecentSession[] = [];
-	#lspServers: LspServerInfo[] | null = [];
 	#headerBefore: readonly Component[] = [];
 	#headerAfter: readonly Component[] = [];
 	#runtimeChildren: readonly Component[] = [];
@@ -278,6 +270,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#resizeRetiredHeaderStart: number | undefined;
 	#lastNormalRows = 0;
 	#anchorAfterInlineRetirement = false;
+	#transientChrome: ReadonlySet<Component> = new Set();
+	/** Rows the chrome below each below-transcript root took in the last frame (see {@link rowsBelow}). */
+	#rowsBelow = new Map<Component, number>();
 	#lastInterruptAt = 0;
 	/** Last described surface; its arrays are reused while their children are unchanged. */
 	#nativeSurface: NativeSurface = { main: [], dock: [] };
@@ -375,6 +370,27 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.ui.addChild(this.#statusHost);
 		this.ui.setFocus(this.editor);
 	}
+	/**
+	 * Rows the below-transcript chrome under `root` (editor, status line, …)
+	 * took in the last frame, so a root that grows upward can cap itself to
+	 * the screen rows left above them; `undefined` before `root` was laid out.
+	 */
+	rowsBelow(root: Component): number | undefined {
+		return this.#rowsBelow.get(root);
+	}
+
+	/**
+	 * Keep the input on the bottom row while the live rows cannot fill the
+	 * screen, as after an inline decision panel closes. A tall block that just
+	 * left the chrome above the editor (a command report) may have scrolled
+	 * rows into native history that cannot be pulled back; without the pin the
+	 * editor would jump up to where the shorter frame now ends. The pin lifts
+	 * once live rows fill the screen again.
+	 */
+	pinInputToBottom(): void {
+		this.#anchorAfterInlineRetirement = true;
+	}
+
 	/** Compose the bounded mutable viewport and the next ordered history append. */
 	renderFrame(viewport: ViewportSize): TerminalFramePlan {
 		if (!this.#started || this.#stopped) return { viewport: [] };
@@ -421,10 +437,15 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const afterRoots = roots.slice(transcriptIndex + 1);
 		const after: string[] = [];
 		const afterSpans: ViewportClickSpan[] = [];
+		let transientRows = 0;
 		let decisionPanelOpen = false;
+		const ends: { root: Component; end: number }[] = [];
 		for (const root of afterRoots) {
 			const chrome: Component = root;
+			const start = after.length;
 			this.#renderBelowRoot(root, width, after, afterSpans);
+			ends.push({ root, end: after.length });
+			if (this.#transientChrome.has(root)) transientRows += after.length - start;
 			if (
 				chrome.retireDisplacedTranscript ||
 				(root instanceof Container && root.children.some(child => child.retireDisplacedTranscript))
@@ -432,6 +453,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				decisionPanelOpen = true;
 			}
 		}
+		this.#rowsBelow = new Map(ends.map(({ root, end }) => [root, after.length - end]));
 		if (this.#preferences.streamingScrollback) {
 			const history = this.#streamingOffer
 				? this.#offeredHistory
@@ -443,10 +465,12 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				[...this.#header.render(width), ...preRoots],
 				after,
 				afterSpans,
+				transientRows,
 				history,
 				Math.max(1, viewport.columns),
 			);
 		}
+		const chromeRows = preRoots.length + after.length - transientRows;
 		// Offer history under capacity pressure only: blocks stay live (and keep
 		// reflowing to the current width) while the screen has room. A batch
 		// leaves the mutable viewport in the same frame it is appended, so its
@@ -460,12 +484,14 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// Retirement measures the same live blocks the viewport lays out below;
 		// one open frame renders each of them once for both.
 		transcript.beginFrame(frame);
-		const history = this.#offerHistory(transcript, width, rows, preRoots.length + after.length);
+		const history = this.#offerHistory(transcript, width, rows, chromeRows);
 		if (decisionPanelOpen && history !== undefined) this.#anchorAfterInlineRetirement = true;
 		const headerVisible = !this.#headerRetired && this.#offeredHistory?.source !== "header";
 		const headerRows = headerVisible ? this.#header.render(width) : [];
 		const before = [...headerRows, ...preRoots];
-		const capacity = Math.max(0, rows - before.length - after.length);
+		// Reports cover the transcript without changing its allocation. The final
+		// top slice removes the covered rows while current editor rows still count.
+		const capacity = Math.max(0, rows - before.length - after.length + transientRows);
 		let active = transcript.renderViewport(width, capacity, frame);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
@@ -660,6 +686,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		before: readonly string[],
 		after: readonly string[],
 		afterSpans: readonly ViewportClickSpan[],
+		transientRows: number,
 		logicalHistory: HistoryBatch | undefined,
 		outputWidth: number,
 	): TerminalFramePlan {
@@ -679,7 +706,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				viewport,
 			};
 		}
-		const capacity = Math.max(0, rows - after.length);
+		// A report covers rows temporarily. Only persistent chrome can move the
+		// mutable document prefix into native history.
+		const capacity = Math.max(0, rows - after.length + transientRows);
 		const cut = Math.max(0, document.length - capacity);
 		const prefix = document.slice(0, cut);
 		const tail = document.slice(cut);
@@ -1069,7 +1098,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.ui.requestRender();
 	}
 
-	/** Patch welcome data in place as model, session, and project discovery complete. */
+	/** Patch welcome data in place as version, session, and project discovery complete. */
 	updateWelcome(update: ComposerWelcomeUpdate): void {
 		if (this.#stopped) return;
 		this.#applyWelcomeUpdate(update);
@@ -1078,11 +1107,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const welcome = this.#welcome;
 		if (!welcome) return;
 		if (update.version !== undefined) welcome.setVersion(this.#version);
-		if (update.modelName !== undefined || update.providerName !== undefined) {
-			welcome.setModel(this.#modelName, this.#providerName);
-		}
-		if (update.recentSessions !== undefined) welcome.setRecentSessions(this.#recentSessions);
-		if (update.lspServers !== undefined) welcome.setLspServers(this.#lspServers);
 		this.ui.requestRender();
 	}
 
@@ -1131,6 +1155,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#streamingReplayRequested ||= this.#runtimeChildren.some(child => child instanceof TranscriptContainer);
 		}
 		this.#nativeDock = options.nativeDock;
+		this.#transientChrome = new Set(options.transient ?? []);
 		this.ui.removeChild(this.#statusHost);
 		if (this.#runtimeMounted) {
 			for (const child of this.#runtimeChildren) this.ui.removeChild(child);
@@ -1169,20 +1194,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 
 	#applyWelcomeUpdate(update: ComposerWelcomeUpdate): void {
 		if (update.version !== undefined) this.#version = update.version;
-		if (update.modelName !== undefined) this.#modelName = update.modelName;
-		if (update.providerName !== undefined) this.#providerName = update.providerName;
-		if (update.recentSessions !== undefined) this.#recentSessions = [...update.recentSessions];
-		if (update.lspServers !== undefined) this.#lspServers = update.lspServers && [...update.lspServers];
 	}
 
 	#ensureWelcome(): void {
-		this.#welcome ??= new WelcomeComponent(
-			this.#version,
-			this.#modelName,
-			this.#providerName,
-			this.#recentSessions,
-			this.#lspServers,
-		);
+		this.#welcome ??= new WelcomeComponent(this.#version);
 	}
 
 	#rebuildHeader(): void {

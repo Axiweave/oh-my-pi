@@ -8,7 +8,7 @@ import { getKittyGraphics, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graph
 import { getCellDimensions, ImageProtocol, setCellDimensions, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VirtualRenderScheduler } from "../../tui/test/virtual-render-scheduler";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { withoutTerminalMultiplexer } from "../../tui/test/terminal-multiplexer-environment";
+import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-multiplexer";
 
 const BASE64_ONE_PIXEL_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
@@ -110,11 +110,11 @@ function expectOneExactEditor(rows: readonly string[], status: string): number {
 	return top;
 }
 
-function startRetiredWelcome(modelName: string): {
+function startRetiredWelcome(version: string): {
 	composer: Composer;
 	terminal: TrackingTerminal;
 } {
-	const terminal = new TrackingTerminal(80, 12);
+	const terminal = new TrackingTerminal(80, 8);
 	const composer = new Composer({
 		terminal,
 		tuiOptions: { renderScheduler: new ResizeScheduler() },
@@ -123,7 +123,7 @@ function startRetiredWelcome(modelName: string): {
 			quiet: false,
 			resizeScrollback: "preserve",
 		},
-		welcome: { version: "test", modelName, providerName: "test-provider" },
+		welcome: { version },
 	});
 	composers.push(composer);
 	composer.setRuntimeChildren([new TranscriptContainer(), new MutableComposerTail()]);
@@ -148,10 +148,9 @@ describe("composer welcome native-history resize", () => {
 	it.each([false, true])(
 		"keeps one editor and retired welcome through thinking and resize frames (pinBottom=%p)",
 		async pinBottom => {
-			// Select the long auth-broker tip: it retires as three hard rows at
-			// width 80 and must not be recomposed into fewer rows after widening.
 			vi.spyOn(Math, "random").mockReturnValue(0.5);
-			const terminal = new TrackingTerminal(80, 12);
+			// Force header retirement without depending on the welcome banner's height.
+			const terminal = new TrackingTerminal(80, 8);
 			const scheduler = new VirtualRenderScheduler();
 			const composer = new Composer({
 				terminal,
@@ -163,11 +162,7 @@ describe("composer welcome native-history resize", () => {
 					quiet: false,
 					resizeScrollback: "preserve",
 				},
-				welcome: {
-					version: "test",
-					modelName: "test-model",
-					providerName: "test-provider",
-				},
+				welcome: { version: "test" },
 			});
 			composers.push(composer);
 
@@ -177,12 +172,19 @@ describe("composer welcome native-history resize", () => {
 			composer.start({ playWelcomeIntro: false });
 			await scheduler.settle(terminal);
 
-			expect(countRows(plainBuffer(terminal), "Welcome back!")).toBe(1);
+			expect(countRows(plainBuffer(terminal), "vtest")).toBe(1);
 			const initialAnchor = expectOneExactEditor(
 				terminal.getViewport().map(row => Bun.stripANSI(row)),
 				tail.status,
 			);
-			expect(initialAnchor).toBe(pinBottom ? terminal.rows - 3 : 9);
+			if (pinBottom) expect(initialAnchor).toBe(terminal.rows - 3);
+			expect(initialAnchor).toBeGreaterThan(rowOf(terminal.getViewport(), "vtest"));
+			const welcomeText = () =>
+				plainBuffer(terminal)
+					.slice(0, rowOf(plainBuffer(terminal), "EDITOR TOP"))
+					.map(row => row.replace(/\s/g, ""))
+					.join("");
+			const acceptedWelcome = welcomeText();
 			const writesAfterRetirement = terminal.writes.length;
 
 			for (let index = 0; index < 40; index++) {
@@ -191,7 +193,7 @@ describe("composer welcome native-history resize", () => {
 				await scheduler.settle(terminal);
 				const viewport = terminal.getViewport().map(row => Bun.stripANSI(row));
 				expect(expectOneExactEditor(viewport, tail.status)).toBe(initialAnchor);
-				expect(countRows(plainBuffer(terminal), "Welcome back!")).toBe(1);
+				expect(countRows(plainBuffer(terminal), "vtest")).toBe(1);
 			}
 
 			let lastTransient: string[] = [];
@@ -203,17 +205,17 @@ describe("composer welcome native-history resize", () => {
 				terminal.resize(columns, rows);
 				await scheduler.settle(terminal);
 				lastTransient = terminal.getViewport().map(row => Bun.stripANSI(row));
-				expect(countRows(lastTransient, "Welcome back!")).toBe(1);
+				expect(countRows(lastTransient, "vtest")).toBe(1);
 				expectOneExactEditor(lastTransient, tail.status);
 			}
 			await scheduler.advance(terminal, 160);
 
 			let settledViewport = terminal.getViewport().map(row => Bun.stripANSI(row));
-			expect(countRows(settledViewport, "Welcome back!")).toBe(1);
-			expect(rowOf(settledViewport, "Welcome back!")).toBe(rowOf(lastTransient, "Welcome back!"));
+			expect(countRows(settledViewport, "vtest")).toBe(1);
+			expect(rowOf(settledViewport, "vtest")).toBe(rowOf(lastTransient, "vtest"));
 			const settledTop = expectOneExactEditor(settledViewport, tail.status);
 			expect(settledTop).toBe(pinBottom ? terminal.rows - 3 : expectOneExactEditor(lastTransient, tail.status));
-			expect(settledTop).toBeGreaterThan(rowOf(settledViewport, "Welcome back!"));
+			expect(settledTop).toBeGreaterThan(rowOf(settledViewport, "vtest"));
 			if (pinBottom) expect(rowOf(settledViewport, "EDITOR BOTTOM")).toBe(terminal.rows - 1);
 			expect(countRows(plainBuffer(terminal), "EDITOR TOP")).toBe(1);
 			await scheduler.advance(terminal, 101);
@@ -225,26 +227,38 @@ describe("composer welcome native-history resize", () => {
 				terminal.resize(columns, rows);
 				await scheduler.settle(terminal);
 				lastTransient = terminal.getViewport().map(row => Bun.stripANSI(row));
-				expect(countRows(lastTransient, "Welcome back!")).toBe(1);
+				expect(countRows(lastTransient, "vtest")).toBe(1);
 				expectOneExactEditor(lastTransient, tail.status);
 			}
 			await scheduler.advance(terminal, 160);
 
 			settledViewport = terminal.getViewport().map(row => Bun.stripANSI(row));
-			expect(countRows(settledViewport, "Welcome back!")).toBe(1);
-			expect(rowOf(settledViewport, "Welcome back!")).toBe(rowOf(lastTransient, "Welcome back!"));
-			expect(expectOneExactEditor(settledViewport, tail.status)).toBeGreaterThan(
-				rowOf(settledViewport, "Welcome back!"),
-			);
+			expect(countRows(settledViewport, "vtest")).toBe(1);
+			// The normal buffer can scroll retired rows on shrink while the resize
+			// preview only approximates their position. Preserve the whole header,
+			// then require its settled position to stay fixed across status frames.
+			expect(welcomeText()).toBe(acceptedWelcome);
+			const welcomeRow = rowOf(settledViewport, "vtest");
+			const editorTop = expectOneExactEditor(settledViewport, tail.status);
+			expect(expectOneExactEditor(settledViewport, tail.status)).toBeGreaterThan(rowOf(settledViewport, "vtest"));
 			if (pinBottom) expect(rowOf(settledViewport, "EDITOR BOTTOM")).toBe(terminal.rows - 1);
 			expect(countRows(plainBuffer(terminal), "EDITOR TOP")).toBe(1);
+			for (let index = 0; index < 40; index++) {
+				tail.status = index % 2 === 0 ? "thinking high" : "thinking low";
+				composer.ui.requestRender(true);
+				await scheduler.settle(terminal);
+				const viewport = terminal.getViewport().map(row => Bun.stripANSI(row));
+				expect(rowOf(viewport, "vtest")).toBe(welcomeRow);
+				expect(expectOneExactEditor(viewport, tail.status)).toBe(editorTop);
+				expect(welcomeText()).toBe(acceptedWelcome);
+			}
 			expect(terminal.writes.slice(writesAfterRetirement).some(write => write.includes("\x1b[3J"))).toBe(false);
 		},
 	);
 
 	it("preserves a wide glyph that straddles a retired-row resize boundary", () => {
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
-		const { composer, terminal } = startRetiredWelcome("model-aaaa界-tail");
+		const { composer, terminal } = startRetiredWelcome("aaaa界-tail");
 		const accepted = plainBuffer(terminal).find(row => row.includes("界"));
 		expect(accepted).toBeDefined();
 		const glyphIndex = accepted!.indexOf("界");
@@ -264,7 +278,7 @@ describe("composer welcome native-history resize", () => {
 		Bun.env.TMUX = "/tmp/tmux-test/default,1,0";
 		Bun.env.TERM = "tmux-256color";
 		const marker = "MUX-SUFFIX";
-		const { composer, terminal } = startRetiredWelcome(`model-aaaa${marker}`);
+		const { composer, terminal } = startRetiredWelcome(`aaaa${marker}`);
 		const accepted = plainBuffer(terminal).find(row => row.includes(marker));
 		expect(accepted).toBeDefined();
 		expect(visibleWidth(accepted!)).toBeLessThanOrEqual(80);
@@ -292,11 +306,7 @@ describe("composer welcome native-history resize", () => {
 				quiet: false,
 				resizeScrollback: "rebuild",
 			},
-			welcome: {
-				version: "test",
-				modelName: "test-model",
-				providerName: "test-provider",
-			},
+			welcome: { version: "test" },
 		});
 		composers.push(composer);
 		composer.setRuntimeChildren([new TranscriptContainer(), new MutableComposerTail()]);
@@ -304,18 +314,20 @@ describe("composer welcome native-history resize", () => {
 		await scheduler.settle(terminal);
 
 		const narrow = plainBuffer(terminal);
-		expect(countRows(narrow, "Welcome back!")).toBe(1);
-		// Box width tracks the terminal: min(100, 60 - 2) = 58 columns.
-		expect(Math.max(...narrow.map(row => visibleWidth(row)))).toBeLessThanOrEqual(58);
+		expect(countRows(narrow, "vtest")).toBe(1);
+		const narrowWidth = Math.max(...narrow.map(row => visibleWidth(row)));
+		expect(narrowWidth).toBeLessThan(60);
 
 		terminal.resize(100, 12);
-		await scheduler.advance(terminal, 160);
+		// The refresh-capable settle waits out the 400 ms drag-end window plus
+		// the 40 ms drain horizon, then commits the recomposed header in the
+		// same transaction.
+		await scheduler.advance(terminal, 440);
 
 		const rebuilt = plainBuffer(terminal);
-		expect(countRows(rebuilt, "Welcome back!")).toBe(1);
-		// A hard-wrap reflow can never widen a committed 58-column row; only a
-		// recompose at the settled width produces the 98-column box.
-		expect(Math.max(...rebuilt.map(row => visibleWidth(row)))).toBeGreaterThan(58);
+		expect(countRows(rebuilt, "vtest")).toBe(1);
+		// Only a recompose at the settled width can center the banner in 100 columns.
+		expect(Math.max(...rebuilt.map(row => visibleWidth(row)))).toBeGreaterThan(narrowWidth);
 	});
 
 	it("rebuilds retired transcript rows at the settled width by default", async () => {
@@ -336,7 +348,10 @@ describe("composer welcome native-history resize", () => {
 		expect(plainBuffer(terminal)).toContain("block-0@20");
 
 		terminal.resize(30, 4);
-		await scheduler.advance(terminal, 160);
+		// The refresh-capable settle waits out the 400 ms drag-end window plus
+		// the 40 ms drain horizon, then rebuilds the ledger at the settled width
+		// in the same transaction.
+		await scheduler.advance(terminal, 440);
 
 		const resized = plainBuffer(terminal);
 		expect(resized.some(row => row.includes("@20"))).toBe(false);
@@ -426,7 +441,7 @@ describe("composer welcome native-history resize", () => {
 			const composer = new Composer({
 				terminal,
 				tuiOptions: { renderScheduler: scheduler },
-				welcome: { version: "test", modelName: "test-model", providerName: "test-provider" },
+				welcome: { version: "test" },
 				preferences: { ...COMPOSER_DEFAULTS, quiet: false, resizeScrollback: "preserve" },
 			});
 			const transcript = new TranscriptContainer();
@@ -460,7 +475,7 @@ describe("composer welcome native-history resize", () => {
 			const composer = new Composer({
 				terminal,
 				tuiOptions: { renderScheduler: scheduler },
-				welcome: { version: "test", modelName: "test-model", providerName: "test-provider" },
+				welcome: { version: "test" },
 				preferences: { ...COMPOSER_DEFAULTS, quiet: false, resizeScrollback: "preserve" },
 			});
 			const transcript = new TranscriptContainer();

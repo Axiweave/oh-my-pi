@@ -3,16 +3,19 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.4.12` on 2026-10-02.
+**Reviewed against:** `v18.5.1` on 2026-10-03.
 
-**Verification:** Source setup, `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.4.12`.
-All 94 focused files passed in separate test processes. They cover every listed divergence and the merge integration changes.
-The full `bun run test` plan ran all 202 commands with `TMUX` unset. Of these, 197 passed and five failed.
-The merge resolved four conflicts and added the fork's required `workflow: "parallel"` field to the upstream RPC goal fixture.
-Four full-plan failure groups also fail at pre-merge commit `9d1760d60383`: `sixel-probe`, `welcome-history-resize`, `sdk-tool-activation` (missing Cursor authentication), and `eval/js-package-environment`.
-The fifth failure, the upstream `SpawnRun` GC check, passed alone on both versions.
-The maintainer authorized the merge commit after receiving these verification results. The four baseline failure groups remain unresolved.
+**Verification:** Source setup, final `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.5.1`.
+All 86 test files named in this record passed in separate test processes. Additional model, resize, native-send, effort, and command-report checks passed.
+The initial full `bun run test` plan ran all 203 commands with `TMUX` unset. Of these, 194 passed and nine failed.
+The merge resolved 18 conflict files and preserved all 28 recorded fork decisions.
+Integration fixes retain project and session history filters, review-plan request precedence, credential-scoped model hydration before cyber startup, and report-only transcript clipping.
+Targeted checks passed after the merge fixes. The full plan was not repeated after those fixes.
+Three failure groups also fail at pre-merge commit `74c8f8ee21`: `sixel-probe`, `sdk-tool-activation` (missing Cursor authentication), and `eval/js-package-environment`.
+The browser timeout chunk passed in isolated-file and exact-chunk reruns on both versions.
+The maintainer authorized the merge commit after receiving these verification results. The three baseline failure groups remain unresolved.
 Ghostel followed source-CLI OSC 7 reports at startup and after `/move`, directly and through tmux passthrough. The parent shell directory stayed unchanged after exit.
+Actual Ghostel report replays preserved all 45 transcript rows after closure, with streaming scrollback both off and on.
 A source-CLI replay discovered and used two local CLIProxyAPI-shaped servers. Each server received only its own test key.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 

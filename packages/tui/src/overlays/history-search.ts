@@ -27,8 +27,8 @@ export interface HistorySearchEntry {
 
 /** Searchable prompt history supplied by the host. */
 export interface HistorySource {
-	search(query: string, limit: number, cwd?: string): HistorySearchEntry[];
-	getRecent(limit: number, cwd?: string): HistorySearchEntry[];
+	search(query: string, limit: number, filter?: { cwd?: string }): HistorySearchEntry[];
+	getRecent(limit: number, filter?: { cwd?: string }): HistorySearchEntry[];
 }
 import { boundKeys, editorKeys, keyHint, rawKeyHint } from "../chrome/keybinding-hints";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -430,10 +430,10 @@ export class HistorySearchComponent extends OverlayPanel {
 
 	#updateResults(): void {
 		const query = this.#searchInput.getValue().trim();
-		const cwd = this.#scope === "folder" ? this.#currentCwd : undefined;
+		const filter = { cwd: this.#scope === "folder" ? this.#currentCwd : undefined };
 		const results = query
-			? this.#historyStorage.search(query, this.#resultLimit, cwd)
-			: this.#historyStorage.getRecent(this.#resultLimit, cwd);
+			? this.#historyStorage.search(query, this.#resultLimit, filter)
+			: this.#historyStorage.getRecent(this.#resultLimit, filter);
 		this.#menu.setItems(results);
 		this.#menu.moveToBoundary("first");
 		this.#resultsList.setTokens(query ? queryTokens(query) : []);

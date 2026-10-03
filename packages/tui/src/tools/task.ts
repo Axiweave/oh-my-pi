@@ -1352,7 +1352,7 @@ export function renderResult(
 	const aborted = abortedCount > 0;
 	const failed = failCount > 0;
 	const mergeFailed = mergeFailedCount > 0;
-	const isError = aborted || failed;
+	const isError = result.isError === true || aborted || failed;
 	const agentCount = hasResults ? details.results.length : (details.progress?.length ?? 0);
 	const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
 	// Header meta is the spawn count only; each row carries its own ⟨agent⟩
@@ -2154,6 +2154,8 @@ export interface TaskItem {
 	solutionSpace?: string;
 	/** Per-spawn thinking level on the auto ladder, mapped by position onto the resolved model's eligible levels. Overrides the agent's default selector (e.g. `auto`). */
 	effort?: TaskEffort;
+	/** Per-spawn model selector or ordered selector array; overrides agent and settings preferences. */
+	model?: string | string[];
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */
@@ -2181,6 +2183,8 @@ export interface TaskParams {
 	solutionSpace?: string;
 	/** Per-spawn thinking level (flat form); see {@link TaskItem.effort}. */
 	effort?: TaskEffort;
+	/** Per-spawn model selector or ordered selector array; overrides agent and settings preferences. */
+	model?: string | string[];
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */
@@ -2315,7 +2319,7 @@ export interface AgentProgress {
 	resolvedModelRoute?: string;
 	/** True when a live advisor was attached to this run's session, not merely enabled in settings. */
 	advisor?: boolean;
-	/** The agent's latest self-estimate of task completion (0–100), from the periodic `task.completionProbeMs` side request. */
+	/** The agent's latest self-estimate of task completion (0–100), from the periodic `task.completionProbe` side request. */
 	completionPercent?: number;
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;

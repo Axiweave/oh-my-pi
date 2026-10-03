@@ -15,7 +15,8 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
 {{#if evalToolsEnabled}}`tools`: eval-defined, run in your kernel.
 {{/if}}{{#if effortEnabled}}`effort`: thinking level by how open-ended the problem is; maps onto the child's model:
 {{#each effortLevels}}- `{{level}}`: {{criterion}}
-{{/each}}{{/if}}`schemaMode`: default permissive warns after retries; strict fails.
+{{/each}}{{/if}}`model`: selector or ordered array overriding the agent's model for this spawn (`provider/model[:level]`, role alias like `@smol`, `@default` = parent's live model){{#if batchEnabled}}; set per `tasks[]` item, never top-level{{/if}}. Omit unless a specific model is needed. Requested model unavailable → stop and report; NEVER substitute another.
+`schemaMode`: default permissive warns after retries; strict fails.
 {{#if isolationEnabled}}{{#if applyIsolatedChanges}}`isolated`: worktree; successful changes apply to parent.
 {{else}}`isolated`: worktree; changes retained, not applied.
 {{/if}}{{/if}}Children start blank;{{#if ircEnabled}} parent IRC steers immediately;{{/if}} large payloads via `local://<path>`, NEVER inline.

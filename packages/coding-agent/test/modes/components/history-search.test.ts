@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import type { HistoryEntry, HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import type { HistoryEntry, HistoryFilter, HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 
 beforeAll(async () => {
 	await initTheme();
@@ -22,14 +22,14 @@ function fakeStorage(entries: HistoryEntry[]): HistoryStorage {
 			.split(/[^\p{L}\p{N}]+/u)
 			.filter(Boolean);
 	return {
-		getRecent: (limit: number, cwd?: string) =>
-			entries.filter(entry => cwd === undefined || entry.cwd === cwd).slice(0, limit),
-		search: (query: string, limit: number, cwd?: string) => {
+		getRecent: (limit: number, filter: HistoryFilter = {}) =>
+			entries.filter(entry => filter.cwd === undefined || entry.cwd === filter.cwd).slice(0, limit),
+		search: (query: string, limit: number, filter: HistoryFilter = {}) => {
 			const tokens = tokenize(query);
 			return entries
 				.filter(
 					entry =>
-						(cwd === undefined || entry.cwd === cwd) &&
+						(filter.cwd === undefined || entry.cwd === filter.cwd) &&
 						tokens.every(token => entry.prompt.toLowerCase().includes(token)),
 				)
 				.slice(0, limit);
