@@ -2777,6 +2777,8 @@ export class EventController {
 		// terminal failure. AgentSession marks that stable outcome before
 		// dispatching the deferred event; do not infer it from mutable job state.
 		if (event.isTerminal === false) return;
+		// Speckit-auto sends its own single notification per hold and run end.
+		if (this.ctx.speckitAutoRunActive) return;
 
 		// `AgentSession` defers and coalesces the wire-level `agent_end` while a
 		// prompt is still in flight (see `#emitSessionEvent` in agent-session.ts):
@@ -2816,6 +2818,7 @@ export class EventController {
 	}
 
 	sendCompletionNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
+		if (this.ctx.speckitAutoRunActive) return;
 		const notify = cfgCompletionNotify.get(settings);
 		if (notify === "off") return;
 

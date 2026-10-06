@@ -306,3 +306,11 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Retire when:** Upstream routes background desktop-root pointer input without the global tap.
 - **Key path:** `crates/pi-natives/src/desktop/macos/input.rs` (`desktop_background_target`, `background_window_pointer`, `pointer_origin`, `is_system_surface`).
 - **Check:** `bun run test:rs` (`desktop_background_target_*` and `pointer_origin_uses_first_drag_point` in `input.rs`).
+
+### Speckit-auto mode
+
+- **Decision:** Keep the builtin speckit-auto mode (`/speckit-auto-mode`, `/speckit-auto <description>|resume|next`). It runs the speckit phases after clarify on its own. It checks each settled phase turn with one judge call and a text fallback, then starts the next phase after an 800 ms grace tick. It holds on questions, errors, and unreadable turns. The setting is `speckitAuto.convergeRounds` (default `3`).
+- **Why:** The user wants an unattended spec-kit pipeline with the same status bar, Esc pause, and notifications as the other modes. An extension cannot reach the submit guard and the mode-exclusion seams.
+- **Retire when:** Upstream ships an equivalent spec-kit pipeline mode.
+- **Key paths:** `packages/coding-agent/src/modes/speckit-auto.ts`, `packages/coding-agent/src/prompts/speckit-auto/`, `packages/coding-agent/src/modes/interactive-mode.ts` (speckit-auto fields, tick, restore, exclusion), `packages/coding-agent/src/modes/controllers/input-controller.ts` (Esc pause, submit counter), `packages/coding-agent/src/modes/controllers/event-controller.ts` (notification suppression), `packages/coding-agent/src/slash-commands/builtin-modes.ts`, `packages/coding-agent/src/modes/settings.ts`, `packages/tui/src/status-line/`.
+- **Checks:** `packages/coding-agent/test/speckit-auto.test.ts`, `packages/coding-agent/test/interactive-mode-speckit-auto.test.ts`, `packages/tui/test/status-line-speckit-auto.test.ts`.

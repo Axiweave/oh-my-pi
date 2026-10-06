@@ -484,6 +484,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (!cfgPlanEnabled.get(runtime.ctx.settings)) return "Debate: disabled in settings";
+			if (runtime.ctx.speckitAutoEnabled) return "Debate: blocked by speckit-auto mode";
 			if (runtime.ctx.planModeEnabled) {
 				const workflow = runtime.ctx.session.getPlanModeState()?.workflow;
 				const planFile = runtime.ctx.planModePlanFilePath;
@@ -508,6 +509,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (!cfgPlanEnabled.get(runtime.ctx.settings)) return "Plan: disabled in settings";
+			if (runtime.ctx.speckitAutoEnabled) return "Plan: blocked by speckit-auto mode";
 			if (runtime.ctx.planModeEnabled) {
 				const planFile = runtime.ctx.planModePlanFilePath;
 				return `Plan: on${planFile ? ` (${path.basename(planFile)})` : ""}`;
@@ -540,6 +542,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.vibeModeEnabled) return "Vibe: on";
+			if (runtime.ctx.speckitAutoEnabled) return "Vibe: blocked by speckit-auto mode";
 			if (runtime.ctx.planModeEnabled) return "Vibe: blocked by plan mode";
 			if (runtime.ctx.goalModeEnabled) return "Vibe: blocked by goal mode";
 			return "Vibe: off";
@@ -566,6 +569,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (!cfgGoalEnabled.get(runtime.ctx.settings)) return "Goal: disabled in settings";
+			if (runtime.ctx.speckitAutoEnabled) return "Goal: blocked by speckit-auto mode";
 			if (runtime.ctx.planModeEnabled) return "Goal: blocked by plan mode";
 			const state = runtime.ctx.session.getGoalModeState();
 			return state ? `Goal: ${state.goal.status} (${shortDetail(state.goal.objective)})` : "Goal: off";
@@ -582,6 +586,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Have the agent interview you in chat, then set up goal mode",
 		inlineHint: "[rough objective]",
 		allowArgs: true,
+		getTuiAutocompleteDescription: runtime =>
+			runtime.ctx.speckitAutoEnabled ? "Guided goal: blocked by speckit-auto mode" : undefined,
 		handleTui: async (command, runtime) => {
 			await runWithDetachedModeDraft(command, runtime, () =>
 				runtime.ctx.handleGuidedGoalCommand(command.args || undefined, runtime.input, command.text),
@@ -597,6 +603,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint: "[count|duration] [--while|--until '<cmd>'] [prompt]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
+			if (runtime.ctx.speckitAutoEnabled) return "Loop: blocked by speckit-auto mode";
 			if (!runtime.ctx.loopModeEnabled) return "Loop: off";
 			if (runtime.ctx.loopModePaused) return "Loop: paused";
 			const bounds = [
@@ -612,6 +619,34 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			clearSubmittedText(runtime);
 			// Surface any inline prompt so the dispatcher returns it and the normal
 			// submit flow runs the first loop iteration (recording it as the loop prompt).
+			if (prompt) return { prompt };
+		},
+	},
+	{
+		name: "speckit-auto-mode",
+		icon: "loop",
+		description: "Toggle speckit-auto mode (runs the speckit phases after clarify on its own)",
+		getTuiAutocompleteDescription: runtime => runtime.ctx.getSpeckitAutoDescription(),
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.toggleSpeckitAutoMode();
+			clearSubmittedText(runtime);
+		},
+	},
+	{
+		name: "speckit-auto",
+		icon: "loop",
+		description: "Start a speckit-auto run, or resume or advance the active one",
+		subcommands: [
+			{ name: "resume", description: "Resume the paused run" },
+			{ name: "next", description: "Stop the running turn and start the next phase" },
+		],
+		inlineHint: "<feature description> | resume | next",
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => runtime.ctx.getSpeckitAutoDescription(),
+		handleTui: async (command, runtime) => {
+			const prompt = await runtime.ctx.handleSpeckitAutoCommand(command.args);
+			clearSubmittedText(runtime);
+			// The dispatcher submits `/speckit.specify <description>` through the normal submit flow.
 			if (prompt) return { prompt };
 		},
 	},

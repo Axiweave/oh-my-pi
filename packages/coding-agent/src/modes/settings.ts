@@ -907,6 +907,25 @@ export const cfgLoopConditionTimeoutMs = register({
 	},
 });
 
+export const cfgSpeckitAutoConvergeRounds = register({
+	id: "speckitAuto.convergeRounds",
+	type: "number",
+	default: 3,
+	ui: {
+		tab: "interaction",
+		group: "Input",
+		label: "Speckit auto converge rounds",
+		description: "Extra implement and converge rounds after converge adds tasks",
+		options: [
+			{ value: "0", label: "0" },
+			{ value: "1", label: "1" },
+			{ value: "2", label: "2" },
+			{ value: "3", label: "3" },
+			{ value: "5", label: "5" },
+		],
+	},
+});
+
 // Input and startup
 export const cfgComposerRecallClearedDrafts = register({
 	id: "composer.recallClearedDrafts",

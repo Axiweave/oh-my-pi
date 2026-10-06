@@ -145,7 +145,9 @@ import type { ForeignSessionSource } from "../session/foreign-session-store";
 import { HistoryStorage } from "../session/history-storage";
 import { syncTextPrediction, textPredictionBackend } from "../predict/client";
 import { setWordPredictionHost } from "@oh-my-pi/pi-tui/prompt/word-completion";
-import { USER_INTERRUPT_LABEL } from "../session/messages";
+import { isUserTurnInitiator, USER_INTERRUPT_LABEL } from "../session/messages";
+import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
+import { LAUNCH_COMPLETION_MESSAGE_TYPE } from "../session/launch-completion";
 import { resolveMarkdownLinkTargets } from "../internal-urls/hyperlink-targets";
 import { modelMentionDisplayName } from "@oh-my-pi/pi-tui/prompt/model-mention-syntax";
 import { modelMentionChipLabel, shiftImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
@@ -340,6 +342,7 @@ import { UiHelpers } from "./utils/ui-helpers";
 import {
 	cfgAskNotify,
 	cfgAutocompleteMaxVisible,
+	cfgCompletionNotify,
 	cfgComposerShape,
 	cfgComposerStyleFooterMode,
 	cfgComposerTokenRate,
@@ -359,6 +362,7 @@ import {
 	cfgRecapEnabled,
 	cfgRecapIdleSeconds,
 	cfgShowHardwareCursor,
+	cfgSpeckitAutoConvergeRounds,
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
@@ -392,6 +396,29 @@ import {
 	cfgTuiWorkingTimer,
 	cfgTuiWorkingTimerMinSeconds,
 } from "./settings";
+import {
+	classifySpeckitTurn,
+	decideSpeckitStep,
+	formatSpeckitSummary,
+	newSpeckitRun,
+	normalizeConvergeRounds,
+	parseSpeckitAutoState,
+	parseSpeckitPhaseCommand,
+	renderSpeckitContinue,
+	SPECKIT_ANSWER_TEXT,
+	SPECKIT_AUTO_ENTRY,
+	SPECKIT_PHASE_COMMANDS,
+	SPECKIT_REMEDIATION_TEXT,
+	SPECKIT_SUCCESSOR,
+	type SpeckitAction,
+	type SpeckitEndResult,
+	type SpeckitPhase,
+	type SpeckitRun,
+	type SpeckitVerdict,
+} from "./speckit-auto";
+import { isWarpCliAgentProtocolActive } from "./warp-events";
+import { journalJudgmentUsage } from "../judgment";
+import { customMessageContentText } from "../session/checkpoint-entries";
 import { cfgTasksTodoClearDelay, cfgTodoHud } from "../tools/settings";
 import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
@@ -1185,6 +1212,21 @@ const CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS = 2000;
 /** Repaint cadence of the open jobs sheet: output tails, pids and list ages are polled, not pushed. */
 const JOBS_SHEET_REFRESH_MS = 250;
 
+/** A speckit-auto submission: parked until the guard clears, then the own-turn marker until its turn starts. */
+interface SpeckitStart {
+	text: string;
+	phase: SpeckitPhase;
+	generation: number;
+}
+/** Tick cadence of speckit-auto mode; the gap between the decision and the submit is the grace period. */
+const SPECKIT_TICK_MS = 800;
+/** Deadline of one speckit-auto turn check. */
+const SPECKIT_JUDGE_TIMEOUT_MS = 15_000;
+/** `/speckit-auto next` and `resume` run inside their own editor submit; the start guard must not count it. */
+const SPECKIT_COMMAND_SUBMITS = 1;
+/** Custom openers of turns that finish the phase's own work (US2 AC8); other omp custom openers are side traffic. */
+const SPECKIT_PHASE_WAKE_TYPES = new Set([ASYNC_RESULT_MESSAGE_TYPE, LAUNCH_COMPLETION_MESSAGE_TYPE]);
+
 export class InteractiveMode implements InteractiveModeContext {
 	#ownsStartedUi: boolean;
 	session: AgentSession;
@@ -1248,6 +1290,22 @@ export class InteractiveMode implements InteractiveModeContext {
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	loopCondition: LoopConditionConfig | undefined = undefined;
+	speckitAutoEnabled = false;
+	speckitSubmitInFlight = 0;
+	#speckitRun: SpeckitRun | undefined;
+	/** Increments on every event that makes pending speckit-auto work stale (user turn, pause, off, next, resume, switch). */
+	#speckitGeneration = 0;
+	/** Timestamp of the last assistant message the mode classified (the turn key). */
+	#speckitDecidedKey: number | undefined;
+	#speckitTimer: NodeJS.Timeout | undefined;
+	#speckitJudgeAbort: AbortController | undefined;
+	#speckitParked: SpeckitStart | undefined;
+	#speckitOwnTurn: SpeckitStart | undefined;
+	#speckitNextInFlight = false;
+	/** The phase reply, kept while side-traffic turns (advisor notes, IRC, late diagnostics) reply after it. */
+	#speckitPhaseReply: AssistantMessage | undefined;
+	/** True from `agent_start` until the first `message_start`, which opens the turn. */
+	#speckitAwaitOpener = false;
 	/**
 	 * Aborts the in-flight `--while` / `--until` evaluation. Esc between
 	 * iterations lands while the condition command is still running, and
@@ -2496,6 +2554,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.#syncConfigWarningHeader();
 				}
 				void this.#handleGoalSessionEvent(event);
+				this.#handleSpeckitSessionEvent(event);
 			}),
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
 		);
@@ -2880,6 +2939,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		this.#scheduleLoopAutoSubmit();
 		this.#scheduleGoalContinuation();
+		this.#armSpeckitTick();
 
 		using _ = new EventLoopKeepalive();
 		return await promise;
@@ -3177,6 +3237,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.disableLoopMode();
 			return undefined;
 		}
+		if (this.#warnSpeckitAutoBlocks()) return undefined;
 		const parsed = parseLoopArgs(args);
 		if (typeof parsed === "string") {
 			this.showError(parsed);
@@ -3202,6 +3263,442 @@ export class InteractiveMode implements InteractiveModeContext {
 		// auto-resubmits it after each yield, identical to typing the prompt right
 		// after enabling loop mode.
 		return parsed.prompt;
+	}
+
+	/** The run while the mode may act on its own: mode on, run active, not paused, no hold. */
+	#speckitLiveRun(): SpeckitRun | undefined {
+		const run = this.#speckitRun;
+		return this.speckitAutoEnabled && run && !run.paused && !run.hold ? run : undefined;
+	}
+
+	get speckitAutoActing(): boolean {
+		const session = this.session;
+		return (
+			this.#speckitLiveRun() !== undefined &&
+			((this.#speckitRun?.turnOpen === true && session.isStreaming) ||
+				this.#speckitJudgeAbort !== undefined ||
+				this.#speckitParked !== undefined ||
+				// A settled turn waits for its check; compaction and retries hold that check back.
+				(this.#speckitPhaseReply ?? session.getLastAssistantMessage())?.timestamp !== this.#speckitDecidedKey ||
+				session.isCompacting ||
+				session.isRetrying)
+		);
+	}
+
+	get speckitAutoRunActive(): boolean {
+		return this.speckitAutoEnabled && this.#speckitRun?.paused === false;
+	}
+
+	#saveSpeckitAutoState(): void {
+		// Entries keep their data by reference; the run mutates in place.
+		this.sessionManager.appendCustomEntry(
+			SPECKIT_AUTO_ENTRY,
+			structuredClone({ enabled: this.speckitAutoEnabled, run: this.#speckitRun }),
+		);
+	}
+
+	#updateSpeckitAutoStatus(): void {
+		const run = this.#speckitRun;
+		const state = !run
+			? "waiting"
+			: run.paused
+				? "paused"
+				: (run.hold?.kind ?? (this.#speckitJudgeAbort || this.#speckitParked ? "next" : "running"));
+		this.statusLine.setSpeckitAutoStatus(
+			this.speckitAutoEnabled ? { phase: run?.phase, state, reason: run?.hold?.reason } : undefined,
+		);
+		this.ui.requestRender();
+	}
+
+	/** Drops every pending speckit-auto step: the check, the tick, the parked start, and the own-turn marker. */
+	#bumpSpeckitGeneration(): void {
+		this.#speckitGeneration++;
+		this.#speckitJudgeAbort?.abort();
+		this.#speckitJudgeAbort = undefined;
+		clearTimeout(this.#speckitTimer);
+		this.#speckitTimer = undefined;
+		this.#speckitParked = undefined;
+		this.#speckitOwnTurn = undefined;
+	}
+
+	/** Stops the in-memory mode and appends no entry, so the old session keeps its saved state. True when it was on. */
+	#resetSpeckitAuto(): boolean {
+		const wasEnabled = this.speckitAutoEnabled;
+		this.#bumpSpeckitGeneration();
+		this.speckitAutoEnabled = false;
+		this.#speckitRun = undefined;
+		this.#speckitDecidedKey = undefined;
+		this.#speckitPhaseReply = undefined;
+		this.#updateSpeckitAutoStatus();
+		return wasEnabled;
+	}
+
+	/** Restores the latest saved state on this branch with the run paused; never checks or submits. */
+	#restoreSpeckitAuto(): void {
+		const entry = this.sessionManager
+			.getBranch()
+			.findLast(candidate => candidate.type === "custom" && candidate.customType === SPECKIT_AUTO_ENTRY);
+		const state = parseSpeckitAutoState(entry?.type === "custom" ? entry.data : undefined);
+		if (!state?.enabled) return;
+		this.speckitAutoEnabled = true;
+		this.#speckitRun = state.run && { ...state.run, paused: true };
+		this.#updateSpeckitAutoStatus();
+	}
+
+	#notifySpeckitAuto(title: string, body: string): void {
+		// The gates of the completion notification this replaces while a run is active.
+		if (cfgCompletionNotify.get(settings) === "off" || isWarpCliAgentProtocolActive()) return;
+		TERMINAL.sendNotification({ title, body, type: "completion", actions: "focus" });
+	}
+
+	#finishSpeckitRun(run: SpeckitRun, result: SpeckitEndResult): void {
+		this.#speckitRun = undefined;
+		const summary = formatSpeckitSummary(run, result);
+		this.showStatus(summary);
+		this.#notifySpeckitAuto("Speckit auto finished", summary);
+		this.#saveSpeckitAutoState();
+		this.#updateSpeckitAutoStatus();
+	}
+
+	/** The mode that keeps speckit-auto mode off (research R10). */
+	#speckitAutoBlocker(): "loop" | "plan" | "goal" | "vibe" | undefined {
+		if (this.loopModeEnabled) return "loop";
+		if (this.planModeEnabled || this.planModePaused) return "plan";
+		if (this.goalModeEnabled || this.goalModePaused || this.isGuidedGoalInterviewActive()) return "goal";
+		if (this.vibeModeEnabled || this.#vibeModeEntry) return "vibe";
+		return undefined;
+	}
+
+	#turnOnSpeckitAuto(): boolean {
+		const missing = SPECKIT_PHASE_COMMANDS.filter(phase => !this.fileSlashCommands.has(`speckit.${phase}`));
+		if (missing.length > 0) {
+			this.showWarning(
+				`Speckit-auto mode needs these commands: ${missing.map(phase => `/speckit.${phase}`).join(", ")}.`,
+			);
+			return false;
+		}
+		const blocker = this.#speckitAutoBlocker();
+		if (blocker) {
+			if (blocker === "plan") this.#warnPlanModeBlocks();
+			else if (blocker === "goal" && this.isGuidedGoalInterviewActive()) {
+				this.showWarning("Finish the guided goal interview first.");
+			} else this.showWarning(`Exit ${blocker} mode first.`);
+			return false;
+		}
+		this.speckitAutoEnabled = true;
+		this.showStatus("Speckit-auto mode on. Run /speckit.specify <feature> to start.");
+		this.#saveSpeckitAutoState();
+		this.#updateSpeckitAutoStatus();
+		return true;
+	}
+
+	toggleSpeckitAutoMode(): void {
+		if (!this.speckitAutoEnabled) {
+			this.#turnOnSpeckitAuto();
+			return;
+		}
+		// A running turn finishes; only the mode's own pending steps drop.
+		this.#bumpSpeckitGeneration();
+		this.speckitAutoEnabled = false;
+		const run = this.#speckitRun;
+		if (run) {
+			// The summary is the off message; a second status line would replace it.
+			this.#finishSpeckitRun(run, "stopped");
+		} else {
+			this.#saveSpeckitAutoState();
+			this.#updateSpeckitAutoStatus();
+			this.showStatus("Speckit-auto mode off.");
+		}
+	}
+
+	async handleSpeckitAutoCommand(args: string): Promise<string | undefined> {
+		const arg = args.trim();
+		if (!arg) {
+			this.showStatus(
+				`Usage: /speckit-auto <feature description> | resume | next. ${this.getSpeckitAutoDescription()}.`,
+			);
+			return undefined;
+		}
+		if (arg !== "resume" && arg !== "next") {
+			// The dispatcher submits it, so the run starts at its turn start like a typed command.
+			return this.speckitAutoEnabled || this.#turnOnSpeckitAuto() ? `/speckit.specify ${arg}` : undefined;
+		}
+		const run = this.#speckitRun;
+		if (!this.speckitAutoEnabled || !run) {
+			this.showWarning(this.speckitAutoEnabled ? "No speckit-auto run is active." : "Speckit-auto mode is off.");
+			return undefined;
+		}
+		if (arg === "resume") {
+			if (!run.paused) {
+				this.showWarning("The run is not paused.");
+				return undefined;
+			}
+			this.#bumpSpeckitGeneration();
+			run.paused = false;
+			// A restored run can carry its hold; resume decides again about the latest turn (FR-029).
+			run.hold = undefined;
+			// An interrupted turn continues and is never checked; a settled one gets its check.
+			if (run.turnOpen) {
+				this.#speckitDecidedKey = (this.#speckitPhaseReply ?? this.session.getLastAssistantMessage())?.timestamp;
+				this.#speckitSubmit(
+					{ text: renderSpeckitContinue(run.phase), phase: run.phase, generation: this.#speckitGeneration },
+					SPECKIT_COMMAND_SUBMITS,
+				);
+			} else {
+				this.#speckitDecidedKey = undefined;
+			}
+			this.#saveSpeckitAutoState();
+			this.#updateSpeckitAutoStatus();
+			this.#armSpeckitTick();
+			return undefined;
+		}
+		// next: stop a running turn, then start the successor at once, with no grace period (FR-003).
+		this.#bumpSpeckitGeneration();
+		const generation = this.#speckitGeneration;
+		run.hold = undefined;
+		run.paused = false;
+		this.#speckitNextInFlight = true;
+		try {
+			if (this.session.isStreaming) await this.session.abort({ reason: USER_INTERRUPT_LABEL });
+		} finally {
+			this.#speckitNextInFlight = false;
+		}
+		if (generation !== this.#speckitGeneration || this.#speckitRun !== run || !this.speckitAutoEnabled) {
+			return undefined;
+		}
+		const successor = SPECKIT_SUCCESSOR[run.phase];
+		if (!successor) {
+			this.#finishSpeckitRun(run, "stopped");
+			return undefined;
+		}
+		// The skipped turn is never checked.
+		this.#speckitDecidedKey = (this.#speckitPhaseReply ?? this.session.getLastAssistantMessage())?.timestamp;
+		run.turnOpen = false;
+		this.#saveSpeckitAutoState();
+		this.#speckitSubmit({ text: `/speckit.${successor}`, phase: successor, generation }, SPECKIT_COMMAND_SUBMITS);
+		return undefined;
+	}
+
+	pauseSpeckitAuto(): void {
+		const run = this.#speckitRun;
+		if (!run) return;
+		this.#bumpSpeckitGeneration();
+		run.paused = true;
+		this.#saveSpeckitAutoState();
+		this.#updateSpeckitAutoStatus();
+	}
+
+	getSpeckitAutoDescription(): string {
+		const run = this.#speckitRun;
+		if (this.speckitAutoEnabled) {
+			return run ? `Speckit auto: ${run.paused ? "paused" : "on"} (${run.phase})` : "Speckit auto: on (waiting)";
+		}
+		const blocker = this.#speckitAutoBlocker();
+		return blocker ? `Speckit auto: blocked by ${blocker} mode` : "Speckit auto: off";
+	}
+
+	/** Research R2: every reason a speckit-auto start must wait. `ownSubmits` excludes the caller's own submit. */
+	#isSpeckitStartBlocked(ownSubmits = 0): boolean {
+		const session = this.session;
+		return (
+			this.#isAutoSubmitBlocked() ||
+			session.hasAdmittedSubmission ||
+			session.queuedMessageCount > 0 ||
+			this.compactionQueuedMessages.length > 0 ||
+			session.isRetrying ||
+			session.hasPendingAsyncWork() ||
+			this.#pendingSubmittedInput !== undefined ||
+			this.speckitSubmitInFlight > ownSubmits ||
+			this.editor.getText().trim() !== "" ||
+			this.editor.pendingImages.length > 0 ||
+			this.ui.hasOverlay() ||
+			this.ui.getFocused() !== this.editor ||
+			// Ask dialogs and hook selectors swap the editor slot without an overlay.
+			this.editorContainer.children[0] !== this.editor
+		);
+	}
+
+	#armSpeckitTick(): void {
+		if (this.#speckitTimer || !this.#speckitLiveRun()) return;
+		this.#speckitTimer = setTimeout(() => {
+			this.#speckitTimer = undefined;
+			void this.#speckitTick();
+		}, SPECKIT_TICK_MS);
+	}
+
+	/** Research R3: wait for the guard, then submit the parked start or check the settled turn and decide. */
+	async #speckitTick(): Promise<void> {
+		const run = this.#speckitLiveRun();
+		if (!run || this.#speckitNextInFlight || this.#speckitJudgeAbort) return;
+		const message = this.#speckitPhaseReply ?? this.session.getLastAssistantMessage();
+		const undecided = message !== undefined && message.timestamp !== this.#speckitDecidedKey;
+		if (!this.#speckitParked && !this.#speckitOwnTurn && !undecided) return;
+		if (this.#isSpeckitStartBlocked()) {
+			this.#armSpeckitTick();
+			return;
+		}
+		// A settled session means the own submission either started (and matched) or failed before its turn.
+		this.#speckitOwnTurn = undefined;
+		if (this.#speckitParked) {
+			// A turn that omp started after the decision voids the parked start: decide on its reply.
+			if (!undecided) {
+				this.#speckitSubmit(this.#speckitParked);
+				return;
+			}
+			this.#speckitParked = undefined;
+		}
+		if (!undecided) return;
+		this.#speckitDecidedKey = message.timestamp;
+		run.turnOpen = false;
+		const generation = this.#speckitGeneration;
+		const abort = new AbortController();
+		this.#speckitJudgeAbort = abort;
+		this.#saveSpeckitAutoState();
+		this.#updateSpeckitAutoStatus();
+		const timeout = setTimeout(() => abort.abort(), SPECKIT_JUDGE_TIMEOUT_MS);
+		let verdict: SpeckitVerdict;
+		try {
+			verdict = await classifySpeckitTurn(run.phase, message, {
+				settings: this.settings,
+				registry: this.session.modelRegistry,
+				sessionId: this.session.sessionId,
+				model: this.session.model,
+				metadataResolver: provider => this.session.agent.metadataForProvider(provider),
+				onUsage: journalJudgmentUsage(this.sessionManager),
+				telemetry: this.session.agent.telemetry,
+				signal: abort.signal,
+			});
+		} finally {
+			clearTimeout(timeout);
+			if (this.#speckitJudgeAbort === abort) this.#speckitJudgeAbort = undefined;
+		}
+		if (generation !== this.#speckitGeneration || this.#speckitRun !== run) return;
+		this.#applySpeckitAction(run, decideSpeckitStep(run, verdict));
+	}
+
+	/** Applies a decision; a start only parks, so the next clear tick submits it after the grace period. */
+	#applySpeckitAction(run: SpeckitRun, action: SpeckitAction): void {
+		const generation = this.#speckitGeneration;
+		switch (action.kind) {
+			case "notice":
+				this.showStatus(action.text);
+				this.#applySpeckitAction(run, action.after);
+				return;
+			case "end":
+				this.#finishSpeckitRun(run, action.result);
+				return;
+			case "hold":
+				run.hold = action.hold;
+				this.showStatus(
+					`Speckit auto holds in ${run.phase}: ${action.hold.reason}. Reply, or run /speckit-auto next to advance.`,
+				);
+				this.#notifySpeckitAuto("Speckit auto needs you", action.hold.reason);
+				break;
+			case "start":
+				this.#speckitParked = { text: `/speckit.${action.phase}`, phase: action.phase, generation };
+				break;
+			case "answer":
+				this.#speckitParked = { text: SPECKIT_ANSWER_TEXT, phase: run.phase, generation };
+				break;
+			case "remediate":
+				this.#speckitParked = { text: SPECKIT_REMEDIATION_TEXT, phase: "remediation", generation };
+				break;
+		}
+		this.#saveSpeckitAutoState();
+		this.#updateSpeckitAutoStatus();
+		this.#armSpeckitTick();
+	}
+
+	/** Research R12: the only speckit-auto submit path. Submits when the guard is clear, else parks for the tick. */
+	#speckitSubmit(start: SpeckitStart, ownSubmits = 0): void {
+		if (start.generation !== this.#speckitGeneration) return;
+		const onInput = this.onInputCallback;
+		if (!onInput || this.#isSpeckitStartBlocked(ownSubmits)) {
+			this.#speckitParked = start;
+			this.#armSpeckitTick();
+		} else {
+			this.#speckitParked = undefined;
+			this.#speckitOwnTurn = start;
+			onInput(this.startPendingSubmission({ text: start.text }));
+		}
+		this.#updateSpeckitAutoStatus();
+	}
+
+	/** Phase turn start (data-model.md): the run moves to `phase`; the pause ends. */
+	#enterSpeckitPhase(run: SpeckitRun, phase: SpeckitPhase): void {
+		run.phase = phase;
+		run.history.push(phase);
+		run.autoAnswered = false;
+		run.paused = false;
+	}
+
+	/** Research R4/R5: every turn start (`message_start`) moves the run; `agent_end` arms the tick. */
+	#handleSpeckitSessionEvent(event: AgentSessionEvent): void {
+		if (!this.speckitAutoEnabled) return;
+		if (event.type === "agent_end") {
+			this.#armSpeckitTick();
+			return;
+		}
+		if (event.type === "agent_start") {
+			this.#speckitAwaitOpener = true;
+			return;
+		}
+		if (event.type !== "message_start") return;
+		const message = event.message;
+		if (this.#speckitAwaitOpener) {
+			this.#speckitAwaitOpener = false;
+			// A side-traffic turn keeps the phase reply as the one to check; any other opener ends that.
+			if (
+				message.role === "custom" &&
+				!isUserTurnInitiator(message) &&
+				!SPECKIT_PHASE_WAKE_TYPES.has(message.customType)
+			) {
+				this.#speckitPhaseReply ??= this.session.getLastAssistantMessage();
+			} else {
+				this.#speckitPhaseReply = undefined;
+			}
+		}
+		// Turns that omp starts on its own (attribution `agent`, wakes, redirects) are part of the phase.
+		const userTurn =
+			(message.role === "user" && message.attribution !== "agent") ||
+			(message.role === "developer" && message.userInitiated) ||
+			(message.role === "custom" && isUserTurnInitiator(message));
+		if (!userTurn) return;
+		const text = (
+			(message.role === "user" && message.promptTemplateInput) ||
+			customMessageContentText(message.content)
+		).trim();
+		// Only the reply of this turn is checked, never the one before it.
+		this.#speckitPhaseReply = undefined;
+		this.#speckitDecidedKey = this.session.getLastAssistantMessage()?.timestamp;
+		const own = this.#speckitOwnTurn;
+		let run = this.#speckitRun;
+		if (run && own?.generation === this.#speckitGeneration && own.text === text) {
+			this.#speckitOwnTurn = undefined;
+			// Rounds count when their turn starts, so a dropped start costs none.
+			if (own.phase === "remediation") run.remediationRounds++;
+			else if (own.phase === "implement" && run.phase === "converge") run.convergeRounds++;
+			// Answer and continue turns keep the phase.
+			if (text === SPECKIT_ANSWER_TEXT) run.autoAnswered = true;
+			else if (text !== renderSpeckitContinue(own.phase)) this.#enterSpeckitPhase(run, own.phase);
+		} else {
+			this.#bumpSpeckitGeneration();
+			const phase = parseSpeckitPhaseCommand(text)?.phase;
+			if (phase === "specify" || (phase && !run)) {
+				if (run) this.#finishSpeckitRun(run, "stopped");
+				run = newSpeckitRun(phase, normalizeConvergeRounds(cfgSpeckitAutoConvergeRounds.get(this.settings)));
+				this.#speckitRun = run;
+			} else if (phase && run) {
+				this.#enterSpeckitPhase(run, phase);
+			} else if (!run || run.paused) {
+				// A paused run stays paused through other turns.
+				return;
+			}
+		}
+		run.turnOpen = true;
+		run.hold = undefined;
+		this.#saveSpeckitAutoState();
+		this.#updateSpeckitAutoStatus();
 	}
 
 	recordLocalSubmission(text: string, imageCount = 0): () => void {
@@ -4892,6 +5389,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 			this.#updateVibeModeStatus();
 		}
+		this.#resetSpeckitAuto();
 	}
 
 	/** Reconcile mode state from session entries on resume/switch. */
@@ -4921,6 +5419,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			vibeScopeAlreadySuspended,
 		});
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
+		this.#restoreSpeckitAuto();
 		const goalEnabled = cfgGoalEnabled.get(this.session.settings);
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
 			this.session.goalRuntime.clearAccounting();
@@ -5044,6 +5543,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.planModeEnabled) {
 			return;
 		}
+		if (this.#warnSpeckitAutoBlocks()) return;
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
 			return;
@@ -5305,10 +5805,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 	}
 
+	/** Refuses another mode while speckit-auto mode is on; true when it refused. */
+	#warnSpeckitAutoBlocks(): boolean {
+		if (this.speckitAutoEnabled) this.showWarning("Turn off speckit-auto mode first (/speckit-auto-mode).");
+		return this.speckitAutoEnabled;
+	}
+
 	async #enterGoalMode(options: { objective?: string; resume?: boolean; silent?: boolean }): Promise<void> {
 		if (this.goalModeEnabled) {
 			return;
 		}
+		if (this.#warnSpeckitAutoBlocks()) return;
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return;
@@ -5995,6 +6502,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 		requestedWorkflow: PlanWorkflow = "parallel",
 	): Promise<boolean> {
+		if (this.#warnSpeckitAutoBlocks()) return false;
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
 			return false;
@@ -6082,6 +6590,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#exitVibeMode();
 			return false;
 		}
+		if (this.#warnSpeckitAutoBlocks()) return false;
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return false;
@@ -6205,6 +6714,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			await inFlight;
 			return;
 		}
+		if (this.#warnSpeckitAutoBlocks()) return;
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return;
@@ -6317,6 +6827,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
+		if (this.#warnSpeckitAutoBlocks()) return false;
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return false;
@@ -6363,6 +6874,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		displayText = rest?.trim() ? `/guided-goal ${rest.trim()}` : "/guided-goal",
 	): Promise<boolean> {
 		try {
+			if (this.#warnSpeckitAutoBlocks()) return false;
 			if (this.planModeEnabled || this.planModePaused) {
 				this.#warnPlanModeBlocks();
 				return false;
@@ -7246,6 +7758,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// pending input callback against a session that is already disposing.
 		this.#abortLoopCondition();
 		this.#cancelLoopAutoSubmit();
+		this.#bumpSpeckitGeneration();
 
 		// Surface progress before any asynchronous cleanup, including live commands
 		// and BTW history writes, so the user sees a reason for the pause.
@@ -8001,6 +8514,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.clearPinnedError();
 		this.#hidePlanReview();
+		// The old session keeps its saved entry; only the in-memory mode stops.
+		if (this.#resetSpeckitAuto()) this.showStatus("Speckit-auto mode stopped: the session changed.");
 	}
 
 	async handleClearCommand(): Promise<void> {

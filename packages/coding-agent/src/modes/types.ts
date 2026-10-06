@@ -213,6 +213,13 @@ export interface InteractiveModeContext {
 	loopPrompt?: string;
 	loopLimit?: LoopLimitRuntime;
 	loopCondition?: LoopConditionConfig;
+	speckitAutoEnabled: boolean;
+	/** A run is active, not paused, not held, and a run turn streams, a check runs, or a start is parked (Esc pauses). */
+	readonly speckitAutoActing: boolean;
+	/** The mode is on and a run is active and not paused (per-turn notifications are suppressed). */
+	readonly speckitAutoRunActive: boolean;
+	/** Editor submit handlers still running; a speckit-auto start waits for 0. */
+	speckitSubmitInFlight: number;
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	/**
@@ -613,6 +620,10 @@ export interface InteractiveModeContext {
 	cancelGoalContinuation(): void;
 	disableGoalMode(message?: string): void;
 	pauseLoop(): void;
+	toggleSpeckitAutoMode(): void;
+	handleSpeckitAutoCommand(args: string): Promise<string | undefined>;
+	pauseSpeckitAuto(): void;
+	getSpeckitAutoDescription(): string;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
 	openPlanReview(): Promise<void>;
 	/** True while the plan review overlay is open; IDE turn-state publishes yield to `needs-input`. */

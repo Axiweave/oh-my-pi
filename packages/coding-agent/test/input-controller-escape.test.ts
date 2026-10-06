@@ -195,6 +195,7 @@ function createContext(): {
 			getKeys: () => [],
 		} as unknown as InteractiveModeContext["keybindings"],
 		compactionQueuedMessages: [],
+		speckitSubmitInFlight: 0,
 		mcpTestEscapeHandlers: new Set(),
 		skillCommands: new Map(),
 		fileSlashCommands: new Set<string>(),
@@ -414,6 +415,58 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
 		expect(pauseLoop).toHaveBeenCalledTimes(1);
 		expect(spies.cancelPendingSubmission).toHaveBeenCalledTimes(1);
+	});
+
+	describe("speckit-auto pause", () => {
+		function actingContext(acting = true) {
+			const context = createContext();
+			// The fake context is a plain object; the real mode derives this readonly getter.
+			const speckit = context.ctx as InteractiveModeContext & { speckitAutoActing: boolean };
+			speckit.speckitAutoActing = acting;
+			context.ctx.pauseSpeckitAuto = vi.fn();
+			mutableSessionState(context.ctx).isStreaming = true;
+			return context;
+		}
+
+		it("pauses the run and aborts its streaming turn", () => {
+			const { ctx, editor, spies } = actingContext();
+			new InputController(ctx).setupKeyHandlers();
+			editor.onEscape?.();
+
+			expect(ctx.pauseSpeckitAuto).toHaveBeenCalledTimes(1);
+			expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+		});
+
+		it("pauses and aborts while speech playback takes the Esc", () => {
+			vi.spyOn(vocalizer, "clear").mockImplementation(() => {});
+			vi.spyOn(vocalizer, "isSpeaking").mockReturnValue(true);
+			const { ctx, editor, spies } = actingContext();
+			new InputController(ctx).setupKeyHandlers();
+			editor.onEscape?.();
+
+			expect(ctx.pauseSpeckitAuto).toHaveBeenCalledTimes(1);
+			expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+		});
+
+		it("pauses and aborts while a retry takes the Esc", () => {
+			const { ctx, editor, spies } = actingContext();
+			abortViewSession(ctx).isRetrying = true;
+			new InputController(ctx).setupKeyHandlers();
+			editor.onEscape?.();
+
+			expect(abortViewSession(ctx).abortRetry).toHaveBeenCalledTimes(1);
+			expect(ctx.pauseSpeckitAuto).toHaveBeenCalledTimes(1);
+			expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+		});
+
+		it("keeps the normal Esc when the mode does not act", () => {
+			const { ctx, editor, spies } = actingContext(false);
+			new InputController(ctx).setupKeyHandlers();
+			editor.onEscape?.();
+
+			expect(ctx.pauseSpeckitAuto).not.toHaveBeenCalled();
+			expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+		});
 	});
 
 	it("pauses an idle loop and cancels its pending submission", () => {

@@ -515,6 +515,14 @@ export class InputController {
 				return;
 			}
 
+			// Speckit-auto pauses on any Esc while it acts, before maintenance
+			// cancellation and speech playback return early. No return: the
+			// normal Esc flow below still runs.
+			if (this.ctx.speckitAutoActing) {
+				this.ctx.pauseSpeckitAuto();
+				if (this.ctx.session.isStreaming) this.#abortStreamingTurn();
+			}
+
 			if (!this.ctx.focusedAgentId) {
 				const viewSession = this.ctx.viewSession;
 				let aborted = false;
@@ -1042,7 +1050,7 @@ export class InputController {
 	}
 
 	setupEditorSubmitHandler(): void {
-		this.ctx.editor.onSubmit = async (text: string) => {
+		const submit = async (text: string) => {
 			// Before any await: an editor-origin nonce armed by the Return that submitted this text.
 			const editorOrigin = takeEditorOrigin() ?? "";
 			const submittedText = text;
@@ -1453,6 +1461,16 @@ export class InputController {
 				this.ctx.ui.requestRender();
 			}
 			this.ctx.editor.addToHistory(text);
+		};
+		// Speckit-auto starts wait while a submit runs: the editor is already
+		// empty, but input hooks may still be awaited before a submission exists.
+		this.ctx.editor.onSubmit = async (text: string) => {
+			this.ctx.speckitSubmitInFlight++;
+			try {
+				await submit(text);
+			} finally {
+				this.ctx.speckitSubmitInFlight--;
+			}
 		};
 	}
 

@@ -1,0 +1,417 @@
+/**
+ * Speckit-auto mode: the pure rules that drive the spec-kit phases in one
+ * session. The interactive layer owns timers, submits, and saved state; this
+ * module reads a settled turn and decides the next step.
+ */
+import type { AssistantMessage, NoulQuestion, StopReason } from "@oh-my-pi/pi-ai";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { resolveJudge, sharedJudgmentCache } from "../judgment";
+import answerPrompt from "../prompts/speckit-auto/answer.md" with { type: "text" };
+import continuePrompt from "../prompts/speckit-auto/continue.md" with { type: "text" };
+import judgePrompt from "../prompts/speckit-auto/judge.md" with { type: "text" };
+import remediationPrompt from "../prompts/speckit-auto/remediation.md" with { type: "text" };
+import type { ClassifyUnexpectedStopDeps } from "../session/unexpected-stop-classifier";
+
+export type SpeckitPhase =
+	| "specify"
+	| "clarify"
+	| "plan"
+	| "tasks"
+	| "analyze"
+	| "remediation"
+	| "implement"
+	| "converge";
+
+export interface SpeckitHold {
+	/** `user`: waits for an answer. `needs-you`: error, limit, or unreadable turn. */
+	kind: "user" | "needs-you";
+	reason: string;
+}
+
+export interface SpeckitRun {
+	phase: SpeckitPhase;
+	/** Every phase turn the run started, in order. */
+	history: SpeckitPhase[];
+	remediationRounds: number;
+	/** Extra implement and converge rounds, 0..convergeLimit. */
+	convergeRounds: number;
+	convergeLimit: number;
+	/** The automatic answer was sent in this phase run. */
+	autoAnswered: boolean;
+	/** A run turn started and has not settled yet. */
+	turnOpen: boolean;
+	paused: boolean;
+	hold?: SpeckitHold;
+}
+
+export interface SpeckitAutoState {
+	enabled: boolean;
+	run?: SpeckitRun;
+}
+
+export interface SpeckitVerdict {
+	/** stopReason error, length, or aborted, with the reason. */
+	failed?: string;
+	/** false: reported error or early stop. undefined: cannot tell. */
+	completed: boolean | undefined;
+	waits: boolean | undefined;
+	/** The only open question asks to proceed with the recommendation. */
+	routine: boolean;
+	/** Clarify only. */
+	ready?: boolean;
+	/** Analyze only. */
+	analyze?: { critical: number; high: number } | "unreadable";
+	/** Converge only. */
+	converge?: "complete" | "added" | "none";
+}
+
+export type SpeckitEndResult = "complete" | "open-tasks" | "stopped";
+
+export type SpeckitAction =
+	| { kind: "start"; phase: SpeckitPhase }
+	| { kind: "answer" }
+	| { kind: "remediate" }
+	| { kind: "hold"; hold: SpeckitHold }
+	| { kind: "end"; result: SpeckitEndResult }
+	| { kind: "notice"; text: string; after: SpeckitAction };
+
+/** The phases that have a `/speckit.<phase>` command, in run order. */
+export const SPECKIT_PHASE_COMMANDS: readonly SpeckitPhase[] = [
+	"specify",
+	"clarify",
+	"plan",
+	"tasks",
+	"analyze",
+	"implement",
+	"converge",
+];
+export const SPECKIT_REMEDIATION_ROUNDS = 2;
+export const SPECKIT_AUTO_ENTRY = "speckit-auto";
+/** Phase that `/speckit-auto next` starts; `undefined` ends the run. */
+export const SPECKIT_SUCCESSOR: Record<SpeckitPhase, SpeckitPhase | undefined> = {
+	specify: "clarify",
+	clarify: "plan",
+	plan: "tasks",
+	tasks: "analyze",
+	analyze: "implement",
+	remediation: "analyze",
+	implement: "converge",
+	converge: undefined,
+};
+
+const DEFAULT_CONVERGE_ROUNDS = 3;
+/** Characters of the message end that the judge and the text cues read. */
+const TAIL_CHARS = 6000;
+/** Yes-probability at or above which a judge answer counts as yes. */
+const JUDGE_THRESHOLD = 0.5;
+
+export const SPECKIT_ANSWER_TEXT = prompt.render(answerPrompt);
+export const SPECKIT_REMEDIATION_TEXT = prompt.render(remediationPrompt);
+export const renderSpeckitContinue = (phase: SpeckitPhase): string => prompt.render(continuePrompt, { phase });
+
+/** Judge question templates by answer id, one `## <id>` section each. */
+const JUDGE_SECTIONS: Record<string, string> = Object.fromEntries(
+	judgePrompt
+		.split(/^## /m)
+		.slice(1)
+		.map(section => {
+			const newline = section.indexOf("\n");
+			return [section.slice(0, newline).trim(), section.slice(newline + 1)];
+		}),
+);
+
+const isPhase = (value: unknown): value is SpeckitPhase => typeof value === "string" && value in SPECKIT_SUCCESSOR;
+const isCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
+
+export function parseSpeckitPhaseCommand(text: string): { name: string; phase?: SpeckitPhase } | undefined {
+	const name = /^\/speckit\.([a-z]+)(?:\s|$)/.exec(text)?.[1];
+	if (name === undefined) return undefined;
+	return { name, phase: SPECKIT_PHASE_COMMANDS.find(phase => phase === name) };
+}
+
+export function newSpeckitRun(phase: SpeckitPhase, convergeLimit: number): SpeckitRun {
+	return {
+		phase,
+		history: [phase],
+		remediationRounds: 0,
+		convergeRounds: 0,
+		convergeLimit,
+		autoAnswered: false,
+		turnOpen: true,
+		paused: false,
+	};
+}
+
+export const normalizeConvergeRounds = (value: unknown): number =>
+	typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : DEFAULT_CONVERGE_ROUNDS;
+
+function parseRun(data: unknown): SpeckitRun | undefined {
+	if (typeof data !== "object" || data === null) return undefined;
+	const run = data as Record<string, unknown>;
+	if (
+		!isPhase(run.phase) ||
+		!Array.isArray(run.history) ||
+		!run.history.every(isPhase) ||
+		!isCount(run.remediationRounds) ||
+		!isCount(run.convergeRounds) ||
+		!isCount(run.convergeLimit)
+	) {
+		return undefined;
+	}
+	const saved = run.hold as Partial<SpeckitHold> | undefined;
+	return {
+		phase: run.phase,
+		history: [...run.history],
+		remediationRounds: run.remediationRounds,
+		convergeRounds: run.convergeRounds,
+		convergeLimit: run.convergeLimit,
+		autoAnswered: run.autoAnswered === true,
+		turnOpen: run.turnOpen === true,
+		paused: run.paused === true,
+		hold:
+			(saved?.kind === "user" || saved?.kind === "needs-you") && typeof saved.reason === "string"
+				? { kind: saved.kind, reason: saved.reason }
+				: undefined,
+	};
+}
+
+/** Validates a saved `speckit-auto` entry; `undefined` means "mode off". An invalid run is dropped. */
+export function parseSpeckitAutoState(data: unknown): SpeckitAutoState | undefined {
+	if (typeof data !== "object" || data === null) return undefined;
+	const { enabled, run } = data as Record<string, unknown>;
+	if (typeof enabled !== "boolean") return undefined;
+	return { enabled, run: parseRun(run) };
+}
+
+const hold = (kind: SpeckitHold["kind"], reason: string): SpeckitAction => ({ kind: "hold", hold: { kind, reason } });
+const start = (phase: SpeckitPhase): SpeckitAction => ({ kind: "start", phase });
+/** Phases where any question goes to the user (row 2). */
+const ASKS_USER: Partial<Record<SpeckitPhase, true>> = {
+	specify: true,
+	clarify: true,
+	analyze: true,
+	remediation: true,
+};
+/** Phases that need `completed === true` to advance (row 7). */
+const NEEDS_COMPLETED: Partial<Record<SpeckitPhase, true>> = {
+	specify: true,
+	plan: true,
+	tasks: true,
+	implement: true,
+	remediation: true,
+};
+
+/** The decision table in data-model.md, rows 1-23, top to bottom. Pure. */
+export function decideSpeckitStep(run: SpeckitRun, verdict: SpeckitVerdict): SpeckitAction {
+	const { phase } = run;
+	if (verdict.failed) return hold("needs-you", verdict.failed);
+	if (verdict.waits === true) {
+		if (!ASKS_USER[phase] && verdict.routine && !run.autoAnswered) return { kind: "answer" };
+		return hold("user", "answer the question");
+	}
+	if (verdict.completed === false) return hold("needs-you", "the phase reported an error or stopped early");
+	if ((phase === "specify" || phase === "clarify") && verdict.waits === undefined) {
+		return hold("needs-you", "cannot tell if the phase waits; /speckit-auto next advances");
+	}
+	if (NEEDS_COMPLETED[phase] && verdict.completed !== true) {
+		return hold("needs-you", "cannot tell if the phase finished; /speckit-auto next advances");
+	}
+	switch (phase) {
+		case "clarify":
+			if (verdict.ready !== true) return hold("needs-you", "clarify did not report the spec ready");
+			break;
+		case "analyze": {
+			const report = verdict.analyze;
+			if (report === undefined || report === "unreadable") return hold("needs-you", "no readable analyze report");
+			if (report.critical > 0) {
+				return run.remediationRounds < SPECKIT_REMEDIATION_ROUNDS
+					? { kind: "remediate" }
+					: hold(
+							"needs-you",
+							`${report.critical} CRITICAL findings remain after ${SPECKIT_REMEDIATION_ROUNDS} rounds`,
+						);
+			}
+			if (report.high > 0) {
+				return {
+					kind: "notice",
+					text: `Speckit auto: analyze found ${report.high} HIGH findings. Continuing to implement.`,
+					after: start("implement"),
+				};
+			}
+			break;
+		}
+		case "converge":
+			if (verdict.converge === "complete") return { kind: "end", result: "complete" };
+			if (verdict.converge === "added") {
+				return run.convergeRounds < run.convergeLimit ? start("implement") : { kind: "end", result: "open-tasks" };
+			}
+			return hold("needs-you", "converge reported no result");
+	}
+	// Rows 8, 9, 15, and 20-23: every remaining phase starts its successor.
+	return start(SPECKIT_SUCCESSOR[phase]!);
+}
+
+const FAILURES: Partial<Record<StopReason, string>> = {
+	error: "the provider returned an error",
+	length: "the reply hit the output limit",
+	aborted: "the turn was aborted",
+};
+const ERROR_CUE = /\bERROR\b|\bError:|\b[Ff]ail(?:ed|ure)\b|\b[Bb]locked\b/;
+const QUESTION_CUE =
+	/\?[*_"'`)\]]*[ \t]*$|\*\*Question:\*\*|Your choice|You can reply|Format: Short answer|Wait for user response|\(yes\/no\)/m;
+const ANALYZE_OFFER = /\b(?:suggest|propose)\b[^\n]*\bremediation\b/i;
+const CHECKLIST_GATE = "Do you want to proceed with implementation anyway? (yes/no)";
+const PAST_TENSE = "(?:wrote|written|created|generated|complete|completed)";
+/** A line that reports `file` as written, in either word order. */
+const reportsWritten = (file: string): RegExp =>
+	new RegExp(`^(?=[^\\n]*\\b${file}\\b)(?=[^\\n]*\\b${PAST_TENSE}\\b)`, "im");
+/** Phase report cues; every pattern of the phase must match. */
+const REPORT_CUES: Partial<Record<SpeckitPhase, RegExp[]>> = {
+	specify: [/\bspec\.md\b/, /\/speckit\.(?:clarify|plan)\b/],
+	plan: [reportsWritten("plan\\.md")],
+	tasks: [reportsWritten("tasks\\.md")],
+	implement: [/\ball (?:\d+ )?tasks\b[^\n]*\b(?:complete|completed|done)\b/i],
+	remediation: [/^[ \t]*Remediation complete\.[ \t]*$/m],
+};
+const DEFERRED_ROW = /^[ \t]*\|.*\|[ \t]*\**Deferred\**[ \t]*\|.*$/gm;
+const APPENDED_COUNT = /\bappended\s+\d+\b[^\n]*\btasks?\b|\b\d+\s+(?:\w+\s+)?tasks?\b[^\n]*\bappended\b/i;
+
+function readAnalyzeReport(text: string): SpeckitVerdict["analyze"] {
+	if (!/^#{1,6}[ \t]*Specification Analysis Report\b/m.test(text)) return "unreadable";
+	let table = false;
+	let critical = 0;
+	let high = 0;
+	let severityColumn = -1;
+	for (const line of text.split("\n")) {
+		const row = line.trim();
+		if (!row.startsWith("|")) {
+			severityColumn = -1;
+			continue;
+		}
+		const cells = row
+			.slice(1, row.endsWith("|") ? -1 : undefined)
+			.split("|")
+			.map(cell => cell.replace(/[*_`]/g, "").trim().toUpperCase());
+		if (severityColumn < 0) {
+			severityColumn = cells.indexOf("SEVERITY");
+			table ||= severityColumn >= 0;
+		} else if (cells[severityColumn] === "CRITICAL") critical++;
+		else if (cells[severityColumn] === "HIGH") high++;
+	}
+	const metric = /Critical Issues Count[\s:|*]*(\d+)/i.exec(text)?.[1];
+	if (!table && !(metric === "0" && /\b(?:no|0)\s+(?:issues|findings)\b/i.test(text))) return "unreadable";
+	return { critical: Math.max(critical, Number(metric ?? 0)), high };
+}
+
+function readConverge(tail: string): SpeckitVerdict["converge"] {
+	const complete = /✅\s*Converged/.test(tail);
+	const added = /\btasks_appended\b/.test(tail) || (APPENDED_COUNT.test(tail) && /Phase \d+: Convergence/.test(tail));
+	if (complete === added) return "none";
+	return complete ? "complete" : "added";
+}
+
+function readReady(tail: string): boolean | undefined {
+	for (const row of tail.match(DEFERRED_ROW) ?? []) {
+		if (!/\bplan(?:ning)?\b/i.test(row)) return undefined;
+	}
+	if (/No critical ambiguities detected/i.test(tail)) return true;
+	return /\/speckit\.plan\b/.test(tail) && !/\/speckit\.clarify\b/.test(tail) ? true : undefined;
+}
+
+const assistantText = (message: AssistantMessage): string =>
+	message.content.flatMap(content => (content.type === "text" ? [content.text] : [])).join("\n");
+
+/** The reply tail without the analyze remediation offer, which is never a question (FR-022). */
+const askedText = (phase: SpeckitPhase, tail: string): string =>
+	phase === "analyze"
+		? tail
+				.split(/\n[ \t]*\n/)
+				.filter(paragraph => !ANALYZE_OFFER.test(paragraph))
+				.join("\n\n")
+		: tail;
+
+/** Deterministic parts of the verdict plus the text-only fallback for the judged parts (research R6). */
+export function readSpeckitTextVerdict(phase: SpeckitPhase, message: AssistantMessage): SpeckitVerdict {
+	const text = assistantText(message);
+	const tail = text.slice(-TAIL_CHARS);
+	const error = ERROR_CUE.test(tail);
+	const question = QUESTION_CUE.test(askedText(phase, tail));
+	const reported = REPORT_CUES[phase]?.every(cue => cue.test(tail)) ?? false;
+	return {
+		failed:
+			message.stopReason === "error" && message.errorMessage
+				? `${FAILURES.error}: ${message.errorMessage}`
+				: FAILURES[message.stopReason],
+		completed: error ? false : !question && reported ? true : undefined,
+		waits: question,
+		routine: !error && tail.includes(CHECKLIST_GATE),
+		ready: phase === "clarify" ? readReady(tail) : undefined,
+		analyze: phase === "analyze" ? readAnalyzeReport(text) : undefined,
+		converge: phase === "converge" ? readConverge(tail) : undefined,
+	};
+}
+
+export type SpeckitJudgeDeps = ClassifyUnexpectedStopDeps;
+
+/**
+ * Verdict for a settled phase turn: failure, analyze counts, and converge
+ * result from the text; completed, waits, routine, and ready from one judge
+ * call, or from the text fallback when the judge cannot answer. Never throws.
+ */
+export async function classifySpeckitTurn(
+	phase: SpeckitPhase,
+	message: AssistantMessage,
+	deps: SpeckitJudgeDeps,
+): Promise<SpeckitVerdict> {
+	const verdict = readSpeckitTextVerdict(phase, message);
+	if (verdict.failed) return verdict;
+	try {
+		const judge = resolveJudge({
+			settings: deps.settings,
+			registry: deps.registry,
+			sessionModel: deps.model,
+			sessionId: deps.sessionId,
+			metadataResolver: deps.metadataResolver,
+			purpose: "speckit-auto",
+			onUsage: deps.onUsage,
+			telemetry: deps.telemetry,
+			cache: sharedJudgmentCache(),
+		});
+		const questions: Record<string, NoulQuestion> = {};
+		for (const [id, template] of Object.entries(JUDGE_SECTIONS)) {
+			if (id !== "ready" || phase === "clarify") {
+				questions[id] = { type: "noul", instructions: prompt.render(template, { phase }) };
+			}
+		}
+		const { answers } = await judge.judge(
+			{ state: { phase, message: askedText(phase, assistantText(message).slice(-TAIL_CHARS)) }, questions },
+			{ signal: deps.signal },
+		);
+		const yes = (id: string): boolean => answers[id].noul >= JUDGE_THRESHOLD;
+		// The judge reads analyze findings and converge gaps as failures; a readable outcome with no error cue is the step's result.
+		const outcome =
+			(verdict.analyze !== undefined && verdict.analyze !== "unreadable") ||
+			(verdict.converge !== undefined && verdict.converge !== "none");
+		return {
+			...verdict,
+			completed: yes("completed") || (outcome && verdict.completed !== false),
+			waits: yes("waits"),
+			routine: yes("routine"),
+			ready: phase === "clarify" ? yes("ready") : undefined,
+		};
+	} catch (error) {
+		logger.debug("speckit-auto: turn check failed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return verdict;
+	}
+}
+
+const RESULT_TEXT: Record<SpeckitEndResult, string> = {
+	complete: "complete",
+	"open-tasks": "ended with open tasks",
+	stopped: "stopped",
+};
+
+export const formatSpeckitSummary = (run: SpeckitRun, result: SpeckitEndResult): string =>
+	`Speckit auto run ${RESULT_TEXT[result]}. Phases: ${run.history.join(" → ")}. Remediation rounds: ${run.remediationRounds}/${SPECKIT_REMEDIATION_ROUNDS}. Converge rounds: ${run.convergeRounds}/${run.convergeLimit}.`;
