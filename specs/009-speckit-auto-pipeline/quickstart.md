@@ -74,7 +74,7 @@ Change one fake command for each scenario, then repeat steps 3-5.
 | Mode off (US3-5) | run `/speckit-auto-mode` during plan | Plan finishes. Nothing else starts. The status bar no longer shows the mode. |
 | Exclusion (FR-007) | run `/plan` while the mode is on | "Turn off speckit-auto mode first (/speckit-auto-mode)." |
 | Restore (FR-035) | quit omp during plan, then `omp --resume` the session | Mode on, run paused at plan. Nothing starts until `/speckit-auto resume`. |
-| New session (FR-033) | run `/new` while the mode is on | The new session has the mode off. |
+| New session (FR-033) | run `/new` while a run is active | The new session has the mode on with no run (`Speckit auto · waiting`). `/resume` of the old session brings back its run, paused. |
 
 ## 4. Cleanup
 

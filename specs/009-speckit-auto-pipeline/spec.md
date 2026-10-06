@@ -130,7 +130,7 @@ The status bar always shows the mode, the phase, and who must act next. omp send
 
 ### Edge Cases
 
-- **The session changes**: the user starts a new session or switches to another one. The mode stops acting in the old session, and omp says why. The old session keeps its mode state. When the user returns to it, FR-035 applies. A new session starts with the mode off.
+- **The session changes**: the user starts a new session or switches to another one. The mode stops acting in the old session. The old session keeps its mode state. When the user returns to it, FR-035 applies. A new session from `/new` or `/delete` starts with the mode on and no run, the same way the model profile carries over. A switch with `/resume` takes the mode state of the target session.
 - **omp restarts**: when the user resumes the session, the mode comes back on with the run paused (FR-035). `/speckit-auto resume` continues it.
 - **Loop, goal, plan, debate, or vibe mode is on or paused**: `/speckit-auto-mode` and `/speckit-auto <description>` refuse to turn the mode on and name that mode. While speckit-auto mode is on, every way to start or resume those modes refuses, including `/guided-goal`, and tells the user to turn off speckit-auto mode first.
 - **A spec-kit command is missing**: the mode refuses to turn on and lists each missing `/speckit.*` command.
@@ -203,7 +203,7 @@ The status bar always shows the mode, the phase, and who must act next. omp send
 
 **Scope**
 
-- **FR-033**: When the user switches to another session or starts a new one, the mode MUST stop acting in the old session. The old session MUST keep its mode state for FR-035. A new session MUST start with the mode off.
+- **FR-033**: When the user switches to another session or starts a new one, the mode MUST stop acting in the old session. The old session MUST keep its mode state for FR-035. A new session from `/new` or `/delete` MUST start with the mode on and no run when the mode was on before, and with the mode off otherwise. If the new session does not start, the old session MUST get its saved state back.
 - **FR-034**: The feature MUST be part of omp itself, not an extension. It MUST add only the setting in FR-036.
 - **FR-035**: The mode state MUST be saved with the session: on or off, and for an active run its phase, phases run so far, round counts, converge round limit, automatic-answer flag, and hold reason. When the user resumes a session in which the mode was on, the mode MUST come back on with the run paused at its last phase, the same way plan mode comes back. A restored run MUST have no pending decision or scheduled phase start, and MUST start nothing until the user runs `/speckit-auto resume`, `/speckit-auto next`, or a `/speckit.<phase>` command. If no run was active, the mode MUST come back on and wait for a `/speckit.*` command. `/speckit-auto-mode` MUST turn the mode off. The saved state is session data, not a setting.
 - **FR-036**: The converge round limit MUST be a user setting `speckitAuto.convergeRounds`: a whole number of extra implement-and-converge rounds, 0 or more, with a default of 3. The value 0 means no extra round. The mode MUST read the setting when a run starts and keep that value for the whole run. A change to the setting applies to the next run.

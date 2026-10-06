@@ -590,6 +590,61 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(submitted).toHaveLength(0);
 		});
 
+		it("keeps the mode on through /new, and /resume of the old session brings back its run paused", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			session.sessionManager.appendMessage({
+				...createAssistantMessage("planned"),
+				model: "claude-sonnet-4-5",
+				timestamp: ++clock,
+			});
+			await session.sessionManager.flush();
+			authStorage.keys.setRuntime("anthropic", "test-key");
+			const oldFile = session.sessionFile;
+			if (!oldFile) throw new Error("Expected a session file");
+
+			await mode.handleClearCommand();
+
+			expect(session.sessionFile).not.toBe(oldFile);
+			expect(mode.speckitAutoEnabled).toBe(true);
+			expect(saved()).toMatchObject({ enabled: true });
+			expect(saved()?.run).toBeUndefined();
+
+			await session.switchSession(oldFile);
+
+			expect(mode.speckitAutoEnabled).toBe(true);
+			expect(mode.speckitAutoRunActive).toBe(false);
+			expect(saved()?.run).toMatchObject({ phase: "plan" });
+		});
+
+		it("keeps the mode on through /delete, and keeps it off through /new when it was off", async () => {
+			await start();
+			mode.toggleSpeckitAutoMode();
+			session.sessionManager.appendMessage({ ...createAssistantMessage("hi"), timestamp: ++clock });
+			await session.sessionManager.flush();
+
+			await mode.handleDeleteCommand();
+			expect(mode.speckitAutoEnabled).toBe(true);
+			expect(saved()).toMatchObject({ enabled: true });
+
+			mode.toggleSpeckitAutoMode();
+			await mode.handleClearCommand();
+			expect(mode.speckitAutoEnabled).toBe(false);
+			expect(saved()).toBeUndefined();
+		});
+
+		it("brings back the old session's run, paused, when /new fails", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			vi.spyOn(session, "newSession").mockRejectedValue(new Error("disk full"));
+
+			await expect(mode.handleClearCommand()).rejects.toThrow("disk full");
+
+			expect(mode.speckitAutoEnabled).toBe(true);
+			expect(mode.speckitAutoRunActive).toBe(false);
+			expect(saved()?.run).toMatchObject({ phase: "plan" });
+		});
+
 		it("refuses every other mode while on", async () => {
 			await start();
 			mode.toggleSpeckitAutoMode();

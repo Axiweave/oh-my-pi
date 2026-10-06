@@ -8520,8 +8520,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async handleClearCommand(): Promise<void> {
 		if (this.#vibeSessionTransitionBlocked()) return;
-		await this.prepareSessionSwitch();
-		await this.#commandController.handleClearCommand();
+		await this.#newSessionKeepingSpeckitAuto(() => this.#commandController.handleClearCommand());
 	}
 
 	handleFreshCommand(): Promise<void> {
@@ -8534,8 +8533,28 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async handleDeleteCommand(): Promise<void> {
 		if (this.#vibeSessionTransitionBlocked()) return;
+		await this.#newSessionKeepingSpeckitAuto(() => this.#commandController.handleDeleteCommand());
+	}
+
+	/** Like the model profile, the mode stays on in the new session; the run stays saved in the old one. */
+	async #newSessionKeepingSpeckitAuto(startNewSession: () => Promise<void>): Promise<void> {
+		const keep = this.speckitAutoEnabled;
+		const sessionId = this.sessionManager.getSessionId();
 		await this.prepareSessionSwitch();
-		await this.#commandController.handleDeleteCommand();
+		try {
+			await startNewSession();
+		} finally {
+			if (keep) {
+				// A cancelled or failed switch leaves the old session: bring its saved state back.
+				if (this.sessionManager.getSessionId() === sessionId) {
+					this.#restoreSpeckitAuto();
+				} else {
+					this.speckitAutoEnabled = true;
+					this.#saveSpeckitAutoState();
+					this.#updateSpeckitAutoStatus();
+				}
+			}
+		}
 	}
 
 	async handleForkCommand(): Promise<void> {

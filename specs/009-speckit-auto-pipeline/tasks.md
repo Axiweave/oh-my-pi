@@ -102,7 +102,7 @@ description: "Task list for Speckit-Auto Mode"
 
 ## Phase 5: User Story 3 - Pause, steer, skip, and turn off at any time (Priority: P2)
 
-**Goal**: Esc pauses while the mode acts. `/speckit-auto resume` continues. `/speckit-auto next` stops a running turn and starts the successor with no grace period. `/speckit-auto-mode` turns the mode off. The mode state survives a session resume as a paused run, and a new session starts with the mode off.
+**Goal**: Esc pauses while the mode acts. `/speckit-auto resume` continues. `/speckit-auto next` stops a running turn and starts the successor with no grace period. `/speckit-auto-mode` turns the mode off. The mode state survives a session resume as a paused run, and a new session from `/new` or `/delete` keeps the mode on with no run.
 
 **Independent Test**: quickstart.md section 3 rows "Esc pause", "next", "Mode off", "Restore", and "New session" behave as written. T025 and T026 pass.
 
