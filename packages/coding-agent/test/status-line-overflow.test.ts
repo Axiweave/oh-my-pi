@@ -60,6 +60,7 @@ function createCtx(overrides?: {
 		prewalk: null,
 		goalMode: null,
 		vibeMode: null,
+		speckitAuto: null,
 		vim: null,
 		collab: null,
 		stream: null,

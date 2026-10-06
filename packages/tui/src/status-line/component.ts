@@ -672,6 +672,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#activeMeters: WeakMap<TSession, ActiveMeter> = new WeakMap();
 	#planModeStatus: SegmentContext["planMode"] = null;
 	#loopModeStatus: SegmentContext["loopMode"] = null;
+	#speckitAutoStatus: SegmentContext["speckitAuto"] = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#vibeModeStatus: { enabled: boolean } | null = null;
 	#vimStatus: SegmentContext["vim"] = null;
@@ -1055,6 +1056,20 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			return;
 		}
 		this.#loopModeStatus = next;
+		this.#invalidateStatusLineRenderCache();
+	}
+
+	setSpeckitAutoStatus(status: NonNullable<SegmentContext["speckitAuto"]> | undefined): void {
+		const next = status ?? null;
+		if (
+			this.#speckitAutoStatus === next ||
+			(this.#speckitAutoStatus?.state === next?.state &&
+				this.#speckitAutoStatus?.phase === next?.phase &&
+				this.#speckitAutoStatus?.reason === next?.reason)
+		) {
+			return;
+		}
+		this.#speckitAutoStatus = next;
 		this.#invalidateStatusLineRenderCache();
 	}
 
@@ -2398,6 +2413,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			hookStatuses: this.#sortedHookStatuses,
 			planMode: this.#planModeStatus,
 			loopMode: this.#loopModeStatus,
+			speckitAuto: this.#speckitAutoStatus,
 			prewalk:
 				typeof this.session.getPrewalkState === "function" && this.session.getPrewalkState()
 					? { enabled: true }

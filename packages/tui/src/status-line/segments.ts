@@ -28,7 +28,15 @@ import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { node, span } from "../native/describe";
 import { thinkingLevelToken } from "../theme/theme-class";
 import type { StatusLineSession } from "./host";
-import type { RenderedSegment, SegmentContext, SegmentView, StatusLineSegment, StatusLineSegmentId } from "./types";
+import type {
+	RenderedSegment,
+	SegmentContext,
+	SegmentView,
+	SpeckitAutoStatus,
+	SpeckitAutoStatusState,
+	StatusLineSegment,
+	StatusLineSegmentId,
+} from "./types";
 
 export type { SegmentContext } from "./types";
 
@@ -544,6 +552,22 @@ function formatLoopLimit(
 	return `${seconds}s left`;
 }
 
+const SPECKIT_AUTO_STATE_TEXT: Record<SpeckitAutoStatusState, string> = {
+	waiting: "waiting",
+	running: "running",
+	next: "next phase due",
+	user: "your turn",
+	"needs-you": "needs you",
+	paused: "paused",
+};
+
+function speckitAutoLabel(status: SpeckitAutoStatus): string {
+	const text = SPECKIT_AUTO_STATE_TEXT[status.state];
+	const state = status.state === "needs-you" && status.reason ? `${text}: ${status.reason}` : text;
+	const label = status.phase ? `Speckit auto · ${status.phase} · ${state}` : `Speckit auto · ${state}`;
+	return status.state === "paused" && theme.icon.pause ? `${label} ${theme.icon.pause}` : label;
+}
+
 const modeSegment: StatusLineSegment = {
 	id: "mode",
 	render(ctx) {
@@ -577,6 +601,15 @@ const modeSegment: StatusLineSegment = {
 			return { content: accentFg(ctx, "accent", content), visible: true };
 		}
 
+		const speckit = ctx.speckitAuto;
+		if (speckit) {
+			const label = speckitAutoLabel(speckit);
+			return {
+				content: speckit.state === "paused" ? theme.fg("warning", label) : accentFg(ctx, "accent", label),
+				visible: true,
+			};
+		}
+
 		const loop = ctx.loopMode;
 		if (loop) {
 			const icon = loop.state === "paused" ? theme.icon.pause || theme.icon.loop : theme.icon.loop;
@@ -605,6 +638,12 @@ const modeSegment: StatusLineSegment = {
 		const goal = ctx.goalMode;
 		if (goal && (goal.enabled || goal.paused)) return describeGoalMode(ctx, goal);
 		if (ctx.vibeMode?.enabled) return segView([span("Vibe", accentToken(ctx, "accent"))], "agents");
+		const speckit = ctx.speckitAuto;
+		if (speckit) {
+			return speckit.state === "paused"
+				? segView([span(speckitAutoLabel(speckit), "warning")], "pause", "warning")
+				: segView([span(speckitAutoLabel(speckit), accentToken(ctx, "accent"))]);
+		}
 		const loop = ctx.loopMode;
 		if (loop) {
 			const paused = loop.state === "paused";

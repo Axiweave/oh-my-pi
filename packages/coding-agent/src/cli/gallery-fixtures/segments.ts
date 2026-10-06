@@ -44,6 +44,7 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 		planMode: { enabled: true, paused: false },
 		prewalk: null,
 		loopMode: null,
+		speckitAuto: null,
 		goalMode: null,
 		goalStatusInFooter: true,
 		vibeMode: null,
@@ -129,6 +130,14 @@ function variantsFor(id: StatusLineSegmentId): readonly SegmentVariantSpec[] {
 						planMode: null,
 						loopMode: { state: "paused", limit: { kind: "iterations", initial: 10, remaining: 4 } },
 					},
+				},
+				{
+					label: "speckit auto running",
+					context: { planMode: null, speckitAuto: { phase: "plan", state: "running" } },
+				},
+				{
+					label: "speckit auto paused",
+					context: { planMode: null, speckitAuto: { phase: "implement", state: "paused" } },
 				},
 				{
 					label: "goal active",

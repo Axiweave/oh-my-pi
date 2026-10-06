@@ -29,6 +29,7 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 		prewalk: null,
 		goalMode: null,
 		vibeMode: null,
+		speckitAuto: null,
 		vim: null,
 		collab: null,
 		stream: null,

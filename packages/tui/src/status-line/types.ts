@@ -73,6 +73,14 @@ export type EffectiveStatusLineSettings = Required<
 
 export type RGB = readonly [number, number, number];
 
+export type SpeckitAutoStatusState = "waiting" | "running" | "next" | "user" | "needs-you" | "paused";
+
+export interface SpeckitAutoStatus {
+	phase?: string;
+	state: SpeckitAutoStatusState;
+	reason?: string;
+}
+
 export interface SegmentContext {
 	session: StatusLineSession;
 	/** Deterministic wall clock for previews/tests; production omits it. */
@@ -105,6 +113,7 @@ export interface SegmentContext {
 		limit?: LoopLimitRuntime;
 		condition?: LoopConditionConfig;
 	} | null;
+	speckitAuto: SpeckitAutoStatus | null;
 	goalStatusInFooter?: boolean;
 	goalMode: {
 		enabled: boolean;
