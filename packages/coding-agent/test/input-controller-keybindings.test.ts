@@ -82,6 +82,7 @@ async function createContext(options: CreateContextOptions = {}) {
 	const keyMap: Record<string, KeyId[]> = {
 		"app.plan.toggle": ["alt+shift+p"],
 		"app.display.reset": ["alt+l"],
+		"app.stt.pushToTalk": ["space"],
 		"app.thinking.toggle": ["ctrl+t"],
 		"app.history.search": ["ctrl+r"],
 		"app.editor.external": ["ctrl+g"],

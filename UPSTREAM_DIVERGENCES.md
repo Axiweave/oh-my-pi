@@ -3,12 +3,15 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.6.1` on 2026-10-05.
+**Reviewed against:** `v18.6.3` on 2026-10-06.
 
-**Verification:** Source setup, final `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.6.1`.
-All 86 test files named in this record passed in separate test processes. 62 more test files that cover merged fork-owned paths also passed. These paths include the advisor runtime, legacy Pi compatibility, the selector controller, `/btw`, slash-command completions, the task executor, and session messages.
-The merge had one conflict, an additive import in `packages/coding-agent/test/session/messages.test.ts`. It preserved all 28 recorded fork decisions.
-Upstream did not change the files that the retire conditions name, so no entry retires.
+**Verification:** Source setup, final `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.6.3`.
+The merge had conflicts in 11 files. The resolutions kept all 28 fork decisions recorded before this merge and upstream's new behavior. Upstream did not change any behavior that a retire condition names, so no entry retires. This review adds two entries: `macOS clippy build of cp` and `Background pointer input on the macOS desktop root`.
+The regenerated native bindings differ from upstream only by the fork's TIFF exports.
+1508 test files ran in separate processes: every test file named in this record and every test file that imports a merged fork-owned source file. 1507 passed.
+`sdk-tool-activation.test.ts` failed only with `No API key found for cursor`. The pre-merge commit `5f4a593f4c` fails the same 5 cases with the same error, so this is host state. Upstream's new `rpc-queued-message.test.ts` live-steer case waited for a zero count that the live-steering decision removes. Its wait now uses a fixture marker that the fixture writes only after an accepted claim, and all 11 cases pass.
+Upstream `v18.6.3` failed `bun check` on macOS because of a dead-code field in `cp.rs`. The new `macOS clippy build of cp` entry records the fix.
+`bun run test:rs` ran 3226 tests, and 3224 passed. Fork tests in `desktop/ax.rs` and `desktop/macos/input.rs` needed upstream's new `Mock` fields and `PointerEvent::Drag.keys`. The two failures are upstream's new `tail -f` reader-gone tests in `pi-builtins` and `pi-shell`. A clean `v18.6.3` worktree fails the same two tests on this host.
 Ghostel followed one source-CLI OSC 7 report for `omp --cwd`, both directly and through tmux passthrough. The parent shell directory stayed unchanged after exit.
 A source-CLI replay discovered and used two local CLIProxyAPI-shaped servers. Each server received only its own key, and each answer came from the matching server.
 The full `bun run test` plan did not run for this merge.
@@ -40,7 +43,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Behavior:** Empty Enter interrupts the active response and resumes with the pending message in both main and focused sessions.
 - **Why:** Upstream commit `a969abf4d6` introduced live steering. A claimed message left the queue count at zero while the screen still showed `Steering · 1`, disabling empty-Enter interruption.
 - **Key paths:** `packages/agent/src/agent.ts` and `packages/coding-agent/src/session/agent-session.ts`.
-- **Check:** `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts` covers accepted and rejected claims in main and focused sessions.
+- **Checks:** `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts` covers accepted and rejected claims in main and focused sessions. `packages/coding-agent/test/rpc-queued-message.test.ts` (`withdraws a steer the streaming response already claimed live`) waits for the fixture's `live-steer-claimed` marker, because the RPC state still counts the claimed steer. It then checks that `abort_and_restore_queue` withdraws that steer.
 - **Retire when:** Upstream pending counts include unrecorded live-steering deliveries and the regression check passes.
 
 
@@ -90,9 +93,10 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Show elapsed turn time on the working row with `tui.workingTimer` (default: `true`).
 - **Decision:** Use `tui.workingTimerMinSeconds` (default: `0`) to delay the timer. Hide it when the status brand already shows one.
 - **Decision:** Keep the working-row suffix order tok/s readout, session title, turn timer. The readout comes from upstream's `composer.tokenRate` (default off); the timer keeps its own gating beside it.
+- **Decision:** Between turns, keep the last turn's time docked right on the idle row. Native rendering puts it in upstream's `omp.hud.activity` status column, ahead of the todo HUD. The idle tok/s reading is upstream's composer-bar rate, so the idle row does not repeat it.
 - **Why:** Users need turn duration when the selected footer omits the status brand.
-- **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/modes/settings.ts`, and `packages/utils/src/format.ts`.
-- **Checks:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts` and `packages/utils/test/format.test.ts`.
+- **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts` (`#describeIdleStatusHud`, `describeStatusHud`), `packages/coding-agent/src/modes/settings.ts`, and `packages/utils/src/format.ts`.
+- **Checks:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts`, `packages/coding-agent/test/interactive-mode-idle-turn-timer.test.ts`, and `packages/utils/test/format.test.ts`.
 
 ### Subagent generation rates
 
@@ -285,3 +289,20 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Why:** The Preview tree used 9 or more rows on long plans.
 - **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts` (`todoLayout`, `setTodoLayout`, `renderCompactStatusLine`), `packages/coding-agent/src/modes/controllers/todo-command-controller.ts`, `packages/coding-agent/src/slash-commands/helpers/todo.ts`, `packages/coding-agent/src/tools/settings.ts`.
 - **Checks:** `packages/coding-agent/test/interactive-mode-todo-clear.test.ts` (`selectable todo HUD layout` and the session and auto-clear cases), `packages/coding-agent/test/acp-builtins.test.ts`.
+
+### macOS clippy build of `cp`
+
+- **Decision:** Gate `CopyState.clone_unsupported` in `crates/pi-builtins/src/cp.rs` with the same `cfg(any(target_os = "linux", target_os = "android", windows))` as the open-handle clone path that reads it.
+- **Why:** Upstream `v18.6.3` reads the field only on those targets. On macOS, `bun check` runs clippy with `-D warnings` and rejects the field as dead code.
+- **Retire when:** Upstream gates the field or reads it on macOS.
+- **Key path:** `crates/pi-builtins/src/cp.rs`.
+- **Check:** `bun check` on macOS.
+
+### Background pointer input on the macOS desktop root
+
+- **Decision:** With `delivery: "background"`, pointer input on the `desktop` target, or on a `Display` target, hit-tests the frontmost listed window at the pointer origin. The input then goes through that window's background path. Foreground delivery keeps the global HID tap. Keyboard input on the desktop root is unchanged.
+- **Decision:** Fail closed with `BackgroundUnavailable` when no application window is under the point or a macOS system surface (Window Server, Dock, Control Center, ...) is on top.
+- **Why:** Upstream posts all desktop-root pointer input through the global tap, which moves the user's cursor even when background delivery was requested.
+- **Retire when:** Upstream routes background desktop-root pointer input without the global tap.
+- **Key path:** `crates/pi-natives/src/desktop/macos/input.rs` (`desktop_background_target`, `background_window_pointer`, `pointer_origin`, `is_system_surface`).
+- **Check:** `bun run test:rs` (`desktop_background_target_*` and `pointer_origin_uses_first_drag_point` in `input.rs`).

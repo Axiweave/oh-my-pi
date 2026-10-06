@@ -8,6 +8,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -63,7 +64,14 @@ describe("InteractiveMode idle turn timer under the pi brand preset", () => {
 		now.mockReturnValue(60_000);
 		// Idle: frozen at the finished turn's 12s, not the wall clock since.
 		expect(idleRow()).toContain("12s");
-		expect(JSON.stringify(mode.describeStatusHud([]))).toContain('"stopped":12000');
+		const cx: DescribeContext = {
+			cols: 120,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		};
+		expect(JSON.stringify(mode.describeStatusHud([], cx))).toContain('"stopped":12000');
 
 		// A new turn replaces the reading once it ends.
 		mode.statusLine.markActivityStart();

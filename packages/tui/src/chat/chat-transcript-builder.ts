@@ -91,6 +91,7 @@ export interface ChatTranscriptBuilderDeps {
 	cwd: string;
 	hideThinkingBlock?: () => boolean;
 	proseOnlyThinking?: () => boolean;
+	expandThinkingBlocks?: () => boolean;
 	/** Session-scoped resolved destinations for model-authored Markdown links. */
 	linkTargets?: ReadonlyMap<string, string>;
 	requestRender: () => void;
@@ -427,6 +428,7 @@ export class ChatTranscriptBuilder {
 	#appendAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): void {
 		const hideThinkingBlock = this.#deps.hideThinkingBlock?.() ?? false;
 		const proseOnlyThinking = this.#deps.proseOnlyThinking ? this.#deps.proseOnlyThinking() : true;
+		const expandThinkingBlocks = this.#deps.expandThinkingBlocks?.() ?? false;
 		const timeline = splitAssistantMessageToolTimeline(message);
 		const assistantComponent = new AssistantMessageComponent(
 			timeline.beforeTools,
@@ -436,6 +438,7 @@ export class ChatTranscriptBuilder {
 			this.#deps.ui.imageBudget,
 			proseOnlyThinking,
 			this.#deps.linkTargets,
+			expandThinkingBlocks,
 		);
 		assistantComponent.setImagesVisible(displayPreferences.showImages);
 		assistantComponent.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
@@ -473,6 +476,7 @@ export class ChatTranscriptBuilder {
 				undefined,
 				proseOnlyThinking,
 				this.#deps.linkTargets,
+				expandThinkingBlocks,
 			);
 			component.setImagesVisible(displayPreferences.showImages);
 			component.setToolResultImagesVisible(!displayPreferences.hideToolActivity);

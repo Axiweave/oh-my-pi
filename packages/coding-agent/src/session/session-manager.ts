@@ -40,6 +40,7 @@ import {
 	sanitizeRehydratedOpenAIResponsesAssistantMessage,
 	stripInternalDetailsFields,
 } from "./messages";
+import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { RetryFallbackRole } from "./retry-fallback-chains";
 import { type BuildSessionContextOptions, buildSessionContext, type SessionContext } from "./session-context";
 import {
@@ -3360,7 +3361,7 @@ export class SessionManager {
 	}
 
 	appendSessionInit(init: {
-		systemPrompt: string;
+		systemPrompt: string[];
 		task: string;
 		tools: string[];
 		agent?: string;
@@ -3376,6 +3377,7 @@ export class SessionManager {
 		advisor?: string;
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 		isolated?: boolean;
+		workPoolYieldItems?: WorkPoolYieldItem[];
 	}): string {
 		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
 		this.#recordEntry(entry);
@@ -4259,7 +4261,7 @@ export function hasConversationalHistory(entries: readonly FileEntry[]): boolean
  * the {@link SessionInitEntry} payload without its tree bookkeeping fields.
  */
 export interface PersistedSessionInit {
-	systemPrompt: string;
+	systemPrompt: string[];
 	task: string;
 	tools: string[];
 	agent?: string;
@@ -4275,6 +4277,7 @@ export interface PersistedSessionInit {
 	advisor?: string;
 	compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 	isolated?: boolean;
+	workPoolYieldItems?: WorkPoolYieldItem[];
 }
 
 /**
@@ -4286,7 +4289,7 @@ export function extractSessionInit(entries: readonly FileEntry[]): PersistedSess
 	for (const entry of entries) {
 		if (entry.type !== "session_init") continue;
 		init = {
-			systemPrompt: entry.systemPrompt,
+			systemPrompt: typeof entry.systemPrompt === "string" ? [entry.systemPrompt] : entry.systemPrompt,
 			task: entry.task,
 			tools: entry.tools,
 			agent: entry.agent,
@@ -4302,6 +4305,7 @@ export function extractSessionInit(entries: readonly FileEntry[]): PersistedSess
 			advisor: entry.advisor,
 			isolated: entry.isolated,
 			...(entry.compactionThreshold !== undefined ? { compactionThreshold: entry.compactionThreshold } : undefined),
+			...(entry.workPoolYieldItems !== undefined ? { workPoolYieldItems: entry.workPoolYieldItems } : undefined),
 		};
 	}
 	return init;
