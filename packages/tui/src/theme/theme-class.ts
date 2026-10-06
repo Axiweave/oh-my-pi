@@ -627,6 +627,7 @@ export class Theme {
 			package: this.#symbols["icon.package"],
 			cyber: this.#symbols["icon.cyber"],
 			reviewPlan: this.#symbols["icon.reviewPlan"],
+			speckitAuto: this.#symbols["icon.speckitAuto"],
 			warning: this.#symbols["icon.warning"],
 			rewind: this.#symbols["icon.rewind"],
 			auto: this.#symbols["icon.auto"],

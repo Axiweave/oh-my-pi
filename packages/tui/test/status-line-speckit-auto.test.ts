@@ -81,10 +81,11 @@ describe("status line speckit-auto mode segment", () => {
 			const paused = state === "paused";
 
 			expect(rendered.visible).toBe(true);
-			expect(text).toContain("Speckit auto");
+			// The mode icon leads; the pause icon appears once, and only when paused.
+			expect(text).toBe(`${theme.icon.speckitAuto} ${described?.spans.map(s => s.t).join("")}`);
+			expect(text.split(theme.icon.pause).length - 1).toBe(paused ? 1 : 0);
 			expect(text).toContain("implement");
 			expect(rendered.content === theme.fg("warning", text)).toBe(paused);
-			expect(described?.spans.map(s => s.t).join("")).toBe(text);
 			expect(described?.tone === "warning").toBe(paused);
 			if (state === "needs-you") expect(text).toContain("converge needs a decision");
 			// Each state reads differently, so the user can tell them apart.

@@ -10,7 +10,7 @@
 - Added `Editor.setLeadingSlashCommand` so hosts can replace or insert a draft's leading slash command without moving its body cursor. A body with no text yet has no cursor to keep, so the caret lands after the inserted command and its trailing space, and the line is appended when the draft has none. Optional `line` and `anchor` arguments name where the message starts, so a host prefix such as the `->` queue shorthand keeps its header line.
 - `Editor.setLeadingSlashCommand` takes an optional `nest` flag that keeps an existing leading command and inserts the new one in front of it (`/skill:x` → `/queue /skill:x`); a draft already leading with that command is left alone.
 - Added `Editor.insertLeadingKeyword` so hosts can place a standalone word at the start of a draft, after a leading slash command when one is present, without moving the body cursor. It takes the same optional `line` and `anchor`.
-- Added the `speckitAuto` status-line mode state (`SpeckitAutoStatus`, `StatusLineComponent.setSpeckitAutoStatus`). The `mode` segment shows `Speckit auto · <phase> · <state>` after vibe mode and before loop mode, in the warning color with the pause icon when the run is paused.
+- Added the `speckitAuto` status-line mode state (`SpeckitAutoStatus`, `StatusLineComponent.setSpeckitAutoStatus`). The `mode` segment shows `⏩ Speckit auto · <phase> · <state>` (new `icon.speckitAuto`: Nerd Font forward, ASCII `>>`) after vibe mode and before loop mode, in the warning color with the pause icon when the run is paused.
 
 ### Fixed
 

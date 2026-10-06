@@ -603,9 +603,10 @@ const modeSegment: StatusLineSegment = {
 
 		const speckit = ctx.speckitAuto;
 		if (speckit) {
-			const label = speckitAutoLabel(speckit);
+			const paused = speckit.state === "paused";
+			const content = withIcon(theme.icon.speckitAuto, speckitAutoLabel(speckit));
 			return {
-				content: speckit.state === "paused" ? theme.fg("warning", label) : accentFg(ctx, "accent", label),
+				content: paused ? theme.fg("warning", content) : accentFg(ctx, "accent", content),
 				visible: true,
 			};
 		}

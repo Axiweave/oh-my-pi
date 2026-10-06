@@ -96,6 +96,7 @@ export type SymbolKey =
 	| "icon.cost"
 	| "icon.cyber"
 	| "icon.reviewPlan"
+	| "icon.speckitAuto"
 	| "icon.subscription"
 	| "icon.advisor"
 	| "icon.advisorClosed"
@@ -480,6 +481,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.cost": "💲",
 	"icon.cyber": "⚔️",
 	"icon.reviewPlan": "⇄",
+	"icon.speckitAuto": "⏩",
 	"icon.subscription": "(sub)",
 	"icon.advisor": "👁",
 	"icon.advisorClosed": "🙈",
@@ -857,6 +859,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.cyber": "⚔️",
 	// pick: ⇄ (review swaps to the plan model)
 	"icon.reviewPlan": "⇄",
+	// pick:  (nf-fa-forward, ▶▶: the run moves on to the next phase by itself) | alt:  »
+	"icon.speckitAuto": "\uf04e",
 	// pick: 󰙺 (nf-md-currency_usd_off)
 	"icon.subscription": "\u{f067a}",
 	// pick:  (nf-cod-eye)
@@ -1266,6 +1270,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.cost": "$",
 	"icon.cyber": "[C]",
 	"icon.reviewPlan": "[RP]",
+	"icon.speckitAuto": ">>",
 	"icon.subscription": "(sub)",
 	"icon.advisor": "(adv)",
 	"icon.advisorClosed": "(adv)",
