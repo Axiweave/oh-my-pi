@@ -554,20 +554,32 @@ function formatLoopLimit(
 	return `${seconds}s left`;
 }
 
+/** Running is the default state, so it shows no text. */
 const SPECKIT_AUTO_STATE_TEXT: Record<SpeckitAutoStatusState, string> = {
-	waiting: "waiting",
-	running: "running",
-	next: "next phase due",
-	user: "your turn",
-	"needs-you": "needs you",
+	waiting: "on",
+	running: "",
+	next: "next",
+	user: "you",
+	"needs-you": "stuck",
 	paused: "paused",
 };
 
+const SPECKIT_PHASE_TEXT: Record<string, string> = {
+	specify: "spec",
+	clarify: "clar",
+	analyze: "anlz",
+	remediation: "fix",
+	implement: "impl",
+	converge: "conv",
+};
+
 function speckitAutoLabel(status: SpeckitAutoStatus): string {
-	const text = SPECKIT_AUTO_STATE_TEXT[status.state];
+	const paused = status.state === "paused" && theme.icon.pause;
+	const text = paused ? "" : SPECKIT_AUTO_STATE_TEXT[status.state];
 	const state = status.state === "needs-you" && status.reason ? `${text}: ${status.reason}` : text;
-	const label = status.phase ? `Speckit auto · ${status.phase} · ${state}` : `Speckit auto · ${state}`;
-	return status.state === "paused" && theme.icon.pause ? `${label} ${theme.icon.pause}` : label;
+	const phase = status.phase && (SPECKIT_PHASE_TEXT[status.phase] ?? status.phase);
+	const label = ["Speckit", phase, state].filter(Boolean).join(" · ");
+	return paused ? `${label} ${theme.icon.pause}` : label;
 }
 
 /** The one exclusive mode (plan, goal, vibe, speckit auto, loop) that owns the `mode` segment. */

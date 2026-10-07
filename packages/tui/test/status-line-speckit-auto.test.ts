@@ -69,8 +69,7 @@ describe("status line speckit-auto mode segment", () => {
 
 	it("names the mode without a phase when no run is active", () => {
 		const content = Bun.stripANSI(renderSegment("mode", createContext({ state: "waiting" })).content);
-		expect(content).toContain("Speckit auto");
-		expect(content).toContain("waiting");
+		expect(content).toContain("Speckit · on");
 	});
 
 	for (const state of STATES) {
@@ -85,7 +84,7 @@ describe("status line speckit-auto mode segment", () => {
 			// The mode icon leads; the pause icon appears once, and only when paused.
 			expect(text).toBe(`${theme.icon.speckitAuto} ${described?.spans.map(s => s.t).join("")}`);
 			expect(text.split(theme.icon.pause).length - 1).toBe(paused ? 1 : 0);
-			expect(text).toContain("implement");
+			expect(text).toContain("Speckit · impl");
 			expect(rendered.content === theme.fg("warning", text)).toBe(paused);
 			expect(described?.tone === "warning").toBe(paused);
 			if (state === "needs-you") expect(text).toContain("converge needs a decision");
@@ -102,7 +101,7 @@ describe("status line speckit-auto mode segment", () => {
 		const text = Bun.stripANSI(
 			renderSegment("mode", createContext({ phase: "plan", state: "running" }, { state: "running" })).content,
 		);
-		expect(text).toContain("Speckit auto");
+		expect(text).toContain("Speckit · plan");
 		expect(text).not.toContain("Loop");
 	});
 
@@ -110,10 +109,10 @@ describe("status line speckit-auto mode segment", () => {
 		const prewalk = { enabled: true };
 		const both = createContext({ state: "waiting" }, null, prewalk);
 		const text = Bun.stripANSI(renderSegment("mode", both).content);
-		expect(text.indexOf("Speckit auto · waiting")).toBeGreaterThanOrEqual(0);
-		expect(text.indexOf("Prewalk")).toBeGreaterThan(text.indexOf("Speckit auto · waiting"));
+		expect(text.indexOf("Speckit · on")).toBeGreaterThanOrEqual(0);
+		expect(text.indexOf("Prewalk")).toBeGreaterThan(text.indexOf("Speckit · on"));
 		const described = describeSegment("mode", both)?.spans.map(part => part.t).join("") ?? "";
-		expect(described).toContain("Speckit auto · waiting");
+		expect(described).toContain("Speckit · on");
 		expect(described).toContain("Prewalk");
 
 		const alone = createContext(null, null, prewalk);
