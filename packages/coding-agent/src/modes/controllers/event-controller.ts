@@ -1426,6 +1426,8 @@ export class EventController {
 			!this.#retryPending &&
 			this.ctx.viewSession === this.ctx.session &&
 			!this.ctx.planReviewActive &&
+			// Speckit-auto publishes the settled state once it stops acting.
+			!this.ctx.speckitAutoActing &&
 			!this.ctx.session.hasPendingAsyncWork()
 		) {
 			publishIdeSessionState(this.ctx.mcpManager, ideTurnState([event.message], this.ctx.goalInterviewActive));
@@ -2244,7 +2246,8 @@ export class EventController {
 			this.ctx.flushPendingCommandOutput();
 			return;
 		}
-		setTerminalTitleState("idle");
+		// Speckit-auto keeps the title `working` until it holds or ends (it publishes the settled state then).
+		setTerminalTitleState(this.ctx.speckitAutoActing ? "working" : "idle");
 
 		await this.#finishAgentEnd(event);
 		// This settle may belong to an extension-started turn while the main
@@ -2274,7 +2277,7 @@ export class EventController {
 			}
 			await this.#runSerialized(async () => {
 				if (superseded() || session.hasPendingAsyncWork()) return;
-				setTerminalTitleState("idle");
+				setTerminalTitleState(this.ctx.speckitAutoActing ? "working" : "idle");
 				await this.#finishAgentEnd(event);
 				// No terminal event follows a canceled wake. Publish the settled main
 				// session state unless a new run or session replaced this drain.
@@ -2860,6 +2863,7 @@ export class EventController {
 		// The plan-approval silent abort ends the turn under the review overlay;
 		// `needs-input` already went out and must not be downgraded to `idle`.
 		if (this.ctx.planReviewActive) return;
+		if (this.ctx.speckitAutoActing) return;
 		publishIdeSessionState(this.ctx.mcpManager, ideTurnState(event.messages, this.ctx.goalInterviewActive));
 	}
 }

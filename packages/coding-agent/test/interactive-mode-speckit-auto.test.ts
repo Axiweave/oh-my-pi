@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type 
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, DeveloperMessage, ImageContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import * as ideState from "@oh-my-pi/pi-coding-agent/mcp/ide-state";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -20,6 +21,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -1107,6 +1109,35 @@ describe("InteractiveMode speckit-auto mode", () => {
 			await tick(5);
 
 			expect(notify).toHaveBeenCalledTimes(1);
+		});
+
+		it("keeps the title and the IDE working between phases and shows the settled state on a hold", async () => {
+			const title = vi.spyOn(titleGenerator, "setTerminalTitleState").mockImplementation(() => {});
+			const ide = vi.spyOn(ideState, "publishIdeSessionState").mockImplementation(() => {});
+			Object.defineProperty(session, "messages", { configurable: true, get: () => (reply ? [reply] : []) });
+			await start();
+			await startRun("/speckit.plan");
+			turnSettles();
+			const planReply = reply;
+			if (!planReply) throw new Error("Expected the plan reply");
+			title.mockClear();
+			ide.mockClear();
+
+			await mode.eventController.handleEvent(agentEnd(planReply));
+			await tick(2);
+
+			// The plan turn ended and the mode started tasks: no done in between.
+			expect(texts()).toEqual(["/speckit.tasks"]);
+			expect(title.mock.calls.map(call => call[0])).not.toContain("idle");
+			expect(ide.mock.calls.map(call => call[1])).not.toContain("done");
+
+			await ownTurnRuns(submitted[0]);
+			turnSettles({ completed: true, waits: true, routine: false });
+			await tick(5);
+
+			expect(statusState()).toBe("user");
+			expect(title.mock.calls.at(-1)?.[0]).toBe("idle");
+			expect(ide.mock.calls.at(-1)?.[1]).toBe("needs-input");
 		});
 
 		it("sends none for a hold when completion.notify is off", async () => {

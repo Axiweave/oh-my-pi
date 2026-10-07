@@ -226,9 +226,11 @@ export class SessionFocusController {
 			await target.settleInFlightMessagePersistence();
 			if (generation !== this.#attachGeneration) return false;
 			this.ctx.statusLine.setSession(target, this.#focusedAgentId);
-			// Reset run bookkeeping before replay populates pending tool handles.
+			// Reset run bookkeeping before replay populates pending tool handles. Speckit-auto between phases stays working.
+			const busy = () =>
+				target.hasPendingAsyncWork() || (target === this.ctx.session && this.ctx.speckitAutoActing);
 			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
-			else setTerminalTitleState(target.hasPendingAsyncWork() ? "working" : "idle");
+			else setTerminalTitleState(busy() ? "working" : "idle");
 			if (generation !== this.#attachGeneration) return false;
 			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 			if (generation !== this.#attachGeneration) return false;
@@ -250,7 +252,7 @@ export class SessionFocusController {
 			if (target === this.ctx.session && !target.isStreaming) {
 				publishIdeSessionState(
 					this.ctx.mcpManager,
-					target.hasPendingAsyncWork() ? "working" : ideTurnState(target.messages, this.ctx.goalInterviewActive),
+					busy() ? "working" : ideTurnState(target.messages, this.ctx.goalInterviewActive),
 				);
 			}
 			this.ctx.updateEditorBorderColor();

@@ -461,6 +461,19 @@ describe("SessionFocusController", () => {
 		expect(h.fake.sent).toEqual(["done"]);
 	});
 
+	it("returning to the main session between speckit-auto phases stays working", async () => {
+		const h = makeHarness({ mainMessages: [{ role: "assistant", stopReason: "stop" }] });
+		const worker = makeSessionStub({ isStreaming: false });
+		registerSub(h.registry, "Worker", worker.session, MAIN_AGENT_ID);
+		Object.defineProperty(h.ctx, "speckitAutoActing", { configurable: true, value: true });
+
+		await h.controller.focusAgent("Worker");
+		await h.controller.unfocus();
+		await flushAsync();
+
+		expect(h.fake.sent).toEqual(["working"]);
+	});
+
 	it("drops a slower focus that resolves after a newer request", async () => {
 		const h = makeHarness();
 		const slow = makeSessionStub();

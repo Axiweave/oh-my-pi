@@ -225,6 +225,7 @@ import {
 	setTerminalSessionSource,
 	setTerminalTitlePullRequest,
 	setTerminalTitleSpinnerStyle,
+	setTerminalTitleState,
 	setTerminalTitleStateEnabled,
 } from "../utils/title-generator";
 import {
@@ -3348,6 +3349,21 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.speckitAutoEnabled ? { phase: run?.phase, state, reason: run?.hold?.reason } : undefined,
 		);
 		this.ui.requestRender();
+		// The title and the IDE stay `working` while the mode acts between phases (event-controller); show the
+		// settled state once it stops. An own submission waiting for its turn still acts. A hold waits for the user.
+		if (
+			!this.speckitAutoActing &&
+			!this.#speckitOwnTurn &&
+			!this.session.isStreaming &&
+			!this.session.hasPendingAsyncWork() &&
+			!this.planReviewActive
+		) {
+			setTerminalTitleState("idle");
+			publishIdeSessionState(
+				this.mcpManager,
+				ideTurnState(this.session.messages, this.goalInterviewActive || run?.hold !== undefined),
+			);
+		}
 	}
 
 	/** Drops every pending speckit-auto step: the check, the tick, the parked start, and the own-turn marker. */
