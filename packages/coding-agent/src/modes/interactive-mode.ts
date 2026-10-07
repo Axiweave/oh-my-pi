@@ -406,6 +406,7 @@ import {
 	classifySpeckitTurn,
 	decideSpeckitStep,
 	formatSpeckitSummary,
+	isSpeckitUserTurn,
 	newSpeckitRun,
 	normalizeConvergeRounds,
 	parseSpeckitAutoState,
@@ -415,6 +416,7 @@ import {
 	SPECKIT_AUTO_ENTRY,
 	SPECKIT_PHASE_COMMANDS,
 	SPECKIT_REMEDIATION_TEXT,
+	speckitEarlierText,
 	SPECKIT_SUCCESSOR,
 	type SpeckitAction,
 	type SpeckitEndResult,
@@ -3590,7 +3592,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					telemetry: this.session.agent.telemetry,
 					signal: abort.signal,
 				},
-				this.#speckitRequest,
+				{ request: this.#speckitRequest, earlier: speckitEarlierText(this.session.messages, message) },
 			);
 		} finally {
 			clearTimeout(timeout);
@@ -3682,12 +3684,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.#speckitPhaseReply = undefined;
 			}
 		}
-		// Turns that omp starts on its own (attribution `agent`, wakes, redirects) are part of the phase.
-		const userTurn =
-			(message.role === "user" && message.attribution !== "agent") ||
-			(message.role === "developer" && message.userInitiated) ||
-			(message.role === "custom" && isUserTurnInitiator(message));
-		if (!userTurn) return;
+		if (!isSpeckitUserTurn(message)) return;
 		const text = (
 			(message.role === "user" && message.promptTemplateInput) ||
 			customMessageContentText(message.content)

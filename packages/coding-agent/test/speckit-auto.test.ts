@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, UserMessage } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as judgment from "@oh-my-pi/pi-coding-agent/judgment";
@@ -16,6 +16,7 @@ import {
 	type SpeckitEndResult,
 	type SpeckitPhase,
 	type SpeckitRun,
+	speckitEarlierText,
 	type SpeckitVerdict,
 } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -264,6 +265,7 @@ describe("readSpeckitTextVerdict", () => {
 	describe("converge result", () => {
 		it.each([
 			["✅ Converged — the implementation satisfies the spec, plan, and tasks.", "complete"],
+			["✅ **Converged — the implementation satisfies the spec, plan, and tasks.**", "complete"],
 			["Outcome: `tasks_appended`. Run /speckit.implement next.", "added"],
 			["Appended 3 tasks under ## Phase 4: Convergence.", "added"],
 			["I will add a ## Phase 4: Convergence section if needed.", "none"],
@@ -273,6 +275,20 @@ describe("readSpeckitTextVerdict", () => {
 			expect(readSpeckitTextVerdict("converge", message(text)).converge).toBe(
 				converge as SpeckitVerdict["converge"],
 			);
+		});
+
+		it("reads the outcome that an earlier message of the converge turn reported", () => {
+			const previous = message("Outcome: `tasks_appended`.");
+			const opener: UserMessage = { role: "user", content: "/speckit.converge", timestamp: 1 };
+			const outcome = message("**Outcome: `tasks_appended`.** Added T027–T029 under Phase 7.");
+			const summary = message("Only Phase 7 was appended.\n\n**Status: partial—not converged.**");
+			const earlier = speckitEarlierText([previous, opener, outcome, summary], summary);
+
+			expect(readSpeckitTextVerdict("converge", summary, earlier).converge).toBe("added");
+			expect(readSpeckitTextVerdict("converge", summary).converge).toBe("none");
+			// The turn before the opener never counts, and two different outcomes in one turn hold.
+			expect(speckitEarlierText([previous, opener, summary], summary)).toBe("");
+			expect(readSpeckitTextVerdict("converge", message("✅ **Converged**"), earlier).converge).toBe("none");
 		});
 	});
 
@@ -438,7 +454,7 @@ describe("classifySpeckitTurn", () => {
 		const fix = "All three findings are addressed. Updated spec.md and tasks.md.";
 		const request = "Fix the analyze findings.";
 
-		expect((await classifySpeckitTurn("analyze", message(fix), deps, request)).fixed).toBe(true);
+		expect((await classifySpeckitTurn("analyze", message(fix), deps, { request })).fixed).toBe(true);
 		expect(calls[0].state).toMatchObject({ phase: "analyze", request });
 		expect(Object.keys(calls[0].questions)).toContain("fixed");
 
@@ -449,7 +465,7 @@ describe("classifySpeckitTurn", () => {
 			["tasks", fix, request],
 		] as const) {
 			calls.length = 0;
-			expect((await classifySpeckitTurn(phase, message(reply), deps, from)).fixed).toBeUndefined();
+			expect((await classifySpeckitTurn(phase, message(reply), deps, { request: from })).fixed).toBeUndefined();
 			expect(Object.keys(calls[0].questions)).not.toContain("fixed");
 			expect(calls[0].state).not.toHaveProperty("request");
 		}

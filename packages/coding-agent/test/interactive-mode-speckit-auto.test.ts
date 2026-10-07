@@ -454,12 +454,12 @@ describe("InteractiveMode speckit-auto mode", () => {
 			turnSettles(unreadable);
 			await tick();
 			// The mode's own phase command is not a user request.
-			expect(classify.mock.calls.at(-1)?.[3]).toBeUndefined();
+			expect(classify.mock.calls.at(-1)?.[3]?.request).toBeUndefined();
 
 			await turnStarts("Fix the analyze findings.");
 			turnSettles({ ...unreadable, fixed: true });
 			await tick(2);
-			expect(classify.mock.calls.at(-1)?.[3]).toBe("Fix the analyze findings.");
+			expect(classify.mock.calls.at(-1)?.[3]?.request).toBe("Fix the analyze findings.");
 			expect(texts()).toEqual(["/speckit.analyze"]);
 			expect(saved()?.run?.remediationRounds).toBe(0);
 
@@ -467,7 +467,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(saved()?.run?.remediationRounds).toBe(1);
 			turnSettles(unreadable);
 			await tick();
-			expect(classify.mock.calls.at(-1)?.[3]).toBeUndefined();
+			expect(classify.mock.calls.at(-1)?.[3]?.request).toBeUndefined();
 		});
 	});
 
@@ -813,6 +813,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(notify).toHaveBeenCalledTimes(1);
 			expect(mode.speckitAutoEnabled).toBe(true);
 			expect(saved()?.run).toBeUndefined();
+			expect(mode.getSpeckitAutoDescription()).toBe("Speckit auto: on (waiting)");
 		});
 	});
 

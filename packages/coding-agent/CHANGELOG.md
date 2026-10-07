@@ -51,6 +51,7 @@
 
 ### Fixed
 
+- Fixed speckit-auto holding after a converge turn that reported its result. A reply that starts with `✅ **Converged` held with "converge reported no result", because the check did not allow markdown emphasis between the mark and the word. Now the run ends as complete, and the mode waits for the next `/speckit.specify`. A turn that reported `tasks_appended` in an earlier message held with "the phase reported an error or stopped early", because its closing summary did not name the outcome. The converge result now reads every assistant message of the turn, so the mode starts `/speckit.implement`.
 - Fixed a file slash command such as `/speckit.plan` (typed or sent by speckit-auto) showing a second, plain user row above its collapsed command card. The raw row painted at submit could move into terminal scrollback before the expanded message arrived, and a row in scrollback cannot be removed. The raw row now stays live until the expanded message replaces it.
 - Fixed the compact TODO row ending one cell left of the working row. Both rows now end at the right edge of the terminal.
 - Fixed omp exiting with an unhandled-rejection crash when a focused subagent parked or disappeared and the main session replay failed; the failure now shows as an error and the main session stays attached.

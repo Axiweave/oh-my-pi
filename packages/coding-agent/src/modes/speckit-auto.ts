@@ -3,6 +3,7 @@
  * session. The interactive layer owns timers, submits, and saved state; this
  * module reads a settled turn and decides the next step.
  */
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, NoulQuestion, StopReason } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { resolveJudge, sharedJudgmentCache } from "../judgment";
@@ -10,6 +11,7 @@ import answerPrompt from "../prompts/speckit-auto/answer.md" with { type: "text"
 import continuePrompt from "../prompts/speckit-auto/continue.md" with { type: "text" };
 import judgePrompt from "../prompts/speckit-auto/judge.md" with { type: "text" };
 import remediationPrompt from "../prompts/speckit-auto/remediation.md" with { type: "text" };
+import { isUserTurnInitiator } from "../session/messages";
 import type { ClassifyUnexpectedStopDeps } from "../session/unexpected-stop-classifier";
 
 export type SpeckitPhase =
@@ -315,7 +317,7 @@ function readAnalyzeReport(text: string): SpeckitVerdict["analyze"] {
 }
 
 function readConverge(tail: string): SpeckitVerdict["converge"] {
-	const complete = /✅\s*Converged/.test(tail);
+	const complete = /✅[\s*_]*Converged/.test(tail);
 	const added = /\btasks_appended\b/.test(tail) || (APPENDED_COUNT.test(tail) && /Phase \d+: Convergence/.test(tail));
 	if (complete === added) return "none";
 	return complete ? "complete" : "added";
@@ -332,6 +334,24 @@ function readReady(tail: string): boolean | undefined {
 const assistantText = (message: AssistantMessage): string =>
 	message.content.flatMap(content => (content.type === "text" ? [content.text] : [])).join("\n");
 
+/** True for a message that opens a user turn. Turns that omp starts on its own (attribution `agent`, wakes, redirects) are part of the phase. */
+export const isSpeckitUserTurn = (
+	message: AgentMessage,
+): message is Extract<AgentMessage, { role: "user" | "developer" | "custom" }> =>
+	(message.role === "user" && message.attribution !== "agent") ||
+	(message.role === "developer" && message.userInitiated === true) ||
+	(message.role === "custom" && isUserTurnInitiator(message));
+
+/** Text of the assistant messages before `reply` in its turn. Converge can report its outcome there, before its summary. */
+export function speckitEarlierText(messages: readonly AgentMessage[], reply: AssistantMessage): string {
+	const parts: string[] = [];
+	for (let index = messages.lastIndexOf(reply) - 1; index >= 0 && !isSpeckitUserTurn(messages[index]!); index--) {
+		const message = messages[index]!;
+		if (message.role === "assistant") parts.push(assistantText(message));
+	}
+	return parts.reverse().join("\n");
+}
+
 /** The reply tail without the analyze remediation offer, which is never a question (FR-022). */
 const askedText = (phase: SpeckitPhase, tail: string): string =>
 	phase === "analyze"
@@ -341,8 +361,11 @@ const askedText = (phase: SpeckitPhase, tail: string): string =>
 				.join("\n\n")
 		: tail;
 
-/** Deterministic parts of the verdict plus the text-only fallback for the judged parts (research R6). */
-export function readSpeckitTextVerdict(phase: SpeckitPhase, message: AssistantMessage): SpeckitVerdict {
+/**
+ * Deterministic parts of the verdict plus the text-only fallback for the judged parts (research R6).
+ * `earlier` is the text of the turn's earlier assistant messages; only the converge result reads it.
+ */
+export function readSpeckitTextVerdict(phase: SpeckitPhase, message: AssistantMessage, earlier = ""): SpeckitVerdict {
 	const text = assistantText(message);
 	const tail = text.slice(-TAIL_CHARS);
 	const error = ERROR_CUE.test(tail);
@@ -358,7 +381,7 @@ export function readSpeckitTextVerdict(phase: SpeckitPhase, message: AssistantMe
 		routine: !error && tail.includes(CHECKLIST_GATE),
 		ready: phase === "clarify" ? readReady(tail) : undefined,
 		analyze: phase === "analyze" ? readAnalyzeReport(text) : undefined,
-		converge: phase === "converge" ? readConverge(tail) : undefined,
+		converge: phase === "converge" ? readConverge(`${earlier}\n${tail}`) : undefined,
 	};
 }
 
@@ -367,16 +390,18 @@ export type SpeckitJudgeDeps = ClassifyUnexpectedStopDeps;
 /**
  * Verdict for a settled phase turn: failure, analyze counts, and converge
  * result from the text; completed, waits, routine, ready, and fixed from one
- * judge call, or from the text fallback when the judge cannot answer. `request`
- * is the user's own text that opened the turn, if the user started it. Never throws.
+ * judge call, or from the text fallback when the judge cannot answer. `turn.request`
+ * is the user's own text that opened the turn, if the user started it. `turn.earlier`
+ * is the text of the turn's earlier assistant messages. Never throws.
  */
 export async function classifySpeckitTurn(
 	phase: SpeckitPhase,
 	message: AssistantMessage,
 	deps: SpeckitJudgeDeps,
-	request?: string,
+	turn: { request?: string; earlier?: string } = {},
 ): Promise<SpeckitVerdict> {
-	const verdict = readSpeckitTextVerdict(phase, message);
+	const { request, earlier } = turn;
+	const verdict = readSpeckitTextVerdict(phase, message, earlier);
 	if (verdict.failed) return verdict;
 	// Only a user turn in analyze without a report can be a user-requested fix.
 	const askFixed = request !== undefined && verdict.analyze === "unreadable";
