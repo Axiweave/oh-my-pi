@@ -3,17 +3,19 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.6.3` on 2026-10-06.
+**Reviewed against:** `v18.7.0` on 2026-10-06.
 
-**Verification:** Source setup, final `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.6.3`.
-The merge had conflicts in 11 files. The resolutions kept all 28 fork decisions recorded before this merge and upstream's new behavior. Upstream did not change any behavior that a retire condition names, so no entry retires. This review adds two entries: `macOS clippy build of cp` and `Background pointer input on the macOS desktop root`.
-The regenerated native bindings differ from upstream only by the fork's TIFF exports.
-1508 test files ran in separate processes: every test file named in this record and every test file that imports a merged fork-owned source file. 1507 passed.
-`sdk-tool-activation.test.ts` failed only with `No API key found for cursor`. The pre-merge commit `5f4a593f4c` fails the same 5 cases with the same error, so this is host state. Upstream's new `rpc-queued-message.test.ts` live-steer case waited for a zero count that the live-steering decision removes. Its wait now uses a fixture marker that the fixture writes only after an accepted claim, and all 11 cases pass.
-Upstream `v18.6.3` failed `bun check` on macOS because of a dead-code field in `cp.rs`. The new `macOS clippy build of cp` entry records the fix.
-`bun run test:rs` ran 3226 tests, and 3224 passed. Fork tests in `desktop/ax.rs` and `desktop/macos/input.rs` needed upstream's new `Mock` fields and `PointerEvent::Drag.keys`. The two failures are upstream's new `tail -f` reader-gone tests in `pi-builtins` and `pi-shell`. A clean `v18.6.3` worktree fails the same two tests on this host.
-Ghostel followed one source-CLI OSC 7 report for `omp --cwd`, both directly and through tmux passthrough. The parent shell directory stayed unchanged after exit.
-A source-CLI replay discovered and used two local CLIProxyAPI-shaped servers. Each server received only its own key, and each answer came from the matching server.
+**Verification:** Source setup, final `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.7.0`.
+The merge had conflicts in 11 files. The resolutions kept the fork decisions and upstream's new behavior. Upstream now gates `CopyState.clone_unsupported` the same way as the fork, so the `macOS clippy build of cp` entry retires. Upstream added prewalk re-arm on `/new` and its own `/prewalk off`. The `Prewalk controls` entry records how the fork combines them.
+An automatic merge broke `ImageBudget.release()`: upstream's new method added the fork's `{ id, tag }` map value to a set of ids. The merge reads `entry.id` instead.
+The new pinned Rust toolchain rewraps two fork comments in `tiff.rs` and `pi-walker`. `bun run fmt:rs` applied that change.
+1709 test files ran in separate processes: every test file named in this record, every test file that imports a source file that both sides changed, and upstream's new `agent-session-prewalk-off.test.ts`. 1703 passed. The 6 failures are host state or flaky:
+- `sdk-tool-activation.test.ts` fails 5 cases with `No API key found for cursor`. The pre-merge commit `694efd225a` fails the same 5 cases.
+- `sixel-probe.test.ts` fails 3 cases and `eval/js-package-environment.test.ts` fails 1 case. The pre-merge commit fails the same cases.
+- `resize-settle-fused-exit.test.ts` fails only with `INSIDE_EMACS` set, because of the `Emacs-hosted resize behavior` decision. It passes without that variable.
+- `browser-nav-frames-dialogs.test.ts` timed out under load and passes in isolation.
+- `native/table-chart-native.test.ts` fails the same assertion on a clean `v18.7.0` worktree on this host.
+`bun run test:rs` ran 3237 tests, and all passed (5 skipped). The `tail -f` reader-gone failures from the `v18.6.3` review no longer occur.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -193,10 +195,11 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 ### Prewalk controls
 
 - **Decision:** Keep `prewalk.into`, including `@@` to keep the active model and `@@:<level>` to change only its thinking level.
-- **Decision:** Keep `/prewalk off` and the unbound-by-default `app.prewalk.toggle` action. The key preserves the editor draft.
-- **Decision:** Disarming is silent. `prewalk.armNotice` (default `true`) controls the arm notice and slash-command success output.
+- **Decision:** Keep `/prewalk off` and the unbound-by-default `app.prewalk.toggle` action. The key preserves the editor draft. Upstream `v18.7.0` added its own `/prewalk off`. The fork keeps its wording and its silent disarm. Like upstream, `off` drops only the current session's handoff, and `/new` re-arms when `prewalk.enabled` is on.
+- **Decision:** Disarming is silent. `prewalk.armNotice` (default `true`) controls the arm notice and slash-command success output. `/prewalk off` prints `Prewalk: nothing armed.` only when nothing was armed.
+- **Decision:** Upstream's `/new` re-arm resolves `prewalk.into`, not `@smol`. With `@@`, it keeps the model that is active after `/new`. A plain `@@` handoff records no handoff, so `/new` restores nothing.
 - **Key paths:** `packages/coding-agent/src/session/prewalk.ts`, `packages/coding-agent/src/session/settings.ts`, `packages/coding-agent/src/slash-commands/builtin-modes.ts`, and `packages/coding-agent/src/modes/controllers/input-controller.ts`.
-- **Checks:** `packages/coding-agent/test/agent-session-prewalk.test.ts`, `packages/coding-agent/test/input-controller-keybindings.test.ts`, `packages/coding-agent/test/prewalk-discovery-provider.test.ts`, and `packages/coding-agent/test/task/executor-prewalk.test.ts`.
+- **Checks:** `packages/coding-agent/test/agent-session-prewalk.test.ts`, `packages/coding-agent/test/agent-session-prewalk-off.test.ts`, `packages/coding-agent/test/input-controller-keybindings.test.ts`, `packages/coding-agent/test/prewalk-discovery-provider.test.ts`, and `packages/coding-agent/test/task/executor-prewalk.test.ts`.
 
 ### Per-model compaction thresholds
 
@@ -289,14 +292,6 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Why:** The Preview tree used 9 or more rows on long plans.
 - **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts` (`todoLayout`, `setTodoLayout`, `renderCompactStatusLine`), `packages/coding-agent/src/modes/controllers/todo-command-controller.ts`, `packages/coding-agent/src/slash-commands/helpers/todo.ts`, `packages/coding-agent/src/tools/settings.ts`.
 - **Checks:** `packages/coding-agent/test/interactive-mode-todo-clear.test.ts` (`selectable todo HUD layout` and the session and auto-clear cases), `packages/coding-agent/test/acp-builtins.test.ts`.
-
-### macOS clippy build of `cp`
-
-- **Decision:** Gate `CopyState.clone_unsupported` in `crates/pi-builtins/src/cp.rs` with the same `cfg(any(target_os = "linux", target_os = "android", windows))` as the open-handle clone path that reads it.
-- **Why:** Upstream `v18.6.3` reads the field only on those targets. On macOS, `bun check` runs clippy with `-D warnings` and rejects the field as dead code.
-- **Retire when:** Upstream gates the field or reads it on macOS.
-- **Key path:** `crates/pi-builtins/src/cp.rs`.
-- **Check:** `bun check` on macOS.
 
 ### Background pointer input on the macOS desktop root
 

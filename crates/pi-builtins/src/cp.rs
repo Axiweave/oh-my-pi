@@ -1147,8 +1147,7 @@ struct CopyState {
 	/// `-g` progress over the total source size.
 	progress_bar:        Option<ProgressBar>,
 	/// Source devices whose filesystem refused to clone: later files from
-	/// them skip straight to copying the data. Only the open-handle clone
-	/// path (Linux, Android, Windows) reads it.
+	/// them skip straight to copying the data.
 	#[cfg(any(target_os = "linux", target_os = "android", windows))]
 	clone_unsupported:   FxHashSet<u64>,
 }

@@ -1184,7 +1184,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpInputHint: "[restart|off]",
 		subcommands: [
 			{ name: "restart", description: "Return to @default and re-arm the handoff to the prewalk.into target" },
-			{ name: "off", description: "Drop the pending handoff and stay on the active model" },
+			{ name: "off", description: "Drop this session's pending handoff and stay on the active model" },
 		],
 		handle: async (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();

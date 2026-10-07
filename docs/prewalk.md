@@ -25,7 +25,7 @@ The configured setting arms new sessions, not resumed/imported sessions. Explici
 | Flag | Effect |
 | --- | --- |
 | `--prewalk` | Arm prewalk for the new session. |
-| `--no-prewalk` | Leave prewalk disabled for the session, even when `prewalk.enabled` is `true`. |
+| `--no-prewalk` | Leave prewalk disabled for the startup session, even when `prewalk.enabled` is `true`. `/new` still follows `prewalk.enabled`. |
 | `--prewalk-into <model-or-role>` | Arm prewalk and use the supplied model pattern or role instead of `prewalk.into`. |
 
 For example:
@@ -53,6 +53,10 @@ task:
 ```
 
 A normal target that resolves to the same model and thinking level is a no-op, and OMP disarms it. `@@` is never a no-op.
+
+`/new` starts a fresh cycle using `prewalk.enabled` and the current `prewalk.into` target, rather than inheriting a consumed handoff or the previous todo gate. With `@@`, the target is the model that is active after `/new`. Startup flags (`--prewalk`, `--no-prewalk`, `--prewalk-into`) apply only to the startup session; `/new` always uses the configured setting. When prewalk is enabled, the new session restores the previous planning model and thinking level after a handoff unless a later selection replaced them. If the planning model can no longer be used (for example, its credentials were removed), `/new` warns and stays on the current model. Resuming an existing session does not automatically re-arm prewalk.
+
+Any model or thinking-level change made after the handoff counts as a replacement, including the switches plan mode makes on entry and exit. Automatic retry fallback, fallback restoration, and context promotion do not; if the session is back on the handoff model and thinking level when you run `/new`, it still restores the planning model.
 
 ## Handoff trigger
 
@@ -82,7 +86,7 @@ After a handoff, `/prewalk restart` returns to the current `@default` assignment
 
 If prewalk is already armed, `/prewalk` leaves the existing target in place. `/prewalk restart` also preserves a matching arm. If the existing target differs from the current `prewalk.into` resolution, restart rejects the change before switching models. To choose another target, set `prewalk.into` or use `--prewalk-into` at startup.
 
-`/prewalk off` drops a pending handoff for this session. The session stays on the active model, and the planning nudge is removed. It does not change `prewalk.enabled`, so the next session still starts with prewalk when that setting is `true`.
+`/prewalk off` silently drops a pending handoff for this session. The session stays on the active model, and pending planning steering is removed. Continuation history that was already delivered stays. It does not switch back to the planning model after a handoff. When nothing is armed, it prints "Prewalk: nothing armed." It does not change `prewalk.enabled`, so `/new` and the next session re-arm prewalk when that setting is `true`.
 
 The unbound `app.prewalk.toggle` keybinding runs `/prewalk` when disarmed or `/prewalk off` when armed. It preserves the current draft.
 

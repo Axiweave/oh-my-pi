@@ -110,8 +110,9 @@ impl MacInput {
 						})
 					},
 					DeliveryMode::Foreground => {
-						// Screen Sharing relays physical key transitions only; map the
-						// whole text before activating so a gap refuses cleanly.
+						// Screen Sharing relays physical key transitions only; map
+						// the whole text before activating so a gap
+						// refuses cleanly.
 						let physical = if process::is_screen_sharing(pid) {
 							Some(physical_transitions(text)?)
 						} else {
@@ -963,7 +964,8 @@ fn post_bare_keys(transitions: &[(u16, bool)]) -> CoreResult<()> {
 		if raw.is_null() {
 			return Err(DesktopError::input_failed("failed to create a Quartz keyboard event"));
 		}
-		// SAFETY: `raw` is a non-null create-rule event whose ownership moves here.
+		// SAFETY: `raw` is a non-null create-rule event whose ownership moves
+		// here.
 		let event = unsafe { CGEvent::from_ptr(raw) };
 		post_global(&event)
 	};

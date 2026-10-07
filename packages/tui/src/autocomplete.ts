@@ -268,8 +268,11 @@ export interface AutocompleteProvider {
 	 *  a leading `/name` matching a known command or alias is included; inline `/skill:name`
 	 *  tokens are recognized on any line. Returns an empty array when nothing matches. */
 	getRecognizedCommandRanges?(lineText: string, firstLine: boolean): Array<[number, number]>;
-	/** Synchronously try to complete a slash command at the start of a line (no async I/O). */
-	/** Returns matched items and the full prefix, or null if not applicable. */
+	/**
+	 * Synchronously list slash command-name completions for a leading slash token (no async I/O).
+	 * Mirrors the command-name branch of {@link getSuggestions}, including the bare `/` listing and
+	 * the collapsed `/skill:` namespace row. Returns null outside a command-name token or with no match.
+	 */
 	trySyncSlashCompletion?(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null;
 	/**
 	 * Synchronously try to expand text immediately before the cursor (no async I/O).
@@ -811,7 +814,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			};
 		}
 
-		// Slash command suggestions can be accepted before the debounced refresh
+		// Slash command suggestions can be accepted before an async refresh
 		// catches up to newly typed characters. Replace the live command token,
 		// not only the prefix captured when the suggestion list was rendered.
 		// Absolute-path completions share the leading-slash prefix shape but
@@ -1331,19 +1334,14 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
 		if (slashStart === null) return null;
 		const commandText = textBeforeCursor.slice(slashStart);
-		if (commandText.length <= 1) return null; // Bare "/" alone, don't auto-complete
 		if (commandText.includes(" ")) return null; // Only complete command name, not args
 
-		const prefix = commandText.slice(1);
-		const lowerPrefix = prefix.toLowerCase();
-
-		// The `/skill:` namespace row is excluded here: the sync path submits
-		// immediately after applying, and the bare namespace is not a command.
+		const lowerPrefix = commandText.slice(1).toLowerCase();
 		const matches = buildSlashCommandCompletions(
 			collapseSkillNamespace(this.#commands, lowerPrefix),
 			lowerPrefix,
 			this.#commandUsage,
-		).filter(item => item.value !== SKILL_NAMESPACE);
+		);
 
 		if (matches.length === 0) return null;
 		// Mirror `getSuggestions`: preserve leading whitespace so the editor's

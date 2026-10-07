@@ -1296,7 +1296,8 @@ impl WalkRequest {
 			SizeHintPolicy::FromDetail => {},
 			SizeHintPolicy::Never => options.detail = WalkDetail::Minimal,
 			SizeHintPolicy::WhenCheap => {
-				// Provider-backed listings pay one metadata call per entry for sizes.
+				// Provider-backed listings pay one metadata call per entry for
+				// sizes.
 				options.detail =
 					if supports_cheap_size_hints() && self.filesystem.is_native_local(&self.root) {
 						WalkDetail::Full
@@ -5477,8 +5478,8 @@ mod tests {
 		fs::write(worktree.join("excluded.txt"), "x").expect("excluded file should be written");
 		fs::write(worktree.join("kept.txt"), "x").expect("kept file should be written");
 
-		// The worktree as the walk root, and as a directory found while walking its
-		// parent.
+		// The worktree as the walk root, and as a directory found while walking
+		// its parent.
 		for (root, prefix) in [(worktree.as_path(), ""), (tree.path(), "wt/")] {
 			let scan = collect_entries(
 				root,

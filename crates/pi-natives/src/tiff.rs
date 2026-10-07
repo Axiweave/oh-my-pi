@@ -133,8 +133,8 @@ mod tests {
 				assert!(tiff_to_png(&bytes[..length]).is_err(), "converted {length} bytes");
 			}
 			let mut missing_strip = bytes;
-			// Replace StripOffsets with an unknown tag, leaving dimensions and pixels
-			// intact.
+			// Replace StripOffsets with an unknown tag, leaving dimensions and
+			// pixels intact.
 			put_u16(&mut missing_strip, 10 + 5 * 12, 65000, little_endian);
 			assert!(decode_tiff(&missing_strip).is_err());
 			assert!(tiff_to_png(&missing_strip).is_err());
