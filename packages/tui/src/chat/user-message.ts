@@ -135,6 +135,7 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 	#native: NativeNode | undefined;
 	/** The terminal's clock {@link #native} was described with. */
 	#nativeHour12: boolean | undefined;
+	#transcriptBlockFinalized = true;
 
 	constructor(text: string, options: UserBubbleOptions = {}) {
 		super();
@@ -258,6 +259,25 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 		if (event.type !== "action") return;
 		if (event.act === "copy-message") runTranscriptAction({ act: "copy", text: this.#text });
 		else if (event.act === "rewind") runTranscriptAction({ act: "rewind" });
+	}
+
+	/**
+	 * Transcript finalization contract (see `FinalizableBlock`): an optimistic
+	 * row reports `false` so the container keeps it live and removable until its
+	 * canonical `message_start` reconciles it; every other user row is finalized.
+	 */
+	isTranscriptBlockFinalized(): boolean {
+		return this.#transcriptBlockFinalized;
+	}
+
+	/** Hold this row live as an unreconciled optimistic submit row. */
+	markTranscriptBlockPending(): void {
+		this.#transcriptBlockFinalized = false;
+	}
+
+	/** Let a kept optimistic row retire into scrollback like any settled row. */
+	markTranscriptBlockFinalized(): void {
+		this.#transcriptBlockFinalized = true;
 	}
 
 	/**

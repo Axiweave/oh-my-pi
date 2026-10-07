@@ -51,6 +51,7 @@
 
 ### Fixed
 
+- Fixed a file slash command such as `/speckit.plan` (typed or sent by speckit-auto) showing a second, plain user row above its collapsed command card. The raw row painted at submit could move into terminal scrollback before the expanded message arrived, and a row in scrollback cannot be removed. The raw row now stays live until the expanded message replaces it.
 - Fixed the compact TODO row ending one cell left of the working row. Both rows now end at the right edge of the terminal.
 - Fixed omp exiting with an unhandled-rejection crash when a focused subagent parked or disappeared and the main session replay failed; the failure now shows as an error and the main session stays attached.
 - Fixed cyber mode letting the session model's `imageModel` and `webSearchModel` companions run `generate_image` and `web_search` outside the allowlist.

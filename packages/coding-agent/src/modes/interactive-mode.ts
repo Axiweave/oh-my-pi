@@ -258,6 +258,7 @@ import { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
 import { SessionInfoOverlay } from "@oh-my-pi/pi-tui/overlays/session-info-overlay";
 import { JobsSheet } from "@oh-my-pi/pi-tui/overlays/jobs-panel";
 import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
+import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "./status-line-host";
 import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -3749,6 +3750,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.optimisticUserMessageSignature = undefined;
 		this.#pendingSubmissionDispose?.();
 		this.#pendingSubmissionDispose = undefined;
+		this.#finalizeOptimisticUserMessage();
+	}
+
+	/** Stop tracking the optimistic row; a row left on screen retires like any settled row. */
+	#finalizeOptimisticUserMessage(): void {
+		for (const component of this.#optimisticUserMessageComponents) {
+			if (component instanceof UserMessageComponent) component.markTranscriptBlockFinalized();
+		}
 		this.#optimisticUserMessageComponents = [];
 	}
 
@@ -3869,17 +3878,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const imageCount = submission.images?.length ?? 0;
 			this.optimisticUserMessageSignature = `${submission.text}\u0000${imageCount}`;
 			this.#pendingSubmissionDispose = this.recordLocalSubmission(submission.text, imageCount);
-			this.#optimisticUserMessageComponents = this.#captureAddedChatComponents(() => {
-				this.addMessageToChat(
-					{
-						role: "user",
-						content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
-						attribution: "user",
-						timestamp: Date.now(),
-					},
-					{ imageLinks: input.imageLinks },
-				);
-			});
+			this.#renderOptimisticUserMessage(submission);
 		} else {
 			this.clearOptimisticUserMessage();
 		}
@@ -3984,7 +3983,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (wasPendingSubmission && !this.session.isStreaming && !this.streamingComponent) {
 			this.optimisticUserMessageSignature = undefined;
 			pendingSubmissionDispose?.();
-			this.#optimisticUserMessageComponents = [];
+			this.#finalizeOptimisticUserMessage();
 			this.#pendingWorkingMessage = undefined;
 			if (this.loadingAnimation) {
 				this.#stopLoadingAnimation(true);
@@ -4551,6 +4550,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.optimisticUserMessageSignature) return;
 		const submission = this.#pendingSubmittedInput;
 		if (!submission || submission.cancelled || submission.customType) return;
+		this.#renderOptimisticUserMessage(submission);
+	}
+
+	/**
+	 * Paint the raw submit row and hold it live until its canonical
+	 * `message_start` reconciles it. A finalized row retires into immutable
+	 * scrollback on the next frame (pressure or `display.streamingScrollback`),
+	 * where `replaceOptimisticUserMessage` cannot remove it, so an expanded file
+	 * command would show the raw row above its canonical card.
+	 */
+	#renderOptimisticUserMessage(submission: SubmittedUserInput): void {
+		this.#finalizeOptimisticUserMessage();
 		this.#optimisticUserMessageComponents = this.#captureAddedChatComponents(() => {
 			this.addMessageToChat(
 				{
@@ -4562,6 +4573,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				{ imageLinks: submission.imageLinks },
 			);
 		});
+		for (const component of this.#optimisticUserMessageComponents) {
+			if (component instanceof UserMessageComponent) component.markTranscriptBlockPending();
+		}
 	}
 
 	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
