@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Fixed `StdinBuffer` dropping an OSC/DCS/APC packet when the link stalled mid-packet for more than ~200ms under the kitty keyboard protocol. Over SSH this tore OSC 5522 image pastes, so a verified paste failed with "Image paste was incomplete or failed verification". These string partials are now held for up to 10s (`stringHoldTimeout`). An ESC-prefixed key interrupts the hold. Plain printable keys typed during the hold become part of the held payload.
 - Escape no longer lets a hidden autocomplete popup reappear after it interrupts the active response. Added `Editor.cancelAutocomplete()`.
 - Image validation now rejects unrecognized bytes labeled as a supported image format before verified paste preparation.
 - Incomplete OSC packets no longer consume the next paste or escape key sequence after a transfer stops.

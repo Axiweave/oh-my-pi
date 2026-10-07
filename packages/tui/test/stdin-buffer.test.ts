@@ -5,7 +5,7 @@
  * MIT License - Copyright (c) 2025 opentui
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { StdinBuffer } from "@oh-my-pi/pi-tui/stdin-buffer";
 
@@ -830,7 +830,7 @@ describe("StdinBuffer", () => {
 			const next = "\x1b]5522;type=paste:status=OK\x07";
 			for (let split = 0; split <= next.length; split++) {
 				buffer.destroy();
-				buffer = new StdinBuffer({ timeout: 5, partialHoldTimeout: 5 });
+				buffer = new StdinBuffer({ timeout: 5, partialHoldTimeout: 5, stringHoldTimeout: 5 });
 				const received: string[] = [];
 				buffer.on("data", sequence => received.push(sequence));
 				processInput("\x1b]5522;type=read:status=DATA;AA");
@@ -853,7 +853,7 @@ describe("StdinBuffer", () => {
 			// spam.
 			setKittyProtocolActive(true);
 			buffer.destroy();
-			buffer = new StdinBuffer({ timeout: 5, partialHoldTimeout: 5 });
+			buffer = new StdinBuffer({ timeout: 5, partialHoldTimeout: 5, stringHoldTimeout: 5 });
 			buffer.on("data", (sequence: string) => {
 				emittedSequences.push(sequence);
 			});
@@ -878,7 +878,7 @@ describe("StdinBuffer", () => {
 		it("detects a split ST terminator while discarding a torn string tail", async () => {
 			setKittyProtocolActive(true);
 			buffer.destroy();
-			buffer = new StdinBuffer({ timeout: 5, partialHoldTimeout: 5 });
+			buffer = new StdinBuffer({ timeout: 5, partialHoldTimeout: 5, stringHoldTimeout: 5 });
 			buffer.on("data", (sequence: string) => {
 				emittedSequences.push(sequence);
 			});
@@ -892,6 +892,31 @@ describe("StdinBuffer", () => {
 			processInput("tail\x1b");
 			processInput("\\ok");
 			expect(emittedSequences).toEqual(["o", "k"]);
+		});
+
+		it("keeps a kitty OSC 5522 packet whole across a stall longer than the key hold", () => {
+			// Regression: SSH links stall mid-packet for over a second. The
+			// 150ms key hold dropped the packet head, so a verified image paste
+			// came up short and failed its byte/hash check.
+			setKittyProtocolActive(true);
+			vi.useFakeTimers();
+			try {
+				buffer.destroy();
+				buffer = new StdinBuffer();
+				buffer.on("data", (sequence: string) => {
+					emittedSequences.push(sequence);
+				});
+
+				const packet = `\x1b]5522;type=read:status=DATA:mime=aW1hZ2UvcG5n;${"A".repeat(4096)}\x07`;
+				const split = 2048;
+				processInput(packet.slice(0, split));
+				vi.advanceTimersByTime(1500);
+				expect(emittedSequences).toEqual([]);
+				processInput(packet.slice(split));
+				expect(emittedSequences).toEqual([packet]);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 	});
 

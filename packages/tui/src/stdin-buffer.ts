@@ -45,6 +45,13 @@ const SGR_MOUSE_PARTIAL = /^\x1b\[<[\d;]*$/;
 // completes (e.g. a bare ESC delivered while the kitty-active flag is
 // stale); keep it small.
 const PARTIAL_HOLD_MAX_MS = 150;
+// Hold bound for an OSC/DCS/APC partial under the kitty keyboard protocol.
+// Such a head is never a key. An ESC-prefixed key (CSI-u) interrupts it, but
+// plain printable keys are text and join the held payload, the same loss the
+// torn-string discard mode already had. SSH links stall mid-packet for over
+// a second, which tore OSC 5522 image pastes when this shared the 150ms
+// bound. Matches the verified-paste budget.
+const STRING_PARTIAL_HOLD_MAX_MS = 10_000;
 // Escape-sequence length caps. `resolveEscapeEnd` scans within these bounds
 // only, so a malformed CSI (missing final byte in `0x40-0x7E`) or a
 // terminator-less OSC/DCS/APC cannot force `extractCompleteSequences` to
@@ -374,6 +381,11 @@ export type StdinBufferOptions = {
 	 */
 	partialHoldTimeout?: number;
 	/**
+	 * Maximum extra time (default: 10000ms) an OSC/DCS/APC partial is held
+	 * past `timeout` while the kitty keyboard protocol is active.
+	 */
+	stringHoldTimeout?: number;
+	/**
 	 * Paste-mode inactivity watchdog (default: 1000ms). If no input arrives for
 	 * this long while waiting for the bracketed-paste end marker, the paste is
 	 * assumed truncated: accumulated bytes are delivered and input recovers.
@@ -420,6 +432,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	#partialHoldStartMs = 0;
 	readonly #timeoutMs: number;
 	readonly #partialHoldMaxMs: number;
+	readonly #stringHoldMaxMs: number;
 	readonly #pasteTimeoutMs: number;
 	readonly #pasteByteLimit: number;
 	#pasteMode: boolean = false;
@@ -447,6 +460,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		super();
 		this.#timeoutMs = options.timeout ?? 75;
 		this.#partialHoldMaxMs = options.partialHoldTimeout ?? PARTIAL_HOLD_MAX_MS;
+		this.#stringHoldMaxMs = options.stringHoldTimeout ?? STRING_PARTIAL_HOLD_MAX_MS;
 		this.#pasteTimeoutMs = options.pasteTimeout ?? PASTE_INACTIVITY_TIMEOUT_MS;
 		this.#pasteByteLimit = options.pasteByteLimit ?? PASTE_MAX_BYTES;
 	}
@@ -805,7 +819,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}
 		if (this.#shouldHoldPartial()) {
 			if (this.#partialHoldStartMs === 0) this.#partialHoldStartMs = Date.now();
-			if (Date.now() - this.#partialHoldStartMs < this.#partialHoldMaxMs) {
+			const holdMaxMs = STRING_SEQ_PARTIAL.test(this.#buffer) ? this.#stringHoldMaxMs : this.#partialHoldMaxMs;
+			if (Date.now() - this.#partialHoldStartMs < holdMaxMs) {
 				this.#armFlushTimer();
 				return;
 			}

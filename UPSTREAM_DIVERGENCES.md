@@ -34,6 +34,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Verify OSC 5522 request identity, framing, byte count, SHA-256, expiry, and image decoding before one guarded editor commit.
 - **Decision:** Cancel pending receipt when the session, editor, or terminal lifecycle changes. Require a known image container only for verified receipt.
 - **Decision:** Use the Rust image library for classic TIFF in either byte order. Preserve original TIFF bytes during transfer and storage. Normalize the model attachment to PNG, and prefer PNG when both clipboard formats are available.
+- **Decision:** Under the kitty keyboard protocol, hold a split OSC/DCS/APC packet for up to 10 seconds, not 150ms. SSH links stall mid-packet for over a second, and the short hold dropped verified paste data.
 - **Runtime:** Rebuild the native addon with `bun run setup`. Existing OMP processes must restart to load the portable TIFF decoder.
 - **Why:** Incomplete or stale transfers must not alter a draft or attach an image to the wrong destination. Local and legacy image routes stay unchanged.
 - **Key paths:** `packages/coding-agent/src/utils/enhanced-paste.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/tui/src/chat/image-loading.ts`, `packages/tui/src/stdin-buffer.ts`, and `packages/tui/src/tui.ts`.
