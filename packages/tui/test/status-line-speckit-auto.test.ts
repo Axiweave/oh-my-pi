@@ -11,6 +11,7 @@ beforeAll(async () => {
 function createContext(
 	speckitAuto: SegmentContext["speckitAuto"],
 	loopMode: SegmentContext["loopMode"] = null,
+	prewalk: SegmentContext["prewalk"] = null,
 ): SegmentContext {
 	return {
 		session: {} as SegmentContext["session"],
@@ -20,7 +21,7 @@ function createContext(
 		planMode: null,
 		loopMode,
 		speckitAuto,
-		prewalk: null,
+		prewalk,
 		goalMode: null,
 		vibeMode: null,
 		vim: null,
@@ -103,5 +104,21 @@ describe("status line speckit-auto mode segment", () => {
 		);
 		expect(text).toContain("Speckit auto");
 		expect(text).not.toContain("Loop");
+	});
+
+	it("shows prewalk beside the active mode instead of hiding it", () => {
+		const prewalk = { enabled: true };
+		const both = createContext({ state: "waiting" }, null, prewalk);
+		const text = Bun.stripANSI(renderSegment("mode", both).content);
+		expect(text.indexOf("Speckit auto · waiting")).toBeGreaterThanOrEqual(0);
+		expect(text.indexOf("Prewalk")).toBeGreaterThan(text.indexOf("Speckit auto · waiting"));
+		const described = describeSegment("mode", both)?.spans.map(part => part.t).join("") ?? "";
+		expect(described).toContain("Speckit auto · waiting");
+		expect(described).toContain("Prewalk");
+
+		const alone = createContext(null, null, prewalk);
+		expect(Bun.stripANSI(renderSegment("mode", alone).content)).toContain("Prewalk");
+		expect(Bun.stripANSI(renderSegment("mode", alone).content)).not.toContain("Speckit");
+		expect(describeSegment("mode", alone)?.spans.map(part => part.t).join("")).toBe("Prewalk");
 	});
 });

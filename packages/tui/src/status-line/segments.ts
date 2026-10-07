@@ -570,98 +570,108 @@ function speckitAutoLabel(status: SpeckitAutoStatus): string {
 	return status.state === "paused" && theme.icon.pause ? `${label} ${theme.icon.pause}` : label;
 }
 
+/** The one exclusive mode (plan, goal, vibe, speckit auto, loop) that owns the `mode` segment. */
+function renderMainMode(ctx: SegmentContext): RenderedSegment {
+	const pauseSuffix = theme.icon.pause ? ` ${theme.icon.pause}` : " (paused)";
+
+	const plan = ctx.planMode;
+	if (plan && (plan.enabled || plan.paused)) {
+		const name = plan.workflow === "debate" ? "Debate" : "Plan";
+		const label = plan.paused ? `${name}${pauseSuffix}` : name;
+		const content = withIcon(theme.icon.plan, label);
+		return {
+			content: plan.paused ? theme.fg("warning", content) : accentFg(ctx, "accent", content),
+			visible: true,
+		};
+	}
+
+	const goal = ctx.goalMode;
+	if (goal && (goal.enabled || goal.paused)) {
+		return renderGoalMode(ctx, goal);
+	}
+
+	const vibe = ctx.vibeMode;
+	if (vibe?.enabled) {
+		const content = withIcon(theme.icon.agents, "Vibe");
+		return { content: accentFg(ctx, "accent", content), visible: true };
+	}
+
+	const speckit = ctx.speckitAuto;
+	if (speckit) {
+		const paused = speckit.state === "paused";
+		const content = withIcon(theme.icon.speckitAuto, speckitAutoLabel(speckit));
+		return {
+			content: paused ? theme.fg("warning", content) : accentFg(ctx, "accent", content),
+			visible: true,
+		};
+	}
+
+	const loop = ctx.loopMode;
+	if (loop) {
+		const icon = loop.state === "paused" ? theme.icon.pause || theme.icon.loop : theme.icon.loop;
+		const color: ThemeColor = loop.state === "paused" ? "warning" : "customMessageLabel";
+		const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
+		const label = `Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`;
+		const parts = [withIcon(icon, label)];
+		const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
+		if (limit) parts.push(limit);
+		if (loop.condition) {
+			parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
+		}
+		return { content: theme.fg(color, parts.join(" ")), visible: true };
+	}
+	return { content: "", visible: false };
+}
+
+/** Native twin of {@link renderMainMode}. */
+function describeMainMode(ctx: SegmentContext): SegmentView | null {
+	const plan = ctx.planMode;
+	if (plan && (plan.enabled || plan.paused)) {
+		return plan.paused
+			? segView([span("Plan (paused)", "warning")], "plan", "warning")
+			: segView([span("Plan", accentToken(ctx, "accent"))], "plan");
+	}
+	const goal = ctx.goalMode;
+	if (goal && (goal.enabled || goal.paused)) return describeGoalMode(ctx, goal);
+	if (ctx.vibeMode?.enabled) return segView([span("Vibe", accentToken(ctx, "accent"))], "agents");
+	const speckit = ctx.speckitAuto;
+	if (speckit) {
+		return speckit.state === "paused"
+			? segView([span(speckitAutoLabel(speckit), "warning")], "pause", "warning")
+			: segView([span(speckitAutoLabel(speckit), accentToken(ctx, "accent"))]);
+	}
+	const loop = ctx.loopMode;
+	if (loop) {
+		const paused = loop.state === "paused";
+		const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
+		const parts = [`Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`];
+		const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
+		if (limit) parts.push(limit);
+		if (loop.condition) parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
+		return segView(
+			[span(parts.join(" "), paused ? "warning" : "customMessageLabel")],
+			paused ? "pause" : "loop",
+			paused ? "warning" : undefined,
+		);
+	}
+	return null;
+}
+
+// Prewalk is a model handoff arm, not an exclusive mode: it rides beside
+// whichever mode is on instead of hiding it.
 const modeSegment: StatusLineSegment = {
 	id: "mode",
 	render(ctx) {
-		const pauseSuffix = theme.icon.pause ? ` ${theme.icon.pause}` : " (paused)";
-
-		const plan = ctx.planMode;
-		if (plan && (plan.enabled || plan.paused)) {
-			const name = plan.workflow === "debate" ? "Debate" : "Plan";
-			const label = plan.paused ? `${name}${pauseSuffix}` : name;
-			const content = withIcon(theme.icon.plan, label);
-			return {
-				content: plan.paused ? theme.fg("warning", content) : accentFg(ctx, "accent", content),
-				visible: true,
-			};
-		}
-
-		const prewalk = ctx.prewalk;
-		if (prewalk?.enabled) {
-			const content = withIcon(theme.icon.prewalk, "Prewalk");
-			return { content: accentFg(ctx, "accent", content), visible: true };
-		}
-
-		const goal = ctx.goalMode;
-		if (goal && (goal.enabled || goal.paused)) {
-			return renderGoalMode(ctx, goal);
-		}
-
-		const vibe = ctx.vibeMode;
-		if (vibe?.enabled) {
-			const content = withIcon(theme.icon.agents, "Vibe");
-			return { content: accentFg(ctx, "accent", content), visible: true };
-		}
-
-		const speckit = ctx.speckitAuto;
-		if (speckit) {
-			const paused = speckit.state === "paused";
-			const content = withIcon(theme.icon.speckitAuto, speckitAutoLabel(speckit));
-			return {
-				content: paused ? theme.fg("warning", content) : accentFg(ctx, "accent", content),
-				visible: true,
-			};
-		}
-
-		const loop = ctx.loopMode;
-		if (loop) {
-			const icon = loop.state === "paused" ? theme.icon.pause || theme.icon.loop : theme.icon.loop;
-			const color: ThemeColor = loop.state === "paused" ? "warning" : "customMessageLabel";
-			const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
-			const label = `Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`;
-			const parts = [withIcon(icon, label)];
-			const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
-			if (limit) parts.push(limit);
-			if (loop.condition) {
-				parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
-			}
-			return { content: theme.fg(color, parts.join(" ")), visible: true };
-		}
-
-		return { content: "", visible: false };
+		const main = renderMainMode(ctx);
+		if (!ctx.prewalk?.enabled) return main;
+		const prewalk = accentFg(ctx, "accent", withIcon(theme.icon.prewalk, "Prewalk"));
+		return { content: main.visible ? `${main.content} ${prewalk}` : prewalk, visible: true };
 	},
 	describe(ctx) {
-		const plan = ctx.planMode;
-		if (plan && (plan.enabled || plan.paused)) {
-			return plan.paused
-				? segView([span("Plan (paused)", "warning")], "plan", "warning")
-				: segView([span("Plan", accentToken(ctx, "accent"))], "plan");
-		}
-		if (ctx.prewalk?.enabled) return segView([span("Prewalk", accentToken(ctx, "accent"))], "prewalk");
-		const goal = ctx.goalMode;
-		if (goal && (goal.enabled || goal.paused)) return describeGoalMode(ctx, goal);
-		if (ctx.vibeMode?.enabled) return segView([span("Vibe", accentToken(ctx, "accent"))], "agents");
-		const speckit = ctx.speckitAuto;
-		if (speckit) {
-			return speckit.state === "paused"
-				? segView([span(speckitAutoLabel(speckit), "warning")], "pause", "warning")
-				: segView([span(speckitAutoLabel(speckit), accentToken(ctx, "accent"))]);
-		}
-		const loop = ctx.loopMode;
-		if (loop) {
-			const paused = loop.state === "paused";
-			const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
-			const parts = [`Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`];
-			const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
-			if (limit) parts.push(limit);
-			if (loop.condition) parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
-			return segView(
-				[span(parts.join(" "), paused ? "warning" : "customMessageLabel")],
-				paused ? "pause" : "loop",
-				paused ? "warning" : undefined,
-			);
-		}
-		return null;
+		const main = describeMainMode(ctx);
+		if (!ctx.prewalk?.enabled) return main;
+		if (!main) return segView([span("Prewalk", accentToken(ctx, "accent"))], "prewalk");
+		return { ...main, spans: [...main.spans, span(" Prewalk", accentToken(ctx, "accent"))] };
 	},
 };
 
