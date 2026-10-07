@@ -31,16 +31,16 @@ Both commands are builtin TUI commands in `slash-commands/builtin-modes.ts`. `/s
 
 ## Status bar
 
-The mode uses the `mode` segment, the same slot as plan, goal, and loop mode. Format: `Speckit auto · <phase> · <state>`. With no run: `Speckit auto · waiting`.
+The mode uses the `mode` segment, the same slot as plan, goal, and loop mode. Format: `Speckit · <phase> · <state>`. With no run: `Speckit · on`. Phases show short names: `spec`, `clar`, `plan`, `tasks`, `anlz`, `fix`, `impl`, `conv`.
 
 | State | Text | Color |
 |---|---|---|
-| waiting | `waiting` | accent |
-| running | `running` | accent |
-| next (check runs or start parked) | `next phase due` | accent |
-| user | `your turn` | accent |
-| needs-you | `needs you: <short reason>` | accent |
-| paused | `paused` + pause icon | warning |
+| waiting | `on` | accent |
+| running | none (`Speckit · impl`) | accent |
+| next (check runs or start parked) | `next` | accent |
+| user | `you` | accent |
+| needs-you | `stuck: <short reason>` | accent |
+| paused | pause icon (`paused` without the icon) | warning |
 
 ## Messages the mode submits
 

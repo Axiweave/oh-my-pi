@@ -121,7 +121,7 @@ The status bar always shows the mode, the phase, and who must act next. omp send
 
 1. **Given** the mode is on and no run is active, **When** the user looks at the status bar, **Then** it shows the mode as on and waiting for a `/speckit.*` command.
 2. **Given** the run is in plan, **When** the user looks at the status bar, **Then** it shows the mode and the plan phase.
-3. **Given** the run holds for an answer, **When** the user looks at the status bar, **Then** it shows the phase and "your turn".
+3. **Given** the run holds for an answer, **When** the user looks at the status bar, **Then** it shows the phase and `you`.
 4. **Given** the run is paused, **When** the user looks at the status bar, **Then** it shows the mode in the warning color with a paused mark, the same as a paused plan mode.
 5. **Given** a phase turn settles and the mode continues on its own, **When** desktop notifications are on, **Then** omp sends no notification for that turn.
 6. **Given** the run holds or ends, **When** desktop notifications are on, **Then** omp sends one notification that names the reason.
@@ -197,7 +197,7 @@ The status bar always shows the mode, the phase, and who must act next. omp send
 
 **Visibility**
 
-- **FR-030**: While the mode is on, the status bar MUST show it in the same place as plan, goal, and loop mode. It MUST show the phase and the state: waiting for a `/speckit.*` command, running, next phase due, your turn, needs you (with the reason), or paused. A paused run MUST use the warning color, the same as a paused plan mode.
+- **FR-030**: While the mode is on, the status bar MUST show it in the same place as plan, goal, and loop mode, with the label `Speckit`. It MUST show the short phase name and the state: `on` (waiting for a `/speckit.*` command), no text (running), `next` (next phase due), `you` (your turn), `stuck: <reason>` (needs you), or the pause icon (paused). A paused run MUST use the warning color, the same as a paused plan mode.
 - **FR-031**: While the mode continues on its own, omp MUST NOT send the per-turn completion notification. omp MUST send one notification when the mode holds for the user or a run ends. When completion notifications are off, omp MUST send none.
 - **FR-032**: When a run ends, omp MUST show a summary: the phases that ran, the remediation and converge round counts, and the result (complete, stopped at a limit, or stopped by the user).
 
@@ -234,7 +234,7 @@ The status bar always shows the mode, the phase, and who must act next. omp send
 
 - The user installed the spec-kit commands for omp in the project with `specify init`. The mode uses these commands as they are and does not change them.
 - The installed commands keep their current output cues: the specify questions with "Wait for user response", the clarify "No critical ambiguities detected" message and its coverage summary with Resolved, Deferred, Clear, and Outstanding, the analyze report table with a Severity column and the "Critical Issues Count" metric, the implement checklist gate, and the converge "✅ Converged" line or its new convergence tasks.
-- The mode toggle is `/speckit-auto-mode`, as the user named it. `/speckit-auto` stays as a separate command for the shortcut and the run controls. The status bar label is "Speckit auto".
+- The mode toggle is `/speckit-auto-mode`, as the user named it. `/speckit-auto` stays as a separate command for the shortcut and the run controls. The status bar label is "Speckit".
 - The mode follows the active feature that spec-kit resolves on its own. The mode does not track feature directories.
 - A user message after a phase command belongs to that phase. Answers and steering both count.
 - Every feature runs all phases. The mode does not skip analyze for small features.

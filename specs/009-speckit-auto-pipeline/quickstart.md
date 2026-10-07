@@ -51,9 +51,9 @@ Make a scratch project whose phase commands answer with fixed text, so the run i
 
 Expected:
 
-- The status bar shows `Speckit auto · waiting` after step 4.
+- The status bar shows `Speckit · on` after step 4.
 - After step 5, the transcript shows the user rows `/speckit.clarify`, `/speckit.plan`, `/speckit.tasks`, `/speckit.analyze`, `/speckit.implement`, and `/speckit.converge` in this order. You type nothing.
-- The run ends with the summary and the result `complete`. The status bar shows `Speckit auto · waiting`.
+- The run ends with the summary and the result `complete`. The status bar shows `Speckit · on`.
 
 ## 3. Hold, pause, and control scenarios
 
@@ -61,7 +61,7 @@ Change one fake command for each scenario, then repeat steps 3-5.
 
 | Scenario | Change | Expected |
 |---|---|---|
-| Question holds (US2-1) | clarify replies `**Question:** Which format? Your choice:` | Status `your turn`. No phase starts. One desktop notification. |
+| Question holds (US2-1) | clarify replies `**Question:** Which format? Your choice:` | Status `Speckit · clar · you`. No phase starts. One desktop notification. |
 | Answer continues (US2-2) | same as above, then type `CSV` and make clarify reply the ready text | The run continues to plan after the answer turn settles. |
 | Draft parks start (US2-5) | type text in the editor before plan starts | No start while the text is there. Clear the editor, and plan starts. |
 | Selector parks start (US2-4) | run `/model` during the grace period | No start while the selector is open. Pick a model, and the phase starts with it. |
@@ -74,7 +74,7 @@ Change one fake command for each scenario, then repeat steps 3-5.
 | Mode off (US3-5) | run `/speckit-auto-mode` during plan | Plan finishes. Nothing else starts. The status bar no longer shows the mode. |
 | Exclusion (FR-007) | run `/plan` while the mode is on | "Turn off speckit-auto mode first (/speckit-auto-mode)." |
 | Restore (FR-035) | quit omp during plan, then `omp --resume` the session | Mode on, run paused at plan. Nothing starts until `/speckit-auto resume`. |
-| New session (FR-033) | run `/new` while a run is active | The new session has the mode on with no run (`Speckit auto · waiting`). `/resume` of the old session brings back its run, paused. |
+| New session (FR-033) | run `/new` while a run is active | The new session has the mode on with no run (`Speckit · on`). `/resume` of the old session brings back its run, paused. |
 
 ## 4. Cleanup
 
