@@ -462,6 +462,7 @@ function makeHostContext(): InteractiveModeContext {
 		},
 		session: {
 			isStreaming: false,
+			hasPendingAsyncWork: () => false,
 			queuedMessageCount: 0,
 			sessionName: "proto test",
 			model: undefined,

@@ -47,6 +47,7 @@
 - Prompt history now omits transient lifecycle commands and non-interactive `/mcp add` arguments that can contain credentials.
 - A `cyberModels` entry that matches no available model no longer prints a startup warning. It is still skipped. OMP still warns when `cyberMode` is on and no entry resolves.
 - Discovery no longer applies `.gitignore` or `.git/info/exclude` rules to slash commands, rules, prompts, instructions, hooks, custom tools, or extension modules. Before, a file-level rule such as `*.md` or `*.ts` hid these files in a normal repository. A rule in the main repository's `.git/info/exclude` had no effect in a linked worktree, so the two checkouts found different items. This applies to every provider, including Claude and OMP plugin packages. Skills were already unaffected.
+- While the model waits for a background job result, the terminal title now keeps the working spinner and the IDE session state stays `working`. Before, the title showed `✓` (`done`) as soon as the model yielded. The title goes idle and the IDE gets the final state only after the background work ends without waking the agent. Plan-review dismissal, dialog dismissal, and refocus on the main session follow the same rule.
 
 ### Fixed
 

@@ -228,7 +228,7 @@ export class SessionFocusController {
 			this.ctx.statusLine.setSession(target, this.#focusedAgentId);
 			// Reset run bookkeeping before replay populates pending tool handles.
 			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
-			else setTerminalTitleState("idle");
+			else setTerminalTitleState(target.hasPendingAsyncWork() ? "working" : "idle");
 			if (generation !== this.#attachGeneration) return false;
 			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 			if (generation !== this.#attachGeneration) return false;
@@ -248,7 +248,10 @@ export class SessionFocusController {
 			// controller was unsubscribed while another agent was focused, so the
 			// `agent_end` that settled it (if any) never reached the IDE.
 			if (target === this.ctx.session && !target.isStreaming) {
-				publishIdeSessionState(this.ctx.mcpManager, ideTurnState(target.messages, this.ctx.goalInterviewActive));
+				publishIdeSessionState(
+					this.ctx.mcpManager,
+					target.hasPendingAsyncWork() ? "working" : ideTurnState(target.messages, this.ctx.goalInterviewActive),
+				);
 			}
 			this.ctx.updateEditorBorderColor();
 			this.ctx.ui.requestRender();

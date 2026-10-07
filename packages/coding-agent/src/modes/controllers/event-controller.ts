@@ -1418,13 +1418,15 @@ export class EventController {
 	#handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
 		// The user sees the final text now; `agent_end` waits on advisor
 		// catch-up (up to 30s), which is too late for the IDE glyph. A tool
-		// batch or a `pause_turn` stop continues the run, so those stay working.
+		// batch, a `pause_turn` stop, or pending background work (its result
+		// re-wakes the run) continues the run, so those stay working.
 		if (
 			event.toolResults.length === 0 &&
 			!(event.message.role === "assistant" && event.message.stopDetails?.type === "pause_turn") &&
 			!this.#retryPending &&
 			this.ctx.viewSession === this.ctx.session &&
-			!this.ctx.planReviewActive
+			!this.ctx.planReviewActive &&
+			!this.ctx.session.hasPendingAsyncWork()
 		) {
 			publishIdeSessionState(this.ctx.mcpManager, ideTurnState([event.message], this.ctx.goalInterviewActive));
 		}
@@ -2222,14 +2224,15 @@ export class EventController {
 		// the terminal settle.
 		if (event.isTerminal === false) {
 			// `awaitingAsyncWork`: the model handed control back and only a
-			// background-job result can resume it. The title tracks the model, so it
-			// goes idle now — before any await, so a wake landing mid-flush keeps the
-			// `working` its `agent_start` sets. That wake is not guaranteed (a
-			// cancelled job enqueues no delivery; acknowledged/watched ones are
-			// suppressed), so the loader/progress teardown waits out the background
-			// work instead of a terminal `agent_end` that may never come.
+			// background-job result can resume it. The run is not finished, so the
+			// title stays `working` until the work drains. That wake is not
+			// guaranteed (a cancelled job enqueues no delivery; acknowledged/watched
+			// ones are suppressed), so the idle title and loader/progress teardown
+			// wait out the background work instead of a terminal `agent_end` that
+			// may never come.
 			if (event.awaitingAsyncWork === true) {
-				setTerminalTitleState("idle");
+				setTerminalTitleState("working");
+				this.#publishIdeTurnStart();
 				void this.#finishWhenAsyncWorkDrains(event);
 			}
 			await this.ctx.flushPendingModelSwitch();

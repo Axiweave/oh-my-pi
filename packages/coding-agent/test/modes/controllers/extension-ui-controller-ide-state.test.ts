@@ -135,7 +135,7 @@ function makeHarness(
 	const { ctx } = createControllerContext();
 	const fake = fakeIdeManager();
 	ctx.mcpManager = fake.manager;
-	ctx.session = { isStreaming, messages } as unknown as AgentSession;
+	ctx.session = { isStreaming, messages, hasPendingAsyncWork: () => false } as unknown as AgentSession;
 	const controller = new ExtensionUiController(ctx) as unknown as SelectorController;
 	return { ctx, fake, controller };
 }

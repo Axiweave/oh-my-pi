@@ -126,6 +126,7 @@ function makeTurnEndContext(
 		isCompacting: false,
 		messages: [] as AssistantMessage[],
 		getLastAssistantMessage: () => options.lastAssistantMessage,
+		hasPendingAsyncWork: () => false,
 		getContextUsage: () => undefined,
 		agent: { getPendingToolResults: () => [] },
 	};
@@ -229,6 +230,12 @@ describe("EventController IDE session-state publishing", () => {
 			const controller = new EventController(ctx);
 
 			await controller.handleEvent({ type: "agent_start" });
+			// The final reply lands while the job runs: the run is not finished, so no early `done`.
+			await controller.handleEvent({
+				type: "turn_end",
+				message: makeAssistantMessage(stopReason),
+				toolResults: [],
+			} as Extract<AgentSessionEvent, { type: "turn_end" }>);
 			await controller.handleEvent({
 				...makeAgentEndEvent([makeAssistantMessage(stopReason)]),
 				isTerminal: false,

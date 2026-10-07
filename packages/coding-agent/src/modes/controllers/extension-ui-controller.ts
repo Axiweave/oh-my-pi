@@ -1410,7 +1410,9 @@ export class ExtensionUiController {
 		const session: InteractiveModeContext["session"] | undefined = this.ctx.session;
 		publishIdeSessionState(
 			this.ctx.mcpManager,
-			session?.isStreaming ? "working" : ideTurnState(session?.messages, this.ctx.goalInterviewActive),
+			session?.isStreaming || session?.hasPendingAsyncWork()
+				? "working"
+				: ideTurnState(session?.messages, this.ctx.goalInterviewActive),
 		);
 	}
 }

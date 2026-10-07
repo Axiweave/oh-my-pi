@@ -310,3 +310,10 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Retire when:** Upstream ships an equivalent spec-kit pipeline mode.
 - **Key paths:** `packages/coding-agent/src/modes/speckit-auto.ts`, `packages/coding-agent/src/prompts/speckit-auto/`, `packages/coding-agent/src/modes/interactive-mode.ts` (speckit-auto fields, tick, restore, exclusion), `packages/coding-agent/src/modes/controllers/input-controller.ts` (Esc pause, submit counter), `packages/coding-agent/src/modes/controllers/event-controller.ts` (notification suppression), `packages/coding-agent/src/slash-commands/builtin-modes.ts`, `packages/coding-agent/src/modes/settings.ts`, `packages/tui/src/status-line/`.
 - **Checks:** `packages/coding-agent/test/speckit-auto.test.ts`, `packages/coding-agent/test/interactive-mode-speckit-auto.test.ts`, `packages/tui/test/status-line-speckit-auto.test.ts`.
+
+### Working state during background-job waits
+
+- **Decision:** Keep the terminal title and the IDE session state at `working` while `AgentSession.hasPendingAsyncWork()` is true. This holds after the model yields with `awaitingAsyncWork`. Publish `idle`, `done`, or `failed` only after the work ends without a wake.
+- **Why:** Upstream drops the title to idle and publishes `done` at the yield, so a session that still waits on a job looks finished.
+- **Key paths:** `packages/coding-agent/src/modes/controllers/event-controller.ts` (`#handleTurnEnd`, `#handleAgentEnd`), `packages/coding-agent/src/modes/controllers/extension-ui-controller.ts`, `packages/coding-agent/src/modes/controllers/session-focus-controller.ts`, and `packages/coding-agent/src/modes/interactive-mode.ts` (`#hidePlanReview`).
+- **Checks:** `packages/coding-agent/test/modes/controllers/event-controller-abort-guard.test.ts` and `packages/coding-agent/test/modes/controllers/event-controller-ide-state.test.ts`.

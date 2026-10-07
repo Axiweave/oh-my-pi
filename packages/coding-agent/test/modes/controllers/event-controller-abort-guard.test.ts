@@ -393,9 +393,9 @@ describe("EventController — terminal title across a non-terminal agent_end", (
 		expect(markActivityEnd).not.toHaveBeenCalled();
 	});
 
-	it("drops the title to idle at an async-wait settle and tears down once background work drains without a wake", async () => {
+	it("keeps the working title at an async-wait settle and goes idle once background work drains without a wake", async () => {
 		// A cancelled or acknowledged background job never delivers a wake, so no
-		// terminal agent_end follows; without this, title and loader spin forever.
+		// terminal agent_end follows; without the drain watch, title and loader spin forever.
 		const stateSpy = vi.spyOn(titleGenerator, "setTerminalTitleState").mockImplementation(() => {});
 		const { ctx, drain } = makeAsyncWaitContext();
 		const markActivityEnd = vi.spyOn(ctx.statusLine, "markActivityEnd");
@@ -403,12 +403,14 @@ describe("EventController — terminal title across a non-terminal agent_end", (
 		markActivityEnd.mockImplementation(() => tornDown.resolve());
 		const controller = new EventController(ctx);
 		await controller.handleEvent(asyncWaitEnd());
-		expect(stateSpy).toHaveBeenCalledWith("idle");
-		// The job is still running: loader/progress teardown waits for it.
+		// The job is still running: the run is not finished.
+		expect(stateSpy).toHaveBeenCalledWith("working");
+		expect(stateSpy).not.toHaveBeenCalledWith("idle");
 		expect(markActivityEnd).not.toHaveBeenCalled();
 
 		drain();
 		await tornDown.promise;
+		expect(stateSpy).toHaveBeenCalledWith("idle");
 		expect(markActivityEnd).toHaveBeenCalledTimes(1);
 	});
 

@@ -6054,7 +6054,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#planReviewOverlay = undefined;
 		publishIdeSessionState(
 			this.mcpManager,
-			this.session.isStreaming ? "working" : ideTurnState(this.session.messages, this.goalInterviewActive),
+			this.session.isStreaming || this.session.hasPendingAsyncWork()
+				? "working"
+				: ideTurnState(this.session.messages, this.goalInterviewActive),
 		);
 	}
 

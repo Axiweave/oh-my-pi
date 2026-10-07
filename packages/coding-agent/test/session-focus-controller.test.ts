@@ -89,6 +89,7 @@ function makeSessionStub(
 			};
 		},
 		async settleInFlightMessagePersistence() {},
+		hasPendingAsyncWork: () => false,
 		activeToolExecutionUpdates: () => [],
 		getQueuedMessages: () => queue,
 	};

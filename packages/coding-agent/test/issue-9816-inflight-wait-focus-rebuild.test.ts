@@ -240,6 +240,7 @@ function makeSession(
 			return { messages } as SessionContext;
 		},
 		getToolByName: () => undefined,
+		hasPendingAsyncWork: () => false,
 		activeToolExecutionUpdates: () => [...activeToolUpdates.values()],
 		getAsyncJobSnapshot: () => ({ running: runningJobIds.map(id => ({ id })) }),
 		hasBuiltInTool: () => true,
