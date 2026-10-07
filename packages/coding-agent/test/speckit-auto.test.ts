@@ -64,6 +64,8 @@ function applyAction(run: SpeckitRun, action: SpeckitAction): SpeckitEndResult |
 			break;
 		case "start":
 			if (run.phase === "converge" && action.phase === "implement") run.convergeRounds++;
+			// An analyze start inside analyze re-checks a user-requested fix: that fix was a remediation round.
+			if (run.phase === "analyze" && action.phase === "analyze") run.remediationRounds++;
 			run.phase = action.phase;
 			break;
 	}
@@ -115,6 +117,7 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 						{ critical: 0, high: 2 },
 						{ critical: 2, high: 1 },
 					] as const),
+					fixed: pick([true, false, undefined]),
 					converge: pick(["complete", "added", "added", "added", "none", undefined] as const),
 				};
 				sequence.push(verdict);
@@ -132,6 +135,14 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 					fail(`automatic action in ${phase} with waits ${verdict.waits}`);
 				}
 				if (action.kind === "answer" && ++answersInPhaseRun > 1) fail("second answer in one phase run");
+				if (
+					phase === "analyze" &&
+					action.kind === "start" &&
+					action.phase === "analyze" &&
+					verdict.fixed !== true
+				) {
+					fail("re-ran analyze without a user-requested fix");
+				}
 				const result = applyAction(run, action);
 				if (run.phase !== phase) answersInPhaseRun = 0;
 				if (count(run, "clarify") > 1) fail("more than one clarify start");
@@ -413,5 +424,34 @@ describe("classifySpeckitTurn", () => {
 		expect(seen).toHaveLength(1);
 		expect(seen[0]).not.toContain(offer);
 		expect(seen[0]).toContain("CRITICAL");
+	});
+
+	it("asks whether the user requested a fix only for a user turn in analyze without a readable report", async () => {
+		const calls: { state: Record<string, unknown>; questions: Record<string, unknown> }[] = [];
+		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
+			judge: async (input: (typeof calls)[number]) => {
+				calls.push(input);
+				const answers = Object.fromEntries(Object.keys(input.questions).map(id => [id, { noul: 0.9 }]));
+				return { answers: { ...answers, waits: { noul: 0.1 } } };
+			},
+		} as unknown as judgment.ChainJudge);
+		const fix = "All three findings are addressed. Updated spec.md and tasks.md.";
+		const request = "Fix the analyze findings.";
+
+		expect((await classifySpeckitTurn("analyze", message(fix), deps, request)).fixed).toBe(true);
+		expect(calls[0].state).toMatchObject({ phase: "analyze", request });
+		expect(Object.keys(calls[0].questions)).toContain("fixed");
+
+		// A readable report, a turn the mode started, or another phase never asks it.
+		for (const [phase, reply, from] of [
+			["analyze", text, request],
+			["analyze", fix, undefined],
+			["tasks", fix, request],
+		] as const) {
+			calls.length = 0;
+			expect((await classifySpeckitTurn(phase, message(reply), deps, from)).fixed).toBeUndefined();
+			expect(Object.keys(calls[0].questions)).not.toContain("fixed");
+			expect(calls[0].state).not.toHaveProperty("request");
+		}
 	});
 });

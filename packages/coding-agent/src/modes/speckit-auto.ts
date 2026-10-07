@@ -61,6 +61,8 @@ export interface SpeckitVerdict {
 	ready?: boolean;
 	/** Analyze only. */
 	analyze?: { critical: number; high: number } | "unreadable";
+	/** Analyze only, judge only: the user asked to fix the analyze findings and the reply reports the fixes. */
+	fixed?: boolean;
 	/** Converge only. */
 	converge?: "complete" | "added" | "none";
 }
@@ -222,7 +224,16 @@ export function decideSpeckitStep(run: SpeckitRun, verdict: SpeckitVerdict): Spe
 			break;
 		case "analyze": {
 			const report = verdict.analyze;
-			if (report === undefined || report === "unreadable") return hold("needs-you", "no readable analyze report");
+			if (report === undefined || report === "unreadable") {
+				// A user-requested fix is a remediation round the user started: check it with a new analyze.
+				if (verdict.fixed !== true) return hold("needs-you", "no readable analyze report");
+				return run.remediationRounds < SPECKIT_REMEDIATION_ROUNDS
+					? start("analyze")
+					: hold(
+							"needs-you",
+							`fixes applied after ${SPECKIT_REMEDIATION_ROUNDS} rounds; run /speckit.analyze to check them`,
+						);
+			}
 			if (report.critical > 0) {
 				return run.remediationRounds < SPECKIT_REMEDIATION_ROUNDS
 					? { kind: "remediate" }
@@ -355,16 +366,20 @@ export type SpeckitJudgeDeps = ClassifyUnexpectedStopDeps;
 
 /**
  * Verdict for a settled phase turn: failure, analyze counts, and converge
- * result from the text; completed, waits, routine, and ready from one judge
- * call, or from the text fallback when the judge cannot answer. Never throws.
+ * result from the text; completed, waits, routine, ready, and fixed from one
+ * judge call, or from the text fallback when the judge cannot answer. `request`
+ * is the user's own text that opened the turn, if the user started it. Never throws.
  */
 export async function classifySpeckitTurn(
 	phase: SpeckitPhase,
 	message: AssistantMessage,
 	deps: SpeckitJudgeDeps,
+	request?: string,
 ): Promise<SpeckitVerdict> {
 	const verdict = readSpeckitTextVerdict(phase, message);
 	if (verdict.failed) return verdict;
+	// Only a user turn in analyze without a report can be a user-requested fix.
+	const askFixed = request !== undefined && verdict.analyze === "unreadable";
 	try {
 		const judge = resolveJudge({
 			settings: deps.settings,
@@ -379,12 +394,13 @@ export async function classifySpeckitTurn(
 		});
 		const questions: Record<string, NoulQuestion> = {};
 		for (const [id, template] of Object.entries(JUDGE_SECTIONS)) {
-			if (id !== "ready" || phase === "clarify") {
+			if ((id !== "ready" || phase === "clarify") && (id !== "fixed" || askFixed)) {
 				questions[id] = { type: "noul", instructions: prompt.render(template, { phase }) };
 			}
 		}
+		const text = askedText(phase, assistantText(message).slice(-TAIL_CHARS));
 		const { answers } = await judge.judge(
-			{ state: { phase, message: askedText(phase, assistantText(message).slice(-TAIL_CHARS)) }, questions },
+			{ state: askFixed ? { phase, request, message: text } : { phase, message: text }, questions },
 			{ signal: deps.signal },
 		);
 		const yes = (id: string): boolean => answers[id].noul >= JUDGE_THRESHOLD;
@@ -398,6 +414,7 @@ export async function classifySpeckitTurn(
 			waits: yes("waits"),
 			routine: yes("routine"),
 			ready: phase === "clarify" ? yes("ready") : undefined,
+			...(askFixed ? { fixed: yes("fixed") } : {}),
 		};
 	} catch (error) {
 		logger.debug("speckit-auto: turn check failed", {

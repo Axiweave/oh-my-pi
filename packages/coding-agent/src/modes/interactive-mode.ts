@@ -1312,6 +1312,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#speckitNextInFlight = false;
 	/** The phase reply, kept while side-traffic turns (advisor notes, IRC, late diagnostics) reply after it. */
 	#speckitPhaseReply: AssistantMessage | undefined;
+	/** The user's own text that opened the turn being checked; the judge reads it to spot a user-requested analyze fix. */
+	#speckitRequest: string | undefined;
 	/** True from `agent_start` until the first `message_start`, which opens the turn. */
 	#speckitAwaitOpener = false;
 	/**
@@ -3345,6 +3347,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#speckitRun = undefined;
 		this.#speckitDecidedKey = undefined;
 		this.#speckitPhaseReply = undefined;
+		this.#speckitRequest = undefined;
 		this.#updateSpeckitAutoStatus();
 		return wasEnabled;
 	}
@@ -3574,16 +3577,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		const timeout = setTimeout(() => abort.abort(), SPECKIT_JUDGE_TIMEOUT_MS);
 		let verdict: SpeckitVerdict;
 		try {
-			verdict = await classifySpeckitTurn(run.phase, message, {
-				settings: this.settings,
-				registry: this.session.modelRegistry,
-				sessionId: this.session.sessionId,
-				model: this.session.model,
-				metadataResolver: provider => this.session.agent.metadataForProvider(provider),
-				onUsage: journalJudgmentUsage(this.sessionManager),
-				telemetry: this.session.agent.telemetry,
-				signal: abort.signal,
-			});
+			verdict = await classifySpeckitTurn(
+				run.phase,
+				message,
+				{
+					settings: this.settings,
+					registry: this.session.modelRegistry,
+					sessionId: this.session.sessionId,
+					model: this.session.model,
+					metadataResolver: provider => this.session.agent.metadataForProvider(provider),
+					onUsage: journalJudgmentUsage(this.sessionManager),
+					telemetry: this.session.agent.telemetry,
+					signal: abort.signal,
+				},
+				this.#speckitRequest,
+			);
 		} finally {
 			clearTimeout(timeout);
 			if (this.#speckitJudgeAbort === abort) this.#speckitJudgeAbort = undefined;
@@ -3691,15 +3699,22 @@ export class InteractiveMode implements InteractiveModeContext {
 		let run = this.#speckitRun;
 		if (run && own?.generation === this.#speckitGeneration && own.text === text) {
 			this.#speckitOwnTurn = undefined;
+			this.#speckitRequest = undefined;
 			// Rounds count when their turn starts, so a dropped start costs none.
-			if (own.phase === "remediation") run.remediationRounds++;
-			else if (own.phase === "implement" && run.phase === "converge") run.convergeRounds++;
+			// An analyze start inside analyze re-checks a user-requested fix: that fix was the round.
+			if (
+				own.phase === "remediation" ||
+				(own.phase === "analyze" && run.phase === "analyze" && text === "/speckit.analyze")
+			) {
+				run.remediationRounds++;
+			} else if (own.phase === "implement" && run.phase === "converge") run.convergeRounds++;
 			// Answer and continue turns keep the phase.
 			if (text === SPECKIT_ANSWER_TEXT) run.autoAnswered = true;
 			else if (text !== renderSpeckitContinue(own.phase)) this.#enterSpeckitPhase(run, own.phase);
 		} else {
 			this.#bumpSpeckitGeneration();
 			const phase = parseSpeckitPhaseCommand(text)?.phase;
+			this.#speckitRequest = phase ? undefined : text;
 			if (phase === "specify" || (phase && !run)) {
 				if (run) this.#finishSpeckitRun(run, "stopped");
 				run = newSpeckitRun(phase, normalizeConvergeRounds(cfgSpeckitAutoConvergeRounds.get(this.settings)));

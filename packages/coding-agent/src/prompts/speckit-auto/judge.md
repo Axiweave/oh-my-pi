@@ -9,3 +9,6 @@ This message ends the /speckit.{{phase}} step of a spec-kit workflow. Answer yes
 
 ## ready
 This message ends the /speckit.{{phase}} step of a spec-kit workflow. Answer yes if the report recommends /speckit.plan or finds no critical ambiguity, and no high-impact item is left unasked.
+
+## fixed
+This message ends a user turn in the /speckit.analyze step of a spec-kit workflow. The state field `request` is the user's text that started the turn. Answer yes only if `request` asks the agent to fix findings from the analyze report, and the message reports that the agent changed the feature documents to fix them, with no open question and no error.

@@ -446,6 +446,29 @@ describe("InteractiveMode speckit-auto mode", () => {
 			await ownTurnRuns(submitted[0]);
 			expect(saved()?.run?.remediationRounds).toBe(1);
 		});
+
+		it("re-runs analyze after a user-requested fix and counts it as a remediation round when that turn starts", async () => {
+			const unreadable: SpeckitVerdict = { ...CLEAN, analyze: "unreadable" };
+			await start();
+			await startRun("/speckit.analyze");
+			turnSettles(unreadable);
+			await tick();
+			// The mode's own phase command is not a user request.
+			expect(classify.mock.calls.at(-1)?.[3]).toBeUndefined();
+
+			await turnStarts("Fix the analyze findings.");
+			turnSettles({ ...unreadable, fixed: true });
+			await tick(2);
+			expect(classify.mock.calls.at(-1)?.[3]).toBe("Fix the analyze findings.");
+			expect(texts()).toEqual(["/speckit.analyze"]);
+			expect(saved()?.run?.remediationRounds).toBe(0);
+
+			await ownTurnRuns(submitted[0]);
+			expect(saved()?.run?.remediationRounds).toBe(1);
+			turnSettles(unreadable);
+			await tick();
+			expect(classify.mock.calls.at(-1)?.[3]).toBeUndefined();
+		});
 	});
 
 	describe("pause, resume, next, and session state", () => {
