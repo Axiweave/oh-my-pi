@@ -644,8 +644,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => runtime.ctx.getSpeckitAutoDescription(),
 		handleTui: async (command, runtime) => {
-			const prompt = await runtime.ctx.handleSpeckitAutoCommand(command.args);
+			// Before the await: `next` waits for the abort, and text typed meanwhile is a newer draft.
 			clearSubmittedText(runtime);
+			const prompt = await runtime.ctx.handleSpeckitAutoCommand(command.args);
 			// The dispatcher submits `/speckit.specify <description>` through the normal submit flow.
 			if (prompt) return { prompt };
 		},

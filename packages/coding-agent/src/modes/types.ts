@@ -625,6 +625,8 @@ export interface InteractiveModeContext {
 	toggleSpeckitAutoMode(): void;
 	handleSpeckitAutoCommand(args: string): Promise<string | undefined>;
 	pauseSpeckitAuto(): void;
+	/** Brings back this branch's saved speckit-auto state, the run paused; for a session switch that did not happen. */
+	restoreSpeckitAuto(): void;
 	getSpeckitAutoDescription(): string;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
 	openPlanReview(): Promise<void>;

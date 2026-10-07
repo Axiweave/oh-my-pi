@@ -269,28 +269,71 @@ const FAILURES: Partial<Record<StopReason, string>> = {
 	length: "the reply hit the output limit",
 	aborted: "the turn was aborted",
 };
+/** Table rows without their label cell: a coverage label such as "failure handling" is not an error. */
+const TABLE_LABEL = /^[ \t]*\|[^|\n]*/gm;
+/** A zero count ("0 failed", "0 tests failed", "zero `Error:` lines", "no failures") is not a failure; "and"/"but" end the count. */
+const ZERO_COUNT =
+	/\b(?:0|[Zz]ero|[Nn]o)\b[ \t`*_]*(?:(?!(?:and|but|or|then)\b)[A-Za-z-]+[ \t`*_]+){0,2}?(?:ERROR\b|Error:|[Ff]ail(?:ed|ures?)\b)/g;
 const ERROR_CUE = /\bERROR\b|\bError:|\b[Ff]ail(?:ed|ure)\b|\b[Bb]locked\b/;
-const QUESTION_CUE =
-	/\?[*_"'`)\]]*[ \t]*$|\*\*Question:\*\*|Your choice|You can reply|Format: Short answer|Wait for user response|\(yes\/no\)/m;
-const ANALYZE_OFFER = /\b(?:suggest|propose)\b[^\n]*\bremediation\b/i;
+const QUESTION_END = /\?[*_"'`)\]]*[ \t]*$/;
+const QUESTION_CUE = new RegExp(
+	`${QUESTION_END.source}|\\*\\*Question:\\*\\*|Your choice|You can reply|Format: Short answer|Wait for user response|\\(yes/no\\)`,
+	"m",
+);
+/** The analyze offer to suggest remediation edits, or to draft them on a reply; never a sentence with a question mark in the reply form. */
+const ANALYZE_OFFER =
+	/\b(?:suggest|propose)\b[^\n]*\bremediation\b|\breply\b(?![^\n]*\?)[^\n]*\bremediate\b[^\n]*\b(?:will|can)\b[^\n]*\b(?:draft|prepare|propose|apply)\b/i;
 const CHECKLIST_GATE = "Do you want to proceed with implementation anyway? (yes/no)";
+const PHASE_COMMAND = new RegExp(`/speckit\\.(${SPECKIT_PHASE_COMMANDS.join("|")})\\b`, "g");
+/** A sentence ends at `.`, `!`, or `?` before whitespace, or at the line end; `tasks.md` and `/speckit.plan` do not end one. */
+const SENTENCE = /\S[^\n]*?(?:[.!?](?=\s|$)|$)/gm;
+/** The lead of a handoff sentence, as in "Run /speckit.X next.", "Next: /speckit.X", or "Ready for /speckit.X". "Run /speckit.plan first" is a prerequisite. */
+const HANDOFF_LEAD =
+	/^[\s>*_`-]*(?:(?:then|now)[ \t]+)?(?:run\b|next(?:[ \t]+(?:step|command))?[*_]*:|(?:suggested|recommended)[ \t]+next[ \t]+(?:step|command)[*_]*:|ready[ \t]+for\b|proceed[ \t]+(?:to|with)\b)(?![^\n]*\b(?:first|before)\b)/i;
+const namesOtherPhase = (phase: SpeckitPhase, text: string): boolean =>
+	Array.from(text.matchAll(PHASE_COMMAND)).some(match => match[1] !== phase);
+/** A closing statement that offers to start another phase, as in "Run `/speckit.implement`, or say `go`". */
+const isHandoff = (phase: SpeckitPhase, sentence: string): boolean =>
+	namesOtherPhase(phase, sentence) && HANDOFF_LEAD.test(sentence) && !QUESTION_END.test(sentence);
+/**
+ * The reply offers another phase: a handoff sentence, or a question that names another phase command. The mode
+ * runs the next phase itself; a "proceed" answer would run that phase inside this turn and skip the pipeline (FR-022).
+ */
+const offersOtherPhase = (phase: SpeckitPhase, tail: string): boolean =>
+	(tail.match(SENTENCE) ?? []).some(
+		sentence => namesOtherPhase(phase, sentence) && (HANDOFF_LEAD.test(sentence) || QUESTION_END.test(sentence)),
+	);
 const PAST_TENSE = "(?:wrote|written|created|generated|complete|completed)";
 /** A line that reports `file` as written, in either word order. */
-const reportsWritten = (file: string): RegExp =>
-	new RegExp(`^(?=[^\\n]*\\b${file}\\b)(?=[^\\n]*\\b${PAST_TENSE}\\b)`, "im");
+const reportsWritten = (file: string): string => `^(?=[^\\n]*\\b${file}\\b)(?=[^\\n]*\\b${PAST_TENSE}\\b)`;
+/** A recommendation to run `phase` next, as in "Run `/speckit.tasks` next." or "Next: /speckit.analyze". */
+const recommendsNext = (phase: SpeckitPhase): string =>
+	`\\bnext\\b[^\\n]*/speckit\\.${phase}\\b|/speckit\\.${phase}\\b[^\\n]*\\bnext\\b`;
 /** Phase report cues; every pattern of the phase must match. */
 const REPORT_CUES: Partial<Record<SpeckitPhase, RegExp[]>> = {
 	specify: [/\bspec\.md\b/, /\/speckit\.(?:clarify|plan)\b/],
-	plan: [reportsWritten("plan\\.md")],
-	tasks: [reportsWritten("tasks\\.md")],
-	implement: [/\ball (?:\d+ )?tasks\b[^\n]*\b(?:complete|completed|done)\b/i],
+	plan: [/\bplan\.md\b/, new RegExp(`${reportsWritten("plan\\.md")}|${recommendsNext("tasks")}`, "im")],
+	tasks: [
+		/\btasks\.md\b/,
+		new RegExp(
+			`${reportsWritten("tasks\\.md")}|${recommendsNext("analyze")}|\\b(?:total|contains)\\b[^\\n]*?\\b\\d+\\**[ \\t]+tasks\\b`,
+			"im",
+		),
+	],
+	implement: [/\ball (?:\d+ )?(?:\w+ )?tasks\b[^\n]*\b(?:complete|completed|done)\b/i],
 	remediation: [/^[ \t]*Remediation complete\.[ \t]*$/m],
 };
 const DEFERRED_ROW = /^[ \t]*\|.*\|[ \t]*\**Deferred\**[ \t]*\|.*$/gm;
+/** Clarify's Deferred status covers "better suited for planning" (clarify.md 278) and unresolved high-impact items (233). */
+const DEFERRED_TO_PLAN = /\b(?:for|to|during|in|at)[ \t]+(?:the[ \t]+)?plan(?:ning)?\b/i;
+const DEFERRED_BLOCKS = /\bhigh[- ]impact\b|\bunresolved\b|\bmust\b|\bbefore\b/i;
+/** Any readiness evidence: a final message with it is read alone, so an older blocking row cannot override it. */
+const READY_EVIDENCE = /No critical ambiguities detected|\/speckit\.(?:plan|clarify)\b|^[ \t]*\|.*\|[ \t]*\**Deferred\**[ \t]*\|/im;
 const APPENDED_COUNT = /\bappended\s+\d+\b[^\n]*\btasks?\b|\b\d+\s+(?:\w+\s+)?tasks?\b[^\n]*\bappended\b/i;
+const ANALYZE_HEADING = /^#{1,6}[ \t]*Specification Analysis Report\b/m;
 
 function readAnalyzeReport(text: string): SpeckitVerdict["analyze"] {
-	if (!/^#{1,6}[ \t]*Specification Analysis Report\b/m.test(text)) return "unreadable";
+	if (!ANALYZE_HEADING.test(text)) return "unreadable";
 	let table = false;
 	let critical = 0;
 	let high = 0;
@@ -316,6 +359,14 @@ function readAnalyzeReport(text: string): SpeckitVerdict["analyze"] {
 	return { critical: Math.max(critical, Number(metric ?? 0)), high };
 }
 
+/** The final message's analyze report, else the last report of the turn's earlier messages. */
+function readTurnAnalyzeReport(text: string, earlier: string): SpeckitVerdict["analyze"] {
+	const report = readAnalyzeReport(text);
+	if (report !== "unreadable") return report;
+	const last = Array.from(earlier.matchAll(new RegExp(ANALYZE_HEADING.source, "gm"))).at(-1)?.index;
+	return last === undefined ? "unreadable" : readAnalyzeReport(earlier.slice(last));
+}
+
 function readConverge(tail: string): SpeckitVerdict["converge"] {
 	const complete = /✅[\s*_]*Converged/.test(tail);
 	const added = /\btasks_appended\b/.test(tail) || (APPENDED_COUNT.test(tail) && /Phase \d+: Convergence/.test(tail));
@@ -325,7 +376,7 @@ function readConverge(tail: string): SpeckitVerdict["converge"] {
 
 function readReady(tail: string): boolean | undefined {
 	for (const row of tail.match(DEFERRED_ROW) ?? []) {
-		if (!/\bplan(?:ning)?\b/i.test(row)) return undefined;
+		if (!DEFERRED_TO_PLAN.test(row) || DEFERRED_BLOCKS.test(row)) return undefined;
 	}
 	if (/No critical ambiguities detected/i.test(tail)) return true;
 	return /\/speckit\.plan\b/.test(tail) && !/\/speckit\.clarify\b/.test(tail) ? true : undefined;
@@ -352,35 +403,48 @@ export function speckitEarlierText(messages: readonly AgentMessage[], reply: Ass
 	return parts.reverse().join("\n");
 }
 
-/** The reply tail without the analyze remediation offer, which is never a question (FR-022). */
+/**
+ * The reply tail without closing offers, which are never questions (FR-022): for analyze, the remediation offer
+ * sentence, and after clarify, a handoff sentence that offers another phase. The rest of the paragraph stays.
+ * Specify and clarify keep the handoff: their checks read the recommended next command.
+ */
 const askedText = (phase: SpeckitPhase, tail: string): string =>
-	phase === "analyze"
+	phase === "specify" || phase === "clarify"
 		? tail
-				.split(/\n[ \t]*\n/)
-				.filter(paragraph => !ANALYZE_OFFER.test(paragraph))
-				.join("\n\n")
-		: tail;
+		: tail.replace(SENTENCE, sentence =>
+				(phase === "analyze" && ANALYZE_OFFER.test(sentence)) || isHandoff(phase, sentence) ? "" : sentence,
+			);
 
 /**
  * Deterministic parts of the verdict plus the text-only fallback for the judged parts (research R6).
- * `earlier` is the text of the turn's earlier assistant messages; only the converge result reads it.
+ * `earlier` is the text of the turn's earlier assistant messages; the converge result and the analyze report read it.
  */
 export function readSpeckitTextVerdict(phase: SpeckitPhase, message: AssistantMessage, earlier = ""): SpeckitVerdict {
 	const text = assistantText(message);
 	const tail = text.slice(-TAIL_CHARS);
-	const error = ERROR_CUE.test(tail);
-	const question = QUESTION_CUE.test(askedText(phase, tail));
+	const error = ERROR_CUE.test(tail.replace(TABLE_LABEL, "").replace(ZERO_COUNT, ""));
+	const asked = askedText(phase, tail);
+	const question = QUESTION_CUE.test(asked);
 	const reported = REPORT_CUES[phase]?.every(cue => cue.test(tail)) ?? false;
+	// Clarify can print its readiness in an earlier message of the turn and end with a short summary.
+	const ready = phase === "clarify" ? readReady(READY_EVIDENCE.test(tail) ? tail : `${earlier}\n${tail}`) : undefined;
+	// Specify and clarify ask the user: with no question, only their report proves they do not wait (row 6).
+	const settled = phase === "specify" ? reported : phase === "clarify" ? ready === true : true;
 	return {
 		failed:
 			message.stopReason === "error" && message.errorMessage
 				? `${FAILURES.error}: ${message.errorMessage}`
 				: FAILURES[message.stopReason],
 		completed: error ? false : !question && reported ? true : undefined,
-		waits: question,
-		routine: !error && tail.includes(CHECKLIST_GATE),
-		ready: phase === "clarify" ? readReady(tail) : undefined,
-		analyze: phase === "analyze" ? readAnalyzeReport(text) : undefined,
+		waits: question || (settled ? false : undefined),
+		// The gate must be the only question; the full tail, so a removed closing offer still forbids the answer.
+		routine:
+			!error &&
+			asked.includes(CHECKLIST_GATE) &&
+			!QUESTION_CUE.test(asked.replace(CHECKLIST_GATE, "")) &&
+			!offersOtherPhase(phase, tail),
+		ready,
+		analyze: phase === "analyze" ? readTurnAnalyzeReport(text, earlier) : undefined,
 		converge: phase === "converge" ? readConverge(`${earlier}\n${tail}`) : undefined,
 	};
 }
@@ -423,7 +487,8 @@ export async function classifySpeckitTurn(
 				questions[id] = { type: "noul", instructions: prompt.render(template, { phase }) };
 			}
 		}
-		const text = askedText(phase, assistantText(message).slice(-TAIL_CHARS));
+		const tail = assistantText(message).slice(-TAIL_CHARS);
+		const text = askedText(phase, tail);
 		const { answers } = await judge.judge(
 			{ state: askFixed ? { phase, request, message: text } : { phase, message: text }, questions },
 			{ signal: deps.signal },
@@ -433,11 +498,17 @@ export async function classifySpeckitTurn(
 		const outcome =
 			(verdict.analyze !== undefined && verdict.analyze !== "unreadable") ||
 			(verdict.converge !== undefined && verdict.converge !== "none");
+		const completed = yes("completed") || (outcome && verdict.completed !== false);
 		return {
 			...verdict,
-			completed: yes("completed") || (outcome && verdict.completed !== false),
+			// A user turn can be a side request (a commit, a question): only the phase's own report proves the
+			// phase finished, so the judge alone cannot start the next phase.
+			completed:
+				completed && request !== undefined && REPORT_CUES[phase] && verdict.completed !== true ? undefined : completed,
 			waits: yes("waits"),
-			routine: yes("routine"),
+			// Never routine next to the text error cue (row 3 precedes row 5). The full tail: a removed closing
+			// offer still forbids the "proceed" answer.
+			routine: yes("routine") && verdict.completed !== false && !offersOtherPhase(phase, tail),
 			ready: phase === "clarify" ? yes("ready") : undefined,
 			...(askFixed ? { fixed: yes("fixed") } : {}),
 		};

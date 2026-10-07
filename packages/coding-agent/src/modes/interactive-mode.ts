@@ -1236,6 +1236,26 @@ const SPECKIT_JUDGE_TIMEOUT_MS = 15_000;
 const SPECKIT_COMMAND_SUBMITS = 1;
 /** Custom openers of turns that finish the phase's own work (US2 AC8); other omp custom openers are side traffic. */
 const SPECKIT_PHASE_WAKE_TYPES = new Set([ASYNC_RESULT_MESSAGE_TYPE, LAUNCH_COMPLETION_MESSAGE_TYPE]);
+/**
+ * Custom messages that omp puts before a run's opener (eager todo/task preludes, the approved-plan reference, for
+ * example on a compaction continuation); the message after them opens the turn.
+ */
+const SPECKIT_PRELUDE_TYPES: Record<string, true> = {
+	"eager-todo-prelude": true,
+	"eager-task-prelude": true,
+	"plan-mode-reference": true,
+};
+
+const isSpeckitPrelude = (message: AgentMessage): boolean =>
+	message.role === "custom" && SPECKIT_PRELUDE_TYPES[message.customType] === true;
+
+/** An omp turn opener that is not part of the phase (advisor notes, IRC, late diagnostics): the phase reply stays. */
+const isSpeckitSideTraffic = (message: AgentMessage): boolean =>
+	message.role === "custom" && !isUserTurnInitiator(message) && !SPECKIT_PHASE_WAKE_TYPES.has(message.customType);
+
+/** The text that opened a user turn; a file command keeps its raw command text. */
+const speckitTurnText = (message: Extract<AgentMessage, { role: "user" | "developer" | "custom" }>): string =>
+	((message.role === "user" && message.promptTemplateInput) || customMessageContentText(message.content)).trim();
 
 export class InteractiveMode implements InteractiveModeContext {
 	#ownsStartedUi: boolean;
@@ -3355,14 +3375,42 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** Restores the latest saved state on this branch with the run paused; never checks or submits. */
-	#restoreSpeckitAuto(): void {
+	restoreSpeckitAuto(): void {
 		const entry = this.sessionManager
 			.getBranch()
 			.findLast(candidate => candidate.type === "custom" && candidate.customType === SPECKIT_AUTO_ENTRY);
 		const state = parseSpeckitAutoState(entry?.type === "custom" ? entry.data : undefined);
 		if (!state?.enabled) return;
 		this.speckitAutoEnabled = true;
-		this.#speckitRun = state.run && { ...state.run, paused: true };
+		const run = state.run && { ...state.run, paused: true };
+		this.#speckitRun = run;
+		if (run) {
+			// Replay the turn starts as the live events read them, so resume checks the same reply with the same request.
+			let last: AssistantMessage | undefined;
+			let opens = false;
+			for (const message of this.session.messages) {
+				if (isSpeckitPrelude(message)) continue;
+				// Only a message after a finished reply opens a run; tool results and mid-run messages stay inside it.
+				const opener = opens && (message.role === "user" || message.role === "developer" || message.role === "custom");
+				opens = message.role === "assistant" && message.stopReason !== "toolUse";
+				if (isSpeckitUserTurn(message)) {
+					this.#speckitPhaseReply = undefined;
+					const text = speckitTurnText(message);
+					// The mode's own texts carry no request; its continue keeps the request of the turn it resumes.
+					if (text !== renderSpeckitContinue(run.phase)) {
+						const own =
+							text === SPECKIT_ANSWER_TEXT ||
+							text === SPECKIT_REMEDIATION_TEXT ||
+							parseSpeckitPhaseCommand(text)?.phase !== undefined;
+						this.#speckitRequest = own ? undefined : text;
+					}
+				} else if (opener) {
+					this.#speckitPhaseReply = isSpeckitSideTraffic(message) ? (this.#speckitPhaseReply ?? last) : undefined;
+				} else if (message.role === "assistant") {
+					last = message;
+				}
+			}
+		}
 		this.#updateSpeckitAutoStatus();
 	}
 
@@ -3558,8 +3606,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#armSpeckitTick();
 			return;
 		}
-		// A settled session means the own submission either started (and matched) or failed before its turn.
-		this.#speckitOwnTurn = undefined;
+		const failed = this.#speckitOwnTurn;
+		if (failed) {
+			// A settled session with the own-turn marker still set: the submission failed before its turn started.
+			this.#speckitOwnTurn = undefined;
+			const label = failed.text.startsWith("/") ? failed.text : "the automatic message";
+			this.#applySpeckitAction(run, { kind: "hold", hold: { kind: "needs-you", reason: `${label} failed to start` } });
+			return;
+		}
 		if (this.#speckitParked) {
 			// A turn that omp started after the decision voids the parked start: decide on its reply.
 			if (!undecided) {
@@ -3571,13 +3625,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!undecided) return;
 		this.#speckitDecidedKey = message.timestamp;
 		run.turnOpen = false;
-		const generation = this.#speckitGeneration;
 		const abort = new AbortController();
 		this.#speckitJudgeAbort = abort;
 		this.#saveSpeckitAutoState();
 		this.#updateSpeckitAutoStatus();
 		const timeout = setTimeout(() => abort.abort(), SPECKIT_JUDGE_TIMEOUT_MS);
 		let verdict: SpeckitVerdict;
+		let current: boolean;
 		try {
 			verdict = await classifySpeckitTurn(
 				run.phase,
@@ -3596,9 +3650,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 		} finally {
 			clearTimeout(timeout);
-			if (this.#speckitJudgeAbort === abort) this.#speckitJudgeAbort = undefined;
+			// A user turn, a pause, or a phase wake took the check away; its own timeout keeps it.
+			current = this.#speckitJudgeAbort === abort;
+			if (current) this.#speckitJudgeAbort = undefined;
 		}
-		if (generation !== this.#speckitGeneration || this.#speckitRun !== run) return;
+		if (!current || this.#speckitRun !== run) return;
 		this.#applySpeckitAction(run, decideSpeckitStep(run, verdict));
 	}
 
@@ -3671,24 +3727,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (event.type !== "message_start") return;
 		const message = event.message;
-		if (this.#speckitAwaitOpener) {
+		// Preludes come before the opener of the run, so the message after them decides.
+		if (this.#speckitAwaitOpener && !isSpeckitPrelude(message)) {
 			this.#speckitAwaitOpener = false;
 			// A side-traffic turn keeps the phase reply as the one to check; any other opener ends that.
-			if (
-				message.role === "custom" &&
-				!isUserTurnInitiator(message) &&
-				!SPECKIT_PHASE_WAKE_TYPES.has(message.customType)
-			) {
+			if (isSpeckitSideTraffic(message)) {
 				this.#speckitPhaseReply ??= this.session.getLastAssistantMessage();
 			} else {
 				this.#speckitPhaseReply = undefined;
+				// The phase goes on (a wake, a continuation): a check of its earlier reply is stale; its new reply decides.
+				if (this.#speckitJudgeAbort) {
+					this.#speckitJudgeAbort.abort();
+					this.#speckitJudgeAbort = undefined;
+					this.#speckitDecidedKey = undefined;
+					this.#updateSpeckitAutoStatus();
+				}
 			}
 		}
 		if (!isSpeckitUserTurn(message)) return;
-		const text = (
-			(message.role === "user" && message.promptTemplateInput) ||
-			customMessageContentText(message.content)
-		).trim();
+		const text = speckitTurnText(message);
 		// Only the reply of this turn is checked, never the one before it.
 		this.#speckitPhaseReply = undefined;
 		this.#speckitDecidedKey = this.session.getLastAssistantMessage()?.timestamp;
@@ -3696,18 +3753,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		let run = this.#speckitRun;
 		if (run && own?.generation === this.#speckitGeneration && own.text === text) {
 			this.#speckitOwnTurn = undefined;
-			this.#speckitRequest = undefined;
-			// Rounds count when their turn starts, so a dropped start costs none.
-			// An analyze start inside analyze re-checks a user-requested fix: that fix was the round.
-			if (
-				own.phase === "remediation" ||
-				(own.phase === "analyze" && run.phase === "analyze" && text === "/speckit.analyze")
-			) {
-				run.remediationRounds++;
-			} else if (own.phase === "implement" && run.phase === "converge") run.convergeRounds++;
-			// Answer and continue turns keep the phase.
+			// Answer and continue turns keep the phase; a continue also keeps the request of the turn it resumes.
+			const resumes = text === renderSpeckitContinue(own.phase);
+			if (!resumes) this.#speckitRequest = undefined;
 			if (text === SPECKIT_ANSWER_TEXT) run.autoAnswered = true;
-			else if (text !== renderSpeckitContinue(own.phase)) this.#enterSpeckitPhase(run, own.phase);
+			else if (!resumes) {
+				// Rounds count when their phase turn starts, so a dropped start costs none.
+				// An analyze start inside analyze re-checks a user-requested fix: that fix was the round.
+				if (own.phase === "remediation" || (own.phase === "analyze" && run.phase === "analyze")) {
+					run.remediationRounds++;
+				} else if (own.phase === "implement" && run.phase === "converge") run.convergeRounds++;
+				this.#enterSpeckitPhase(run, own.phase);
+			}
 		} else {
 			this.#bumpSpeckitGeneration();
 			const phase = parseSpeckitPhaseCommand(text)?.phase;
@@ -5477,7 +5534,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			vibeScopeAlreadySuspended,
 		});
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
-		this.#restoreSpeckitAuto();
+		this.restoreSpeckitAuto();
 		const goalEnabled = cfgGoalEnabled.get(this.session.settings);
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
 			this.session.goalRuntime.clearAccounting();
@@ -8607,7 +8664,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (keep) {
 				// A cancelled or failed switch leaves the old session: bring its saved state back.
 				if (this.sessionManager.getSessionId() === sessionId) {
-					this.#restoreSpeckitAuto();
+					this.restoreSpeckitAuto();
 				} else {
 					this.speckitAutoEnabled = true;
 					this.#saveSpeckitAutoState();

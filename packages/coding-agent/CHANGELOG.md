@@ -51,6 +51,26 @@
 
 ### Fixed
 
+- Fixed speckit-auto answering "Yes, proceed with your recommended option." to a tasks reply that ended with "Run `/speckit.implement`, or say `go`". The agent then ran implement inside the tasks turn and skipped analyze. The mode now removes only that closing handoff sentence before it checks the reply, so it starts the next phase itself. The rest of the paragraph stays, so a completion report, scope request, or error next to the offer still counts. The mode never auto-answers a message that offers another phase command. A plain mention of another phase does not count as an offer. The judge now reads a choice between options as a scope decision that holds the run.
+- Fixed speckit-auto holding with "no readable analyze report" when analyze printed its report in an earlier message and ended with a short summary. The mode now reads the report from the earlier messages of the turn.
+- Fixed the speckit-auto text check (used when the turn check model fails) in these cases:
+  - It no longer reads "0 failed", "zero `Error:` lines", or a "failure handling" table label as an error.
+  - It now finds the clarify readiness when it is in an earlier message of the turn.
+  - It now finds real completion reports such as "All 26 implementation tasks are marked complete" and "Run `/speckit.tasks` next".
+  - It no longer auto-answers the implement checklist gate when a second question is open.
+  - It no longer starts plan when clarify defers an item with "Must resolve before planning".
+  - In specify and clarify, it now holds when it cannot tell if the turn waits.
+  - The analyze remediation offer is no longer removed together with a real question in the same paragraph. An offer such as "Reply `remediate` and I will draft the edits" now also counts as the offer, so the run continues to implement.
+  - A reply that reports an error no longer gets an auto-answer when the judge calls its question routine.
+- Fixed speckit-auto judging a side request after a hold (for example a smart-commit turn) as the phase result. On a turn you start with free text, the mode now starts the next phase only when the reply has the phase's own report, such as "All tasks completed." Otherwise it holds.
+- Fixed speckit-auto run state in these cases:
+  - `/speckit-auto next` no longer deletes a draft typed while it stops the turn.
+  - A background-job wake during the turn check no longer lets the old result end or hold the run. The mode checks the wake reply instead.
+  - A paused remediation turn that resumes no longer counts a second remediation round.
+  - A user fix request in analyze is kept through Esc, resume, and reload.
+  - After compaction or a reload, the mode checks the phase reply, not a prelude or an advisor reply.
+  - A cancelled or failed session switch restores the run, paused.
+  - When the automatic phase start fails (for example, with no API key), the run holds with a reason. Before this fix, it showed "running" with nothing pending.
 - Fixed speckit-auto holding after a converge turn that reported its result. A reply that starts with `✅ **Converged` held with "converge reported no result", because the check did not allow markdown emphasis between the mark and the word. Now the run ends as complete, and the mode waits for the next `/speckit.specify`. A turn that reported `tasks_appended` in an earlier message held with "the phase reported an error or stopped early", because its closing summary did not name the outcome. The converge result now reads every assistant message of the turn, so the mode starts `/speckit.implement`.
 - Fixed a file slash command such as `/speckit.plan` (typed or sent by speckit-auto) showing a second, plain user row above its collapsed command card. The raw row painted at submit could move into terminal scrollback before the expanded message arrived, and a row in scrollback cannot be removed. The raw row now stays live until the expanded message replaces it.
 - Fixed the compact TODO row ending one cell left of the working row. Both rows now end at the right edge of the terminal.

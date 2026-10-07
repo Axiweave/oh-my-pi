@@ -297,6 +297,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		syncRetryHintRow: vi.fn(),
 		clearTransientSessionUi: vi.fn(),
 		prepareSessionSwitch: vi.fn(async () => {}),
+		restoreSpeckitAuto: vi.fn(),
 		clearOptimisticUserMessage: vi.fn(),
 		replaceOptimisticUserMessage: vi.fn(),
 		reconcileOptimisticSkillMessage: vi.fn(),

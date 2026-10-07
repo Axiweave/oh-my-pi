@@ -101,6 +101,12 @@ export class ExtensionUiController {
 	#toolUIContext: ExtensionUIContext | undefined;
 	constructor(private ctx: InteractiveModeContext) {}
 
+	/** A session switch that throws leaves the old session: bring its saved speckit-auto run back. */
+	#restoreOnThrow = (err: unknown): never => {
+		this.ctx.restoreSpeckitAuto();
+		throw err;
+	};
+
 	#editDialogExternally = async (text: string): Promise<string | null> => {
 		const origin = takeEditorOrigin() ?? "";
 		return (await openInEditor(this.ctx.ui, text, { origin })) ?? null;
@@ -240,8 +246,11 @@ export class ExtensionUiController {
 				// Create new session
 				this.clearExtensionTerminalInputListeners();
 				this.clearHookWidgets();
-				const success = await this.ctx.session.newSession({ parentSession: options?.parentSession });
+				const success = await this.ctx.session
+					.newSession({ parentSession: options?.parentSession })
+					.catch(this.#restoreOnThrow);
 				if (!success) {
+					this.ctx.restoreSpeckitAuto();
 					return { cancelled: true };
 				}
 				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
@@ -268,8 +277,9 @@ export class ExtensionUiController {
 			},
 			branch: async entryId => {
 				await this.ctx.prepareSessionSwitch();
-				const result = await this.ctx.session.branch(entryId);
+				const result = await this.ctx.session.branch(entryId).catch(this.#restoreOnThrow);
 				if (result.cancelled) {
+					this.ctx.restoreSpeckitAuto();
 					return { cancelled: true };
 				}
 
@@ -302,12 +312,15 @@ export class ExtensionUiController {
 				await this.ctx.prepareSessionSwitch();
 				this.clearHookWidgets();
 				let modelFallbackWarning: string | undefined;
-				const result = await this.ctx.session.switchSession(sessionPath, {
-					onModelFallback: warning => {
-						modelFallbackWarning = warning;
-					},
-				});
+				const result = await this.ctx.session
+					.switchSession(sessionPath, {
+						onModelFallback: warning => {
+							modelFallbackWarning = warning;
+						},
+					})
+					.catch(this.#restoreOnThrow);
 				if (!result) {
+					this.ctx.restoreSpeckitAuto();
 					return { cancelled: true };
 				}
 				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
@@ -468,8 +481,11 @@ export class ExtensionUiController {
 				// Create new session
 				this.clearExtensionTerminalInputListeners();
 				this.clearHookWidgets();
-				const success = await this.ctx.session.newSession({ parentSession: options?.parentSession });
+				const success = await this.ctx.session
+					.newSession({ parentSession: options?.parentSession })
+					.catch(this.#restoreOnThrow);
 				if (!success) {
+					this.ctx.restoreSpeckitAuto();
 					return { cancelled: true };
 				}
 
@@ -493,8 +509,9 @@ export class ExtensionUiController {
 			},
 			branch: async entryId => {
 				await this.ctx.prepareSessionSwitch();
-				const result = await this.ctx.session.branch(entryId);
+				const result = await this.ctx.session.branch(entryId).catch(this.#restoreOnThrow);
 				if (result.cancelled) {
+					this.ctx.restoreSpeckitAuto();
 					return { cancelled: true };
 				}
 
@@ -527,12 +544,15 @@ export class ExtensionUiController {
 				await this.ctx.prepareSessionSwitch();
 				this.clearHookWidgets();
 				let modelFallbackWarning: string | undefined;
-				const result = await this.ctx.session.switchSession(sessionPath, {
-					onModelFallback: warning => {
-						modelFallbackWarning = warning;
-					},
-				});
+				const result = await this.ctx.session
+					.switchSession(sessionPath, {
+						onModelFallback: warning => {
+							modelFallbackWarning = warning;
+						},
+					})
+					.catch(this.#restoreOnThrow);
 				if (!result) {
+					this.ctx.restoreSpeckitAuto();
 					return { cancelled: true };
 				}
 				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });

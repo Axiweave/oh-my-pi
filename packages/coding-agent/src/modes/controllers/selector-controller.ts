@@ -241,6 +241,12 @@ export class SelectorController {
 	#settingsMenu: SettingsMenu | undefined;
 
 	constructor(private ctx: InteractiveModeContext) {}
+
+	/** A session switch that throws leaves the old session: bring its saved speckit-auto run back. */
+	#restoreOnThrow = (err: unknown): never => {
+		this.ctx.restoreSpeckitAuto();
+		throw err;
+	};
 	/**
 	 * Mount a primary fullscreen menu through the one polished modal path shared
 	 * by Settings, Model Hub, and Agent Hub.
@@ -1878,8 +1884,9 @@ export class SelectorController {
 		}
 
 		await this.ctx.prepareSessionSwitch();
-		const detached = await this.ctx.session.newSession();
+		const detached = await this.ctx.session.newSession().catch(this.#restoreOnThrow);
 		if (!detached) {
+			this.ctx.restoreSpeckitAuto();
 			return false;
 		}
 		this.ctx.resetObserverRegistry();
@@ -1914,8 +1921,8 @@ export class SelectorController {
 		// AgentSession owns the transaction. It restores the complete source state
 		// if applying the target project's cwd fails, including in-memory sessions.
 		let modelFallbackWarning: string | undefined;
-		if (
-			(await this.ctx.session.switchSession(sessionPath, {
+		const switched = await this.ctx.session
+			.switchSession(sessionPath, {
 				onCwdChange: async (newCwd, sourceCwd) => {
 					if (normalizePathForComparison(newCwd) === normalizePathForComparison(sourceCwd)) return true;
 					return this.ctx.applyCwdChange(newCwd);
@@ -1923,8 +1930,10 @@ export class SelectorController {
 				onModelFallback: warning => {
 					modelFallbackWarning = warning;
 				},
-			})) === false
-		) {
+			})
+			.catch(this.#restoreOnThrow);
+		if (!switched) {
+			this.ctx.restoreSpeckitAuto();
 			return false;
 		}
 		this.ctx.clearTransientSessionUi();

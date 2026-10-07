@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent, UserMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, DeveloperMessage, ImageContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { cfgCompletionNotify, cfgErrorNotify } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import * as speckitAuto from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
@@ -10,6 +11,7 @@ import type { SpeckitVerdict } from "@oh-my-pi/pi-coding-agent/modes/speckit-aut
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/async-job-delivery";
+import { LAUNCH_COMPLETION_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/launch-completion";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	type CustomMessage,
@@ -43,6 +45,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 	let reply: AssistantMessage | undefined;
 	let clock: number;
 	let submitted: SubmittedUserInput[];
+	let status: Mock<InteractiveMode["statusLine"]["setSpeckitAutoStatus"]>;
 
 	beforeAll(async () => {
 		await initTheme();
@@ -98,6 +101,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
 		vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
 		vi.spyOn(session, "getLastAssistantMessage").mockImplementation(() => reply);
+		status = vi.spyOn(mode.statusLine, "setSpeckitAutoStatus");
 		vi.useFakeTimers();
 	}
 
@@ -151,6 +155,26 @@ describe("InteractiveMode speckit-auto mode", () => {
 			.findLast(candidate => candidate.type === "custom" && candidate.customType === speckitAuto.SPECKIT_AUTO_ENTRY);
 		return speckitAuto.parseSpeckitAutoState(entry?.type === "custom" ? entry.data : undefined);
 	}
+
+	/** The state the status segment shows. */
+	const statusState = (): string | undefined => status.mock.calls.at(-1)?.[0]?.state;
+
+	/** Writes `messages` to the session file, then reloads that session as `/resume` does. */
+	async function reload(...messages: Parameters<SessionManager["appendMessage"]>[0][]): Promise<void> {
+		for (const message of messages) session.sessionManager.appendMessage(message);
+		await session.sessionManager.flush();
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const file = session.sessionFile;
+		if (!file) throw new Error("Expected a session file");
+		await session.switchSession(file);
+	}
+
+	const userText = (text: string): UserMessage => ({
+		role: "user",
+		content: [{ type: "text", text }],
+		timestamp: ++clock,
+		...(text.startsWith("/") ? { promptTemplateInput: text } : {}),
+	});
 
 	function setStreaming(value: () => boolean): void {
 		Object.defineProperty(session, "isStreaming", { configurable: true, get: value });
@@ -469,6 +493,146 @@ describe("InteractiveMode speckit-auto mode", () => {
 			await tick();
 			expect(classify.mock.calls.at(-1)?.[3]?.request).toBeUndefined();
 		});
+
+		it("drops a pending check when a phase wake starts and checks the wake's reply instead", async () => {
+			await start();
+			await startRun("/speckit.implement");
+			turnSettles();
+			const judged = Promise.withResolvers<SpeckitVerdict>();
+			classify.mockImplementationOnce(() => judged.promise);
+			await tick();
+			expect(classify).toHaveBeenCalledTimes(1);
+
+			const wakeReply = await ompTurnRuns(LAUNCH_COMPLETION_MESSAGE_TYPE, CLEAN);
+			judged.resolve(HELD);
+			await flush();
+			expect(saved()?.run?.hold).toBeUndefined();
+			expect(statusState()).toBe("running");
+
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [] });
+			await flush();
+			await tick(2);
+			expect(classify.mock.calls.at(-1)?.[1]).toBe(wakeReply);
+			expect(texts()).toEqual(["/speckit.converge"]);
+		});
+
+		it("keeps the run when a phase wake starts while converge is being checked", async () => {
+			await start();
+			await startRun("/speckit.converge");
+			turnSettles();
+			const judged = Promise.withResolvers<SpeckitVerdict>();
+			classify.mockImplementationOnce(() => judged.promise);
+			await tick();
+
+			setStreaming(() => true);
+			await ompTurnRuns(ASYNC_RESULT_MESSAGE_TYPE, CLEAN);
+			judged.resolve({ ...CLEAN, converge: "complete" });
+			await flush();
+
+			expect(saved()?.run?.phase).toBe("converge");
+			expect(statusState()).toBe("running");
+		});
+
+		it("checks the resumed phase reply after a compaction continuation that starts with a prelude", async () => {
+			await start();
+			await startRun("/speckit.implement");
+			const compacted = flag("isCompacting");
+			turnSettles(HELD);
+			await tick();
+			expect(classify).not.toHaveBeenCalled();
+
+			// The continuation run: an eager prelude, then the hidden continue prompt, then the resumed reply.
+			session.agent.emitExternalEvent({ type: "agent_start" });
+			const prelude: CustomMessage = {
+				role: "custom",
+				customType: "eager-task-prelude",
+				content: "Delegate with tasks.",
+				display: false,
+				attribution: "agent",
+				timestamp: ++clock,
+			};
+			session.agent.emitExternalEvent({ type: "message_start", message: prelude });
+			const resume: DeveloperMessage = {
+				role: "developer",
+				content: [{ type: "text", text: "Continue." }],
+				attribution: "agent",
+				synthetic: true,
+				timestamp: ++clock,
+			};
+			session.agent.emitExternalEvent({ type: "message_start", message: resume });
+			await flush();
+			const resumed: AssistantMessage = { ...createAssistantMessage("All tasks done."), timestamp: ++clock };
+			classify.mockImplementation(async (_phase, message) => (message === resumed ? CLEAN : HELD));
+			reply = resumed;
+			compacted();
+			await tick(2);
+
+			expect(classify.mock.calls.at(-1)?.[1]).toBe(resumed);
+			expect(texts()).toEqual(["/speckit.converge"]);
+		});
+
+		it("counts one remediation round when a paused remediation resumes with its continue message", async () => {
+			await start();
+			await startRun("/speckit.analyze");
+			turnSettles({ ...CLEAN, analyze: { critical: 1, high: 0 } });
+			await tick(2);
+			await ownTurnRuns(submitted[0]);
+			expect(saved()?.run?.remediationRounds).toBe(1);
+
+			mode.pauseSpeckitAuto();
+			waitForInput();
+			await mode.handleSpeckitAutoCommand("resume");
+			await tick();
+			expect(texts()).toEqual([
+				speckitAuto.SPECKIT_REMEDIATION_TEXT,
+				speckitAuto.renderSpeckitContinue("remediation"),
+			]);
+			await ownTurnRuns(submitted[1]);
+
+			expect(saved()?.run).toMatchObject({ history: ["analyze", "remediation"], remediationRounds: 1 });
+		});
+
+		it("keeps the user's fix request through the continue message of its interrupted turn", async () => {
+			const unreadable: SpeckitVerdict = { ...CLEAN, analyze: "unreadable" };
+			await start();
+			await startRun("/speckit.analyze");
+			turnSettles(unreadable);
+			await tick();
+			expect(saved()?.run?.hold?.kind).toBe("needs-you");
+
+			await turnStarts("Fix the analyze findings.");
+			mode.pauseSpeckitAuto();
+			await mode.handleSpeckitAutoCommand("resume");
+			await tick();
+			expect(texts()).toEqual([speckitAuto.renderSpeckitContinue("analyze")]);
+			await ownTurnRuns(submitted[0]);
+
+			turnSettles(unreadable);
+			classify.mockImplementation(async (_phase, _message, _deps, options) =>
+				options?.request ? { ...unreadable, fixed: true } : unreadable,
+			);
+			await tick(2);
+			expect(classify.mock.calls.at(-1)?.[3]?.request).toBe("Fix the analyze findings.");
+			expect(texts().at(-1)).toBe("/speckit.analyze");
+		});
+
+		it("holds with a reason when its own start fails before the turn starts", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			turnSettles();
+			await tick(2);
+			expect(texts()).toEqual(["/speckit.tasks"]);
+
+			vi.spyOn(session, "prompt").mockRejectedValue(new Error("No API key found for anthropic."));
+			await submitInteractiveInput(mode, session, submitted[0]);
+			waitForInput();
+			await tick(5);
+
+			expect(saved()?.run).toMatchObject({ phase: "plan", hold: { kind: "needs-you" } });
+			expect(statusState()).toBe("needs-you");
+			expect(notify).toHaveBeenCalledTimes(1);
+			expect(texts()).toEqual(["/speckit.tasks"]);
+		});
 	});
 
 	describe("pause, resume, next, and session state", () => {
@@ -541,6 +705,35 @@ describe("InteractiveMode speckit-auto mode", () => {
 			await mode.editor.onSubmit?.("/speckit-auto next");
 			await flush();
 
+			expect(texts()).toEqual(["/speckit.tasks"]);
+		});
+
+		it("next keeps a draft typed during the abort and starts the successor only once the draft is gone", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			let streaming = true;
+			setStreaming(() => streaming);
+			const aborted = Promise.withResolvers<void>();
+			vi.spyOn(session, "abort").mockImplementation(async () => {
+				await aborted.promise;
+				streaming = false;
+			});
+			waitForInput();
+
+			const next = mode.editor.onSubmit?.("/speckit-auto next");
+			await flush();
+			const draft = "Keep this draft. Review the CSV details first.";
+			mode.editor.setText(draft);
+			aborted.resolve();
+			await next;
+			await tick(3);
+
+			expect(mode.editor.getText()).toBe(draft);
+			expect(submitted).toHaveLength(0);
+			expect(statusState()).toBe("next");
+
+			mode.editor.setText("");
+			await tick();
 			expect(texts()).toEqual(["/speckit.tasks"]);
 		});
 
@@ -666,6 +859,75 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(mode.speckitAutoEnabled).toBe(true);
 			expect(mode.speckitAutoRunActive).toBe(false);
 			expect(saved()?.run).toMatchObject({ phase: "plan" });
+		});
+
+		it.each([
+			["cancelled", () => vi.spyOn(session, "switchSession").mockResolvedValue(false)],
+			["failed", () => vi.spyOn(session, "switchSession").mockRejectedValue(new Error("cwd change failed"))],
+		])("brings back the run, paused, when a /resume switch is %s", async (_, stub) => {
+			await start();
+			await startRun("/speckit.plan");
+			stub();
+
+			await mode.handleResumeSession("/tmp/other-session.jsonl").catch(() => {});
+
+			expect(mode.speckitAutoEnabled).toBe(true);
+			expect(mode.speckitAutoRunActive).toBe(false);
+			expect(statusState()).toBe("paused");
+		});
+
+		it("resumes a reloaded run by checking the phase reply, not the advisor reply after it", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			const command = userText("/speckit.plan");
+			turnSettles();
+			const planReply = reply;
+			if (!planReply) throw new Error("Expected the phase reply");
+			const advisorReply = await ompTurnRuns("advisor", { completed: false, waits: false, routine: false });
+			const advisor: CustomMessage = {
+				role: "custom",
+				customType: "advisor",
+				content: "Note for the agent.",
+				display: true,
+				attribution: "agent",
+				timestamp: planReply.timestamp + 1,
+			};
+			await tick();
+			mode.pauseSpeckitAuto();
+
+			await reload(command, planReply, advisor, advisorReply);
+			await mode.handleSpeckitAutoCommand("resume");
+			await tick(2);
+
+			expect(classify.mock.calls.at(-1)?.[1].timestamp).toBe(planReply.timestamp);
+			expect(texts()).toEqual(["/speckit.tasks"]);
+		});
+
+		it("keeps the user's fix request when a reload restores its interrupted turn", async () => {
+			const unreadable: SpeckitVerdict = { ...CLEAN, analyze: "unreadable" };
+			await start();
+			await startRun("/speckit.analyze");
+			const command = userText("/speckit.analyze");
+			turnSettles(unreadable);
+			const analyzeReply = reply;
+			if (!analyzeReply) throw new Error("Expected the analyze reply");
+			await tick();
+			const fix = userText("Fix the analyze findings.");
+			await turnStarts("Fix the analyze findings.");
+			mode.pauseSpeckitAuto();
+
+			await reload(command, analyzeReply, fix);
+			await mode.handleSpeckitAutoCommand("resume");
+			await tick();
+			expect(texts()).toEqual([speckitAuto.renderSpeckitContinue("analyze")]);
+			await ownTurnRuns(submitted[0]);
+
+			turnSettles(unreadable);
+			classify.mockImplementation(async (_phase, _message, _deps, options) =>
+				options?.request ? { ...unreadable, fixed: true } : unreadable,
+			);
+			await tick(2);
+			expect(texts().at(-1)).toBe("/speckit.analyze");
 		});
 
 		it("refuses every other mode while on", async () => {
