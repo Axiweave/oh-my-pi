@@ -61,6 +61,7 @@ interface SpeckitVerdict {
 	routine: boolean;                // the only open question asks to proceed with the recommendation
 	ready?: boolean;                 // clarify only
 	analyze?: { critical: number; high: number } | "unreadable"; // analyze only
+	fixed?: boolean;                 // analyze only, judge only: the user asked to fix the findings and the reply reports the fixes
 	converge?: "complete" | "added" | "none";                    // converge only
 }
 ```
@@ -93,6 +94,8 @@ Checks run top to bottom. The first match wins. "Any" means every phase.
 | 8 | specify | start clarify |
 | 9 | clarify, `ready === true` | start plan |
 | 10 | clarify | hold needs-you: "clarify did not report the spec ready" |
+| 11a | analyze, `analyze` is `"unreadable"` or missing, `fixed === true`, `remediationRounds < 2` | start analyze (counts a remediation round when its turn starts) |
+| 11b | analyze, `analyze` is `"unreadable"` or missing, `fixed === true` | hold needs-you: "fixes applied after 2 rounds; run /speckit.analyze to check them" |
 | 11 | analyze, `analyze` is `"unreadable"` or missing | hold needs-you: "no readable analyze report" |
 | 12 | analyze, `critical > 0`, `remediationRounds < 2` | remediate |
 | 13 | analyze, `critical > 0` | hold needs-you: "N CRITICAL findings remain after 2 rounds" |
