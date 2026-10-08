@@ -1,4 +1,3 @@
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
 /**
  * Contracts: /vibe mode toggle on InteractiveMode.
  *
@@ -13,6 +12,7 @@ import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool, type StreamFn } from "@oh-my-pi/pi-agent-core";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
@@ -672,8 +672,7 @@ describe("InteractiveMode vibe mode toggle", () => {
 
 		expect(await session.switchSession(sessionFile)).toBe(true);
 
-		// Rehydration must resolve workers against the reopened session's active
-		// model (so the `good`/pi/task worker tracks it), including its selected effort, not the settings default.
+		// Rehydration must use the reopened session's active model and effort, not the settings default.
 		expect(rehydrateCalled).toBe(true);
 		expect(activeModelDuringRehydrate).toBe(`${expectedModel.provider}/${expectedModel.id}:high`);
 	});

@@ -535,7 +535,6 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
-		// An agent that inherits the session model receives the parent's live selector, `:high` included.
 		const result = await runSubprocess({
 			...baseOptions,
 			id: "subagent-inherited-live-effort",
@@ -573,6 +572,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.model?.provider).toBe(parentModel.provider);
 		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.Low);
+		expect(result.resolvedModel).toBe(`${parentModel.provider}/${parentModel.id}:low`);
 	});
 	it("persists an explicit role from a caller model override", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");

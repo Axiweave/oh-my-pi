@@ -3,19 +3,19 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.7.0` on 2026-10-06.
+**Reviewed against:** `v18.8.5` on 2026-10-08.
 
-**Verification:** Source setup, final `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.7.0`.
-The merge had conflicts in 11 files. The resolutions kept the fork decisions and upstream's new behavior. Upstream now gates `CopyState.clone_unsupported` the same way as the fork, so the `macOS clippy build of cp` entry retires. Upstream added prewalk re-arm on `/new` and its own `/prewalk off`. The `Prewalk controls` entry records how the fork combines them.
-An automatic merge broke `ImageBudget.release()`: upstream's new method added the fork's `{ id, tag }` map value to a set of ids. The merge reads `entry.id` instead.
-The new pinned Rust toolchain rewraps two fork comments in `tiff.rs` and `pi-walker`. `bun run fmt:rs` applied that change.
-1709 test files ran in separate processes: every test file named in this record, every test file that imports a source file that both sides changed, and upstream's new `agent-session-prewalk-off.test.ts`. 1703 passed. The 6 failures are host state or flaky:
-- `sdk-tool-activation.test.ts` fails 5 cases with `No API key found for cursor`. The pre-merge commit `694efd225a` fails the same 5 cases.
-- `sixel-probe.test.ts` fails 3 cases and `eval/js-package-environment.test.ts` fails 1 case. The pre-merge commit fails the same cases.
-- `resize-settle-fused-exit.test.ts` fails only with `INSIDE_EMACS` set, because of the `Emacs-hosted resize behavior` decision. It passes without that variable.
-- `browser-nav-frames-dialogs.test.ts` timed out under load and passes in isolation.
-- `native/table-chart-native.test.ts` fails the same assertion on a clean `v18.7.0` worktree on this host.
-`bun run test:rs` ran 3237 tests, and all passed (5 skipped). The `tail -f` reader-gone failures from the `v18.6.3` review no longer occur.
+**Verification:** Source setup, final `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.8.5`.
+The merge had conflicts in 20 files. The resolutions preserve every fork decision and retain upstream's new behavior.
+The verification exercised 2650 TypeScript test files in separate processes, including the changed fork paths and their transitive consumers.
+The first 2648-file run had eight failures. Corrected test contracts for image chip targets, async session teardown, and resumed worker effort now pass.
+The three terminal failures pass with a plain-terminal environment that removes inherited host flags and selects a dark initial palette.
+Two suites remain red with the same failures at pre-merge commit `62197d4a62`:
+- `packages/coding-agent/test/sdk-tool-activation.test.ts`: five Cursor cases fail with `No API key found for cursor`.
+- `packages/coding-agent/test/eval/js-package-environment.test.ts`: the missing-project-package case resolves a dependency instead of rejecting it.
+The user authorized the local merge commit with these known baseline failures.
+`bun run test:rs` passes all 3240 tests, with 5 skipped. Local proxy discovery and the pinned composer resize smoke pass.
+Direct and tmux source CLI runs in separate Ghostel buffers report the correct directory through OSC 7.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -202,13 +202,35 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Key paths:** `packages/coding-agent/src/session/prewalk.ts`, `packages/coding-agent/src/session/settings.ts`, `packages/coding-agent/src/slash-commands/builtin-modes.ts`, and `packages/coding-agent/src/modes/controllers/input-controller.ts`.
 - **Checks:** `packages/coding-agent/test/agent-session-prewalk.test.ts`, `packages/coding-agent/test/agent-session-prewalk-off.test.ts`, `packages/coding-agent/test/input-controller-keybindings.test.ts`, `packages/coding-agent/test/prewalk-discovery-provider.test.ts`, and `packages/coding-agent/test/task/executor-prewalk.test.ts`.
 
+### Per-call subagent model selection
+
+- **Decision:** Keep `model` on flat task calls, each batch item, eval `agent()`, and eval `workpool()`. Reject `model` on a batch container.
+- **Decision:** A model array is an ordered preference. Explicit selectors take precedence over agent defaults and parent inheritance.
+- **Decision:** Inherit the live model route and effective thinking level when no explicit selector applies. Preserve agent-level effort precedence.
+- **Decision:** Explicit selectors must not remove OAuth account pools or cyber restrictions. Configured retry chains remain separate from selector preferences.
+- **Why:** Upstream commit `31876ff53e` removed per-call selectors. This fork keeps them for task-specific model choices.
+- **Key paths:** `packages/coding-agent/src/config/model-resolver.ts`, `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/task/`, `packages/coding-agent/src/eval/agent-bridge.ts`, `packages/coding-agent/src/eval/workpool-bridge.ts`, and `packages/coding-agent/src/vibe/runtime.ts`.
+- **Checks:** `packages/coding-agent/test/model-resolver.test.ts`, `packages/coding-agent/test/sdk-active-selector.test.ts`, `packages/coding-agent/test/task/task-schema.test.ts`, `packages/coding-agent/test/task/structured-subagent.test.ts`, `packages/coding-agent/test/sdk-model-selection.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, `packages/coding-agent/test/eval/agent-bridge-policy.test.ts`, `packages/coding-agent/test/eval/workpool-bridge.test.ts`, `packages/coding-agent/test/eval/prelude-agent.test.ts`, `packages/coding-agent/test/eval/prelude-runtime.test.ts`, `packages/coding-agent/test/eval/py/prelude.test.ts`, `packages/coding-agent/test/task/workpool.test.ts`, and `packages/coding-agent/test/interactive-mode-vibe-toggle.test.ts`.
+
+### Five-level task effort
+
+- **Decision:** Keep `low`, `medium`, `high`, `xhigh`, and `max`. Reject upstream's `lo`, `med`, and `hi` names.
+- **Decision:** Resolve effort through the role model map and retain the `task.maxEffort` ceiling.
+- **Decision:** Caller effort wins over an explicit selector suffix, agent effort, and inherited parent effort.
+- **Key paths:** `packages/coding-agent/src/task/types.ts`, `packages/coding-agent/src/task/executor.ts`, `packages/coding-agent/src/prompts/tools/task.md`, and `docs/tools/task.md`.
+- **Checks:** `packages/coding-agent/test/task/task-schema.test.ts`, `packages/coding-agent/test/task/executor-pass-through.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, and `packages/tui/test/task-render.test.ts`.
+
 ### Per-model compaction thresholds
 
 - **Decision:** Resolve compaction settings per active model through `compaction.modelOverrides` selector patterns. An exact `provider/id` key wins, else the first matching wildcard in declaration order.
 - **Decision:** A matching override replaces the whole threshold policy (`thresholdTokens`, `thresholdPercent`, `reserveTokens`); it never merges into the global group.
+- **Decision:** An exact agent override wins over `modelOverrides`, upstream's `modelThresholds`, and global settings, in that order.
+- **Decision:** Use upstream's `modelThresholds` only when no fork pattern matches. Keep its longest-prefix rule and global reserve.
+- **Decision:** Apply `compaction.modelThresholdsEnabled` to both maps. Restore the root policy for descendants after an exact agent override.
+- **Decision:** Resolve session, advisor, promotion, and Model Hub policies through the same resolver. Reject Model Hub writes that a fork pattern would hide.
 - **Why:** One global threshold cannot fit models with very different context windows.
 - **Key paths:** `packages/coding-agent/src/session/context-settings.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, and `packages/coding-agent/src/session/session-advisors.ts`.
-- **Checks:** `packages/coding-agent/test/compaction-model-overrides.test.ts` and `packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts`.
+- **Checks:** `packages/coding-agent/test/compaction-model-overrides.test.ts`, `packages/coding-agent/test/config/compaction-threshold.test.ts`, `packages/coding-agent/test/task/executor-pass-through.test.ts`, and `packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts`.
 
 ### Native JJ snapshot contract test
 

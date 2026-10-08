@@ -26,6 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async/job-manager";
+import { validateAgentAccountPools } from "../config/account-pools";
 import { resolveAgentModelSelection } from "../config/model-resolver";
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
@@ -56,7 +57,7 @@ import {
 } from "./lifecycle";
 import { type VibeCli } from "@oh-my-pi/pi-tui/tools/vibe";
 
-import { cfgTaskAgentModelOverrides, cfgTaskEnableLsp } from "../task/settings";
+import { cfgTaskAgentAccountPools, cfgTaskAgentModelOverrides, cfgTaskEnableLsp } from "../task/settings";
 /**
  * CLI flavor → bundled agent type. This IS the model-tier mapping: `sonic`
  * carries `model: "@smol"` (the configured fast/low-latency role) and `task`
@@ -121,7 +122,7 @@ interface ResolvedVibeWorker {
 	modelOverride?: string | string[];
 	/** Pre-expansion role alias behind {@link modelOverride}, when the worker agent named one. */
 	modelRole?: string;
-	/** {@link modelOverride} is the parent's live selector; its `:level` ranks below the agent's own level. */
+	/** The agent's own level outranks the parent's inherited live level. */
 	modelInheritsLiveThinkingLevel?: boolean;
 }
 
@@ -146,7 +147,7 @@ interface VibeRecord {
 	modelOverride?: string | string[];
 	/** Pre-expansion role alias behind {@link modelOverride}, when the worker agent named one. */
 	modelRole?: string;
-	/** {@link modelOverride} is the parent's live selector; its `:level` ranks below the agent's own level. */
+	/** The agent's own level outranks the parent's inherited live level. */
 	modelInheritsLiveThinkingLevel?: boolean;
 	state: VibeSessionState;
 	createdAt: number;
@@ -1300,6 +1301,9 @@ export class VibeSessionRegistry {
 		await fs.mkdir(artifactsDir, { recursive: true });
 		if (!sessionArtifactsDir) registerArtifactsDir(artifactsDir);
 		const localProtocolOptions = sessionLocalProtocolOptions(session);
+		// Same exact-name pool task dispatch and persisted revival apply, so a
+		// worker is restricted from its first turn, not only after a revive.
+		const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(session.settings));
 		return {
 			cwd: session.cwd,
 			agent: record.agent,
@@ -1344,6 +1348,9 @@ export class VibeSessionRegistry {
 			parentTelemetry: session.getTelemetry?.(),
 			parentAgentId: session.getAgentId?.() ?? MAIN_AGENT_ID,
 			parentServiceTier: session.getServiceTierByFamily ? (session.getServiceTierByFamily() ?? null) : undefined,
+			oauthAccountPools: Object.hasOwn(agentAccountPools, record.agent.name)
+				? agentAccountPools[record.agent.name]
+				: undefined,
 			keepAlive: true,
 		};
 	}

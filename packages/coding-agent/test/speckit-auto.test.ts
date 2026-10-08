@@ -285,8 +285,11 @@ describe("readSpeckitTextVerdict", () => {
 			// The final message's readiness wins over an older blocking row from an earlier message.
 			const blocking = "| Security | Deferred | High-impact access policy unresolved. |";
 			expect(
-				readSpeckitTextVerdict("clarify", message("No critical ambiguities detected. Run /speckit.plan next."), blocking)
-					.ready,
+				readSpeckitTextVerdict(
+					"clarify",
+					message("No critical ambiguities detected. Run /speckit.plan next."),
+					blocking,
+				).ready,
 			).toBe(true);
 			expect(readSpeckitTextVerdict("clarify", message("Ready for the implementation plan."), blocking).ready).toBe(
 				undefined,
@@ -349,7 +352,11 @@ describe("readSpeckitTextVerdict", () => {
 			["implement", "ERROR: constitution gate failed.", false],
 			["remediation", "ERROR: constitution gate failed.", false],
 			["implement", "All 26 implementation tasks are marked complete.", true],
-			["tasks", "**Completion report**\n\n- Tasks: `specs/029-global-concurrency-default/tasks.md`\n- Total: 27 tasks.", true],
+			[
+				"tasks",
+				"**Completion report**\n\n- Tasks: `specs/029-global-concurrency-default/tasks.md`\n- Total: 27 tasks.",
+				true,
+			],
 			["tasks", "Review [tasks.md](specs/029-x/tasks.md). It contains **26 tasks**.", true],
 			["plan", "- IMPL_PLAN: `specs/029-x/plan.md`\n\nRun `/speckit.tasks` next.", true],
 			["plan", "Generated plan.md. Should I also add a quickstart?", undefined],
@@ -537,20 +544,31 @@ describe("classifySpeckitTurn", () => {
 		expect(readSpeckitTextVerdict("tasks", message(`${report}\n\n${offer}`)).waits).toBe(false);
 
 		// An offer with a question cue reaches the judge, and the mode holds instead of answering it.
-		const asked = await classifySpeckitTurn("tasks", message(`${report}\n\nShall I run /speckit.implement now?`), deps);
+		const asked = await classifySpeckitTurn(
+			"tasks",
+			message(`${report}\n\nShall I run /speckit.implement now?`),
+			deps,
+		);
 		expect(seen.at(-1)).toContain("/speckit.implement");
 		expect(asked.routine).toBe(false);
 		expect(decideSpeckitStep(newSpeckitRun("tasks", 3), asked)).toMatchObject({ kind: "hold" });
 
 		// Clarify keeps its recommended next command for the ready check.
-		await classifySpeckitTurn("clarify", message("No critical ambiguities detected.\n\nNext: run /speckit.plan."), deps);
+		await classifySpeckitTurn(
+			"clarify",
+			message("No critical ambiguities detected.\n\nNext: run /speckit.plan."),
+			deps,
+		);
 		expect(seen.at(-1)).toContain("/speckit.plan");
 
 		// The reply's own phase command is not an offer: the implement checklist gate stays routine.
-		const gate = "Checklists are incomplete; /speckit.implement stopped.\n\nDo you want to proceed with implementation anyway? (yes/no)";
+		const gate =
+			"Checklists are incomplete; /speckit.implement stopped.\n\nDo you want to proceed with implementation anyway? (yes/no)";
 		expect((await classifySpeckitTurn("implement", message(gate), deps)).routine).toBe(true);
 		expect(readSpeckitTextVerdict("implement", message(gate)).routine).toBe(true);
-		expect(readSpeckitTextVerdict("implement", message(`Then run /speckit.converge.\n\n${gate}`)).routine).toBe(false);
+		expect(readSpeckitTextVerdict("implement", message(`Then run /speckit.converge.\n\n${gate}`)).routine).toBe(
+			false,
+		);
 	});
 
 	it("hides only the handoff sentence from the judge and keeps the rest of the paragraph", async () => {
@@ -618,18 +636,30 @@ describe("classifySpeckitTurn", () => {
 		judgeSays(0.9);
 		const run = newSpeckitRun("implement", 3);
 		// A side request (smart-commit) after a hold: the judge reads its reply as finished.
-		const side = await classifySpeckitTurn("implement", message("The index is empty. No commits were pushed."), deps, {
-			request: "commit this",
-		});
+		const side = await classifySpeckitTurn(
+			"implement",
+			message("The index is empty. No commits were pushed."),
+			deps,
+			{
+				request: "commit this",
+			},
+		);
 		expect(side.completed).toBeUndefined();
 		expect(decideSpeckitStep(run, side)).toMatchObject({ kind: "hold" });
 		// Converge advances only on its text outcome, never on the judge.
-		const sideConverge = await classifySpeckitTurn("converge", message("The index is empty. No commits were pushed."), deps, {
-			request: "commit this",
-		});
+		const sideConverge = await classifySpeckitTurn(
+			"converge",
+			message("The index is empty. No commits were pushed."),
+			deps,
+			{
+				request: "commit this",
+			},
+		);
 		expect(decideSpeckitStep(newSpeckitRun("converge", 3), sideConverge)).toMatchObject({ kind: "hold" });
 		// The phase report still advances a user turn, and a phase command turn still trusts the judge.
-		const done = await classifySpeckitTurn("implement", message("All tasks completed."), deps, { request: "continue" });
+		const done = await classifySpeckitTurn("implement", message("All tasks completed."), deps, {
+			request: "continue",
+		});
 		expect(decideSpeckitStep(run, done)).toMatchObject({ kind: "start", phase: "converge" });
 		const own = await classifySpeckitTurn("implement", message("The work is finished."), deps);
 		expect(decideSpeckitStep(run, own)).toMatchObject({ kind: "start", phase: "converge" });

@@ -4,6 +4,14 @@ import * as os from "node:os";
 import path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { normalizeModelPatternList, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
+import {
+	disableProvider,
+	enableProvider,
+	getDisabledProviders,
+	isProviderEnabled,
+	setDisabledProviders,
+} from "@oh-my-pi/pi-coding-agent/capability";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentCompactionThresholdOverride } from "@oh-my-pi/pi-coding-agent/config/compaction-threshold";
 import type { BeforeSubagentSpawnEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
@@ -32,6 +40,10 @@ import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 import { cfgRetryModelFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
+import {
+	cfgCompactionModelThresholdsEnabled,
+	cfgCompactionThresholdPercent,
+} from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgTaskAgentModelOverrides, cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
 
 const AGENT: AgentDefinition = {
@@ -43,7 +55,7 @@ const AGENT: AgentDefinition = {
 	output: { type: "object", properties: { agent: { type: "boolean" } } },
 };
 
-/** One catalog entry so a populated registry can reject an unmatchable selector. */
+/** A catalog entry lets a populated registry reject unavailable selectors. */
 const MODEL = buildModel({
 	id: "claude-sonnet-4-5",
 	name: "Claude Sonnet 4.5",
@@ -158,6 +170,35 @@ describe("structured subagent primitive", () => {
 		taggedSession.getSessionAgents = () => [{ ...AGENT, name: "m1", model: ["a/x"] }];
 		const policy = await resolveEffectiveSubagentPolicy(request({ session: taggedSession, agent: "m1" }));
 		expect(policy.modelOverride).toEqual(["b/y"]);
+	});
+
+	it("rescans agents when a plugin provider is disabled while an earlier discovery is in flight", async () => {
+		const previouslyDisabled = getDisabledProviders();
+		enableProvider("omp-plugins");
+		const firstEntered = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		let scans = 0;
+		vi.spyOn(discoveryModule, "discoverAgents").mockImplementation(async () => {
+			const pluginsEnabled = isProviderEnabled("omp-plugins");
+			if (++scans === 1) {
+				firstEntered.resolve();
+				await releaseFirst.promise;
+			}
+			const agents = pluginsEnabled ? [AGENT, { ...AGENT, name: "plugin-worker" }] : [AGENT];
+			return { agents, projectAgentsDir: null };
+		});
+		try {
+			const first = resolveEffectiveSubagentPolicy(request({ agent: "plugin-worker" }));
+			await firstEntered.promise;
+			disableProvider("omp-plugins");
+			const second = resolveEffectiveSubagentPolicy(request({ agent: "plugin-worker" }));
+			releaseFirst.resolve();
+
+			expect((await first).agent.name).toBe("plugin-worker");
+			await expect(second).rejects.toThrow('Unknown agent "plugin-worker"');
+		} finally {
+			setDisabledProviders(previouslyDisabled);
+		}
 	});
 
 	it("uses caller, agent, then session schemas in precedence order", async () => {
@@ -296,6 +337,39 @@ describe("structured subagent primitive", () => {
 			mode: "strict",
 			outputSchemaOverridesAgent: true,
 		});
+	});
+
+	it("preserves raw cyber chains while descendants restore the root compaction policy", () => {
+		const approved = `${MODEL.provider}/${MODEL.id}`;
+		const rawChain = `openai/gpt-4o,${approved}`;
+		const parent = Settings.isolated({
+			modelRoles: { task: rawChain },
+			cyberModels: [approved],
+			"compaction.thresholdPercent": 75,
+			"compaction.thresholdTokens": -1,
+			"compaction.modelThresholdsEnabled": true,
+		});
+		const allowlist = resolveCyberAllowlist(parent, [MODEL]);
+		if (!allowlist) throw new Error("The test allowlist did not resolve.");
+		parent.applyCyberRoles("test", allowlist);
+		const child = executorModule.createSubagentSettings(
+			parent,
+			executorModule.compactionThresholdSettings({ thresholdPercent: 40, thresholdTokens: -1 }),
+		);
+		const descendant = executorModule.createSubagentSettings(child);
+
+		expect(child.getModelRole("task")).toBe(approved);
+		expect(child.getRawModelRoles().task).toBe(rawChain);
+		expect(cfgCompactionThresholdPercent.get(child)).toBe(40);
+		expect(cfgCompactionModelThresholdsEnabled.get(child)).toBe(false);
+		expect(descendant.getModelRole("task")).toBe(approved);
+		expect(descendant.getRawModelRoles().task).toBe(rawChain);
+		expect(cfgCompactionThresholdPercent.get(descendant)).toBe(75);
+		expect(cfgCompactionModelThresholdsEnabled.get(descendant)).toBe(true);
+		child.clearCyberRoles("parent", { operator: true });
+		expect(child.getModelRole("task")).toBe(rawChain);
+		expect(parent.getModelRole("task")).toBe(approved);
+		expect(descendant.getModelRole("task")).toBe(approved);
 	});
 	it("reloads project task and retry policy before resolving an agent added during the session", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-task-hot-reload-"));
@@ -665,7 +739,6 @@ describe("structured subagent primitive", () => {
 		expect(selected.model).toBe(MODEL);
 		expect(policy.modelRole).toBeUndefined();
 	});
-
 	it("falls through an empty configured override to the agent definition role", async () => {
 		const customAgent = { ...AGENT, model: ["@definition"] };
 		mockDiscovery(customAgent);

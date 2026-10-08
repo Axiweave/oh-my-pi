@@ -1,6 +1,9 @@
 # Per-model compaction thresholds
 
-`compaction.modelOverrides` sets a different compaction trigger for each model. The global keys `compaction.thresholdTokens`, `compaction.thresholdPercent`, and `compaction.reserveTokens` apply to every model that no override matches.
+`compaction.modelOverrides` sets a different compaction policy for each model.
+A matching policy replaces `compaction.thresholdTokens`, `compaction.thresholdPercent`, and `compaction.reserveTokens`.
+Without a matching policy, `compaction.modelThresholds` supplies the per-model trigger.
+Without either model entry, the global policy applies.
 
 ## Configuration
 
@@ -54,6 +57,23 @@ The override resolves against the model whose context window the threshold measu
 ## Precedence with other settings
 
 `compaction.modelOverrides` follows the normal settings precedence: global `~/.omp/agent/config.yml`, then project `.omp/config.yml`, then an overlay passed with `--config`. Records deep-merge across layers. A project entry with the same key replaces the global entry for that key. Keys the project does not name keep their global entries.
+
+A per-agent `task.agentCompactionThresholdOverrides` entry wins over both model maps.
+It disables both maps for that agent through `compaction.modelThresholdsEnabled`.
+An agent without a task override still resolves both maps against its own model.
+Children of an overridden agent use the root policy, not the parent's task override.
+
+The precedence is:
+
+1. The exact-name task threshold override.
+2. A `modelOverrides` policy, with an exact key before the first matching wildcard.
+3. A `modelThresholds` entry, with an exact key before the longest matching prefix.
+4. The global threshold policy.
+
+The `/models` hub edits `compaction.modelThresholds` and shows the effective policy.
+It rejects a new threshold when a matching `modelOverrides` policy would hide it.
+Edit that policy in the config instead.
+Empty hub input can remove a saved `modelThresholds` entry even when a fork policy hides it.
 
 ## Related
 

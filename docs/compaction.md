@@ -521,8 +521,10 @@ Defined in `packages/coding-agent/src/session/context-settings.ts`:
 - `compaction.remoteStreamingV2Enabled` = `true`
 - `compaction.v2RetainedMessageBudget` = `64000`
 - `compaction.thresholdPercent` = `-1` and `compaction.thresholdTokens` = `-1`; a positive fixed token limit takes precedence over percentage, and otherwise the reserve-based threshold is used.
-- `compaction.modelOverrides` = `{}`. Per-model threshold policies use `provider/model-id` or wildcard keys. See [compaction-model-overrides.md](./compaction-model-overrides.md).
-- `task.agentCompactionThresholdOverrides` = `{}`. Exact-name task/eval agents map to a token count (`90000`) or percentage (`"80%"`). This replaces both thresholds for that agent only. See [Settings](./settings.md#context-compaction-and-memory).
+- `compaction.modelOverrides` = `{}`. Per-model policies use an exact `provider/model-id` key, else the first matching wildcard in declaration order. A match replaces `thresholdTokens`, `thresholdPercent`, and `reserveTokens`. See [compaction-model-overrides.md](./compaction-model-overrides.md).
+- `compaction.modelThresholds` = `{}`. Per-model token counts or percentages use an exact `provider/model-id` key, else the longest matching `provider/…*` prefix. The `/models` Roles view (`k`) edits these entries. A matching `modelOverrides` policy wins over this map. The model hub shows that policy and rejects an edit it would hide.
+- `task.agentCompactionThresholdOverrides` = `{}`. Exact-name task/eval agents map to a token count (`90000`) or percentage (`"80%"`). This replaces both thresholds for that agent only and wins over both model maps. Other descendants still use the root policy. See [Settings](./settings.md#context-compaction-and-memory).
+- `compaction.modelThresholdsEnabled` = `true`. A per-agent task threshold override sets it to `false` for that agent only. A `false` value disables both model maps.
 - `compaction.idleEnabled` = `false`
 - `compaction.idleThresholdTokens` = `200000`
 - `compaction.idleTimeoutSeconds` = `300`

@@ -89,7 +89,7 @@ export interface WorkPoolPeekResult {
 /** Resolved policy and optional shared context used to create a pool. */
 export interface WorkPoolCreateOptions {
 	name: string;
-	/** Raw selector applied to each worker at creation, never to follow-up turns. */
+	/** Raw selector for each worker's first turn, never for follow-up turns. */
 	model?: string | string[];
 	policy: EffectiveSubagentPolicy;
 	context?: string;

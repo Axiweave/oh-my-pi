@@ -328,7 +328,8 @@ const DEFERRED_ROW = /^[ \t]*\|.*\|[ \t]*\**Deferred\**[ \t]*\|.*$/gm;
 const DEFERRED_TO_PLAN = /\b(?:for|to|during|in|at)[ \t]+(?:the[ \t]+)?plan(?:ning)?\b/i;
 const DEFERRED_BLOCKS = /\bhigh[- ]impact\b|\bunresolved\b|\bmust\b|\bbefore\b/i;
 /** Any readiness evidence: a final message with it is read alone, so an older blocking row cannot override it. */
-const READY_EVIDENCE = /No critical ambiguities detected|\/speckit\.(?:plan|clarify)\b|^[ \t]*\|.*\|[ \t]*\**Deferred\**[ \t]*\|/im;
+const READY_EVIDENCE =
+	/No critical ambiguities detected|\/speckit\.(?:plan|clarify)\b|^[ \t]*\|.*\|[ \t]*\**Deferred\**[ \t]*\|/im;
 const APPENDED_COUNT = /\bappended\s+\d+\b[^\n]*\btasks?\b|\b\d+\s+(?:\w+\s+)?tasks?\b[^\n]*\bappended\b/i;
 const ANALYZE_HEADING = /^#{1,6}[ \t]*Specification Analysis Report\b/m;
 
@@ -504,7 +505,9 @@ export async function classifySpeckitTurn(
 			// A user turn can be a side request (a commit, a question): only the phase's own report proves the
 			// phase finished, so the judge alone cannot start the next phase.
 			completed:
-				completed && request !== undefined && REPORT_CUES[phase] && verdict.completed !== true ? undefined : completed,
+				completed && request !== undefined && REPORT_CUES[phase] && verdict.completed !== true
+					? undefined
+					: completed,
 			waits: yes("waits"),
 			// Never routine next to the text error cue (row 3 precedes row 5). The full tail: a removed closing
 			// offer still forbids the "proceed" answer.

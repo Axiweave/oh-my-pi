@@ -219,6 +219,8 @@ describe("task async preflight", () => {
 		} as TaskParams);
 
 		expect(textOf(result)).toContain('"@default"');
+		expect(result.isError).toBe(true);
 		expect(runSubprocess).not.toHaveBeenCalled();
+		expect(jobs.getJob("Ambiguous")).toBeUndefined();
 	});
 });

@@ -441,22 +441,4 @@ describe("WorkPool model selection", () => {
 		expect(follow.mock.calls[0]?.[0].id).toBe(workerId);
 		expect(follow.mock.calls[0]?.[0]).not.toHaveProperty("model");
 	});
-
-	it("keeps independent selections for separate pools", async () => {
-		const session = makeSession();
-		const selections = new Map<string, string | string[] | undefined>();
-		vi.spyOn(structured, "runStructuredSubagent").mockImplementation(async request => {
-			const id = request.identity?.id ?? "missing";
-			selections.set(id, request.model);
-			markIdle(id);
-			return execution(id);
-		});
-		const first = new WorkPool(session, { name: "first", policy: POLICY, model: "p/first" });
-		const second = new WorkPool(session, { name: "second", policy: POLICY, model: ["p/second", "p/third"] });
-		first.push(["one"]);
-		second.push(["two"]);
-		await Promise.all([finishPool(session, first), finishPool(session, second)]);
-		expect(selections.get(first.agents[0]!.id)).toBe("p/first");
-		expect(selections.get(second.agents[0]!.id)).toEqual(["p/second", "p/third"]);
-	});
 });

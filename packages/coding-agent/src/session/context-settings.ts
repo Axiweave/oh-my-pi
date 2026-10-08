@@ -1,11 +1,15 @@
-import type { Model } from "@oh-my-pi/pi-ai";
 import { globMatch } from "@oh-my-pi/pi-catalog/compat/cascade";
-import type { Settings } from "../config/settings";
-import { combine, register, type SettingValueOf } from "../config/registry";
+import {
+	applyModelCompactionThreshold,
+	type AgentCompactionThresholdOverride,
+	validateModelCompactionThresholds,
+} from "../config/compaction-threshold";
+import { combine, register, type ScopeLike, type SettingValueOf } from "../config/registry";
 import { COMPACTION_METHOD_CHOICES, DEFAULT_COMPACTION_METHOD_ORDER } from "./compaction-methods";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
 
 const EMPTY_STRING_ARRAY: string[] = [];
+const EMPTY_MODEL_COMPACTION_THRESHOLDS: Record<string, AgentCompactionThresholdOverride> = {};
 
 export const cfgWorkspaceAdditionalDirectories = register({
 	id: "workspace.additionalDirectories",
@@ -171,8 +175,31 @@ export const cfgCompactionModelOverrides = register({
 		group: "Compaction",
 		label: "Per-Model Thresholds",
 		description:
-			'JSON object mapping model selectors ("provider/model-id") or wildcards ("provider/*", "*/model-id") to a threshold policy {thresholdTokens, thresholdPercent, reserveTokens}, e.g. {"openai/*":{"thresholdTokens":250000},"anthropic/*":{"thresholdTokens":200000}}. An exact key beats wildcards; otherwise the first matching key wins. A matching entry replaces the global threshold policy: keys it omits use their defaults (-1 / unset), not the global values.',
+			'JSON object mapping model selectors ("provider/model-id") or wildcards ("provider/*", "*/model-id") to a threshold policy {thresholdTokens, thresholdPercent, reserveTokens}. An exact key beats wildcards. Otherwise, the first matching key wins. A match replaces the whole global threshold policy and outranks compaction.modelThresholds. Omitted keys use their defaults (-1 / unset), not the global values. A per-agent task threshold override still wins.',
 	},
+});
+
+/**
+ * Per-model compaction points edited from the /models hub.
+ * An exact `provider/model-id` wins, else the longest matching `…*` prefix.
+ * A matching `compaction.modelOverrides` policy or per-agent task override wins over this map.
+ */
+export const cfgCompactionModelThresholds = register({
+	id: "compaction.modelThresholds",
+	type: "record",
+	default: EMPTY_MODEL_COMPACTION_THRESHOLDS,
+	validate: validateModelCompactionThresholds,
+});
+
+/**
+ * Whether either per-model compaction map applies.
+ * Subagent spawn turns this off when a per-agent task threshold override applies.
+ * That override then wins over both model maps, including live edits.
+ */
+export const cfgCompactionModelThresholdsEnabled = register({
+	id: "compaction.modelThresholdsEnabled",
+	type: "boolean",
+	default: true,
 });
 
 export const cfgCompactionHandoffSaveToDisk = register({
@@ -569,40 +596,62 @@ function finiteOr<T>(value: unknown, fallback: T): number | T {
 	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-/** First `compaction.modelOverrides` entry for `key` (lowercased `provider/id`): exact key wins, else first glob match in declaration order. */
-function matchCompactionModelOverride(
+/** Match an exact model key first, else the first wildcard in declaration order. */
+export function matchCompactionModelOverride(
 	overrides: Record<string, CompactionModelOverride>,
-	key: string,
-): CompactionModelOverride | undefined {
-	let match: CompactionModelOverride | undefined;
+	model: { provider: string; id: string },
+): string | undefined {
+	if (typeof overrides !== "object" || overrides === null || Array.isArray(overrides)) return undefined;
+	const key = `${model.provider}/${model.id}`.toLowerCase();
+	let match: string | undefined;
 	for (const pattern in overrides) {
 		if (!Object.hasOwn(overrides, pattern)) continue;
 		const override = overrides[pattern];
 		if (typeof override !== "object" || override === null || Array.isArray(override)) continue;
 		const lower = pattern.toLowerCase();
-		if (lower === key) return override;
-		if (match === undefined && globMatch(lower, key)) match = override;
+		if (lower === key) return pattern;
+		if (match === undefined && globMatch(lower, key)) match = pattern;
 	}
 	return match;
 }
 
+const appliedModelOverrides = new WeakMap<CompactionSettings, WeakMap<CompactionModelOverride, CompactionSettings>>();
+
 /**
- * Compaction settings for `model`: the global group with the matching
- * `compaction.modelOverrides` threshold policy applied. A match replaces all
- * three threshold keys, so an override naming only `thresholdPercent` is not
- * shadowed by a global `thresholdTokens`.
+ * Resolve task thresholds, then `modelOverrides`, then `modelThresholds`, then the global policy.
+ * A `modelOverrides` match replaces all three threshold fields, including the reserve.
+ * Task threshold overrides disable both model maps for their agent only.
  */
-export function resolveCompactionSettings(settings: Settings, model: Model | null | undefined): CompactionSettings {
-	const group = cfgCompaction.get(settings);
-	if (!model) return group;
-	const overrides = cfgCompactionModelOverrides.get(settings);
-	if (typeof overrides !== "object" || overrides === null || Array.isArray(overrides)) return group;
-	const override = matchCompactionModelOverride(overrides, `${model.provider}/${model.id}`.toLowerCase());
-	if (!override) return group;
-	return {
-		...group,
-		thresholdTokens: finiteOr(override.thresholdTokens, -1),
-		thresholdPercent: finiteOr(override.thresholdPercent, -1),
-		reserveTokens: finiteOr(override.reserveTokens, undefined),
-	};
+export function resolveCompactionSettings(
+	scope: ScopeLike,
+	model: { provider: string; id: string } | null | undefined,
+): CompactionSettings {
+	const group = cfgCompaction.get(scope);
+	if (!model || !cfgCompactionModelThresholdsEnabled.get(scope)) return group;
+	const overrides = cfgCompactionModelOverrides.get(scope);
+	const key = matchCompactionModelOverride(overrides, model);
+	if (key === undefined) {
+		return applyModelCompactionThreshold(group, cfgCompactionModelThresholds.get(scope), model);
+	}
+	const override = overrides[key];
+	const thresholdTokens = finiteOr(override.thresholdTokens, -1);
+	const thresholdPercent = finiteOr(override.thresholdPercent, -1);
+	const reserveTokens = finiteOr(override.reserveTokens, undefined);
+	let applied = appliedModelOverrides.get(group);
+	if (!applied) {
+		applied = new WeakMap();
+		appliedModelOverrides.set(group, applied);
+	}
+	const cached = applied.get(override);
+	if (
+		cached &&
+		cached.thresholdTokens === thresholdTokens &&
+		cached.thresholdPercent === thresholdPercent &&
+		cached.reserveTokens === reserveTokens
+	) {
+		return cached;
+	}
+	const resolved: CompactionSettings = { ...group, thresholdTokens, thresholdPercent, reserveTokens };
+	applied.set(override, resolved);
+	return resolved;
 }

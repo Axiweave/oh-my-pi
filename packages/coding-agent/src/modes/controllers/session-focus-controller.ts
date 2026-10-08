@@ -227,8 +227,7 @@ export class SessionFocusController {
 			if (generation !== this.#attachGeneration) return false;
 			this.ctx.statusLine.setSession(target, this.#focusedAgentId);
 			// Reset run bookkeeping before replay populates pending tool handles. Speckit-auto between phases stays working.
-			const busy = () =>
-				target.hasPendingAsyncWork() || (target === this.ctx.session && this.ctx.speckitAutoActing);
+			const busy = () => target.hasPendingAsyncWork() || (target === this.ctx.session && this.ctx.speckitAutoActing);
 			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
 			else setTerminalTitleState(busy() ? "working" : "idle");
 			if (generation !== this.#attachGeneration) return false;

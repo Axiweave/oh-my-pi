@@ -180,6 +180,26 @@ function createHarness() {
 	return { terminal, writes, ui, editor, sessionManager, sessionChanges, state, ctx, controller };
 }
 
+async function expectOriginalImageFiles(
+	h: { editor: CustomEditor; sessionManager: SessionManager },
+	index: number,
+	bytes: Buffer,
+): Promise<void> {
+	const source = imageAttachmentSource(h.editor.pendingImages[index]!);
+	expect(source?.kind).toBe("image");
+	const savedPath = source!.path.startsWith("local://")
+		? resolveLocalUrlToPath(source!.path, {
+				getArtifactsDir: () => h.sessionManager.getArtifactsDir(),
+				getSessionId: () => h.sessionManager.getSessionId(),
+			})
+		: source!.path;
+	expect(await Bun.file(savedPath).bytes()).toEqual(new Uint8Array(bytes));
+	const link = h.editor.pendingImageLinks[index]!;
+	expect(link).toBeDefined();
+	expect(h.editor.imageLinks?.[index]).toBe(link);
+	expect(await Bun.file(link).bytes()).toEqual(new Uint8Array(bytes));
+}
+
 /** Hold one real preparation result. The final dimension result marks the last asynchronous step. */
 function deferPreparation(stage: PreparationStage) {
 	const entered = Promise.withResolvers<void>();
@@ -449,15 +469,8 @@ describe("InputController enhanced-paste editor commit", () => {
 		h.terminal.sendInput(packet(`type=read:status=DONE:id=${id}`));
 		expect(h.editor.pendingImages).toHaveLength(1);
 		expect(h.editor.getExpandedText()).toBe("draft [Image #1, 1x1] ");
-		const image = h.editor.pendingImages[0]!;
-		const link = h.editor.pendingImageLinks[0]!;
-		expect(imageAttachmentSource(image)).toEqual({ path: link, kind: "image" });
-		expect(h.editor.imageLinks).toEqual([link]);
-		const savedPath = resolveLocalUrlToPath(link, {
-			getArtifactsDir: () => h.sessionManager.getArtifactsDir(),
-			getSessionId: () => h.sessionManager.getSessionId(),
-		});
-		expect(await Bun.file(savedPath).bytes()).toEqual(new Uint8Array(PNG));
+		expect(await imageLoading.imageDecodeFailureReason(h.editor.pendingImages[0]!, true)).toBeNull();
+		await expectOriginalImageFiles(h, 0, PNG);
 	});
 
 	for (const littleEndian of [true, false]) {
@@ -479,15 +492,7 @@ describe("InputController enhanced-paste editor commit", () => {
 			expect(image.mimeType).toBe("image/png");
 			expect(Buffer.from(image.data, "base64").subarray(0, 8)).toEqual(PNG.subarray(0, 8));
 			expect(await imageLoading.imageDecodeFailureReason(image, true)).toBeNull();
-			const link = h.editor.pendingImageLinks[0]!;
-			expect(link).toMatch(/^local:\/\/pasted-image-[0-9a-f]+\.tiff$/);
-			expect(imageAttachmentSource(image)).toEqual({ path: link, kind: "image" });
-			expect(h.editor.imageLinks).toEqual([link]);
-			const savedPath = resolveLocalUrlToPath(link, {
-				getArtifactsDir: () => h.sessionManager.getArtifactsDir(),
-				getSessionId: () => h.sessionManager.getSessionId(),
-			});
-			expect(await Bun.file(savedPath).bytes()).toEqual(new Uint8Array(bytes));
+			await expectOriginalImageFiles(h, 0, bytes);
 		});
 	}
 
@@ -505,10 +510,7 @@ describe("InputController enhanced-paste editor commit", () => {
 		await held.finish();
 		expect(h.editor.pendingImages).toHaveLength(1);
 		expect(h.editor.getExpandedText()).toBe("draft [Image #1, 1x1] ");
-		expect(imageAttachmentSource(h.editor.pendingImages[0]!)).toEqual({
-			path: h.editor.pendingImageLinks[0]!,
-			kind: "image",
-		});
+		await expectOriginalImageFiles(h, 0, PNG);
 	});
 
 	it("numbers a later local image before a verified image whose dimensions are pending", async () => {
@@ -523,10 +525,9 @@ describe("InputController enhanced-paste editor commit", () => {
 		expect(h.editor.getExpandedText()).toBe("draft [Image #1, 1x1] ");
 		await held.finish();
 		expect(h.editor.getExpandedText()).toBe("draft [Image #1, 1x1] [Image #2, 1x1] ");
-		expect(h.editor.pendingImages.map(imageAttachmentSource)).toEqual([
-			{ path: localPath, kind: "image" },
-			{ path: h.editor.pendingImageLinks[1]!, kind: "image" },
-		]);
+		expect(imageAttachmentSource(h.editor.pendingImages[0]!)).toEqual({ path: localPath, kind: "image" });
+		await expectOriginalImageFiles(h, 0, PNG);
+		await expectOriginalImageFiles(h, 1, PNG);
 		expect(h.editor.pendingImageLinks[0]).toBe(localPath);
 		expect(h.editor.imageLinks).toEqual(h.editor.pendingImageLinks);
 	});

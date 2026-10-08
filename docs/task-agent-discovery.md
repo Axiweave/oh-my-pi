@@ -51,7 +51,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 
 OMP discovers user agents from `~/.omp/agent/agents/*.md` and project agents from `.omp/agents/*.md`.
 
-Give the agent a role alias in frontmatter, then dispatch it by name. For model routing, task dispatch sets only `agent`; it does not set a worker model:
+To use the agent's role alias, dispatch it by name and omit a per-call `model`:
 
 `~/.omp/agent/agents/reviewer.md`:
 
@@ -222,18 +222,22 @@ A missing name fails preflight with `Unknown agent "...". Available: ...`; no su
 
 For task dispatch, model precedence is:
 
-1. the call's own `model` selector (task item / flat call, or eval `agent(model=…)`)
-2. `task.agentModelOverrides[agentName]`
-3. the agent frontmatter's prioritized `model` list
-4. the parent's active model, then its configured/default model fallback
+1. The call's `model` selector from a task item, a flat task call, eval `agent()`, or eval `workpool()`.
+2. Review-plan remapping, when it applies.
+3. `task.agentModelOverrides[agentName]`.
+4. The agent frontmatter's prioritized `model` list.
+5. The parent's active model, then its configured/default model fallback.
 
-Role aliases in any of the first three sources are expanded through `modelRoles`, except `@default`
-(equivalently `*`), which names step 4 itself: it resolves to the parent's active model rather than
-to `modelRoles.default`, so a child asked for `@default` runs whatever its parent switched to. A
-per-call `model` is validated before dispatch: the ambiguous literals `default`/`inherit` are
-rejected in favor of an explicit `@default`, and a selector that expands to nothing or matches no
-available model fails the spawn naming the selector rather than silently falling through to a
-lower-precedence source.
+This fork retains per-call model selection.
+Role aliases in the first four sources expand through `modelRoles`, except `@default` (equivalently `*`).
+`@default` selects the parent's live model instead of `modelRoles.default`.
+The per-call selector wins over review-plan remapping, saved agent overrides, and frontmatter.
+
+The shared preflight validates a per-call `model` before dispatch.
+Use `@default` instead of the ambiguous literals `default` or `inherit`.
+An empty selection or a selector with no available match fails the spawn and names the selector.
+The resolver does not silently select a lower-precedence source.
+For a task batch, set `model` on each task item. A top-level batch `model` remains invalid.
 
 After policy resolution, the `before_subagent_spawn` extension hook runs once for the actual dispatch. It can block the spawn or replace the resolved model patterns; a routing note is carried into progress metadata.
 
@@ -256,6 +260,23 @@ parked agent revived after a restart keeps its per-agent tier instead of re-deri
 `tier.subagent`. The entry is looked up by task/eval dispatch only; Vibe workers launched through
 the same executor keep `tier.subagent`. Service tiers are configuration-only; agent frontmatter and
 the task/eval wire formats do not expose a tier field or automatic Fast policy.
+
+Account selection is independent of model and service-tier selection: an exact, case-sensitive
+`task.agentAccountPools[agentName]` entry maps provider ids to OAuth identity keys (the `identityKey`
+values broker [client account pools](./auth-broker-gateway.md#client-account-pools-routing-not-authorization)
+use, such as `email:<address>|org:<id>` for Anthropic; [`omp usage accounts`](./cli-reference.md)
+lists them). For each listed provider the child authenticates
+only with those accounts: ranking, the parent's copied account affinity, restored pins, fallback
+passes, and credential rotation stay inside the pool, and runtime, environment, and stored API keys
+are not used; a `models.yml` `apiKey` for the provider fails the request instead of sending a pooled
+token to that endpoint. When no pooled account can serve, the request fails with `No API key for
+provider: … restricted to its OAuth account pool` instead of borrowing another account; an empty
+list allows no account. Pools do not pick models, so model and retry-fallback policy still decide
+which provider the child calls. The pool covers every key lookup the agent makes, whatever provider
+session id it carries: fresh or reset sessions, advisors, title generation, skill compression, and
+subagents it spawns without their own entry (an entry of their own replaces it). Vibe workers take
+the pool from their first turn, and a parked agent revived in the same process or after a restart
+takes the live entry for its agent name. A custom SDK `getApiKey` resolver bypasses pools.
 
 Runtime output schema precedence is:
 

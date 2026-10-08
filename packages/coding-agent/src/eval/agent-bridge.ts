@@ -92,8 +92,7 @@ function parseAgentArgs(args: unknown): EvalAgentArgs {
 	if (result instanceof type.errors) {
 		throw new ToolError(`agent() received invalid arguments: ${result.summary}`);
 	}
-	// The wire layer owns blank and malformed-array rejection so
-	// the shared preflight's empty-selector carve-out stays internal-only.
+	// The wire layer rejects empty selectors before the shared preflight permits internal inheritance.
 	const selectorProblem = invalidModelSelectorReason(result.model, "agent()");
 	if (selectorProblem) throw new ToolError(selectorProblem);
 	return result;

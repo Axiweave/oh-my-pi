@@ -231,6 +231,44 @@ describe("CustomEditor queue shorthand decoration", () => {
 		expect(unknown.decorateText("/never-registered", { line: 0, startCol: 3, endCol: 20 })).toBe("/never-registered");
 	});
 
+	it("refreshes command recognition after a host edit of an already rendered queue body", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider(
+				[
+					{ name: "old", description: "Old command" },
+					{ name: "speckit.plan", description: "Plan a feature" },
+				],
+				"/tmp",
+			),
+		);
+		editor.setText("->\n/old fix the bug");
+		editor.handleInput("\x1b[D");
+		editor.handleInput("\x1b[D");
+		expect(editor.render(80).join("\n")).toContain(theme.fg("accent", "\x1b[1m/old\x1b[22m"));
+
+		editor.setLeadingSlashCommand("speckit.plan", 1);
+		expect(editor.render(80).join("\n")).toContain(theme.fg("accent", "\x1b[1m/speckit.plan\x1b[22m"));
+		editor.insertText("X");
+		expect(editor.getText()).toBe("->\n/speckit.plan fix the bXug");
+	});
+
+	it("moves inline command recognition with a host keyword edit after an earlier render", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider([{ name: "skill:trace", description: "Trace a feature" }], "/tmp"),
+		);
+		editor.setText("->\nfix the bug /skill:trace");
+		editor.moveToLineStart();
+		const accent = theme.fg("accent", "\x1b[1m/skill:trace\x1b[22m");
+		expect(editor.render(80).join("\n")).toContain(accent);
+
+		editor.insertLeadingKeyword("ultrathink", 1);
+		expect(editor.render(80).join("\n")).toContain(accent);
+		editor.insertText("X");
+		expect(editor.getText()).toBe("->\nultrathink Xfix the bug /skill:trace");
+	});
+
 	it("re-reads command recognition when the provider is replaced mid-draft", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.setText("-> /speckit.plan");
@@ -273,6 +311,25 @@ describe("CustomEditor bracketed path paste", () => {
 		expect(extractBracketedImagePastePaths(bracketedPaste("./images/icon-photo-default.png"))).toEqual([
 			"./images/icon-photo-default.png",
 		]);
+	});
+
+	it("attaches escaped home paths without unescaping Windows tilde directories", () => {
+		for (const [pasted, imagePath] of [
+			[String.raw`\~/Pictures/image.png`, "~/Pictures/image.png"],
+			[String.raw`C:\~\capture.png`, String.raw`C:\~\capture.png`],
+		]) {
+			const { editor } = makeEditor();
+			const attached: string[] = [];
+			editor.onPasteImagePath = path => {
+				attached.push(path);
+			};
+
+			editor.handleInput(bracketedPaste(pasted));
+
+			expect(attached).toEqual([imagePath]);
+			expect(editor.getText()).toBe("");
+			expect(extractImagePathFromText(pasted)).toBe(imagePath);
+		}
 	});
 
 	it("routes a pasted video path through the attachment callback", () => {

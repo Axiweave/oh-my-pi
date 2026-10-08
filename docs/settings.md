@@ -801,9 +801,11 @@ memory:
 | `compaction.methodOrder`      | array   | `remote, snapcompact, handoff, shake, soft` | Ordered fallbacks. `remote` uses provider-native server compaction (OpenAI Responses compact, Anthropic compaction beta); unavailable or failed methods advance. |
 | `compaction.thresholdPercent` | number  | `-1`                                     | Percent-of-context trigger; `-1` = reserve-based default.                                                                                                                                                                                 |
 | `compaction.thresholdTokens`  | number  | `-1`                                     | Fixed token trigger when `> 0`.                                                                                                                                                                                                           |
+| `compaction.modelThresholds`  | record  | `{}`                                     | Per-model token count (`90000`) or percentage (`"80%"`). Exact keys beat the longest matching prefix. A matching `modelOverrides` policy wins. See below. |
+| `compaction.modelThresholdsEnabled` | boolean | `true`                             | Whether either model compaction map applies. A task agent with a threshold override runs with both maps off. |
 | `task.agentCompactionThresholdOverrides` | record | `{}` | Exact-name task/eval agent → compaction trigger: a positive token count (`90000`) or a percentage string (`"80%"`). See below. |
 | `compaction.reserveTokens`    | number  | _(unset)_                                | Absolute reserve floor. When unset, the effective reserve is the larger of `16384` and 15% of the context window; if that default would leave no practical small-window budget, it falls back to the 15% reserve.                         |
-| `compaction.modelOverrides`   | record  | `{}`                                     | Maps `provider/model-id`, `provider/*`, or `*/model-id` to a `{thresholdTokens, thresholdPercent, reserveTokens}` policy. Exact key beats wildcards. A match replaces the whole global threshold policy. See [compaction-model-overrides.md](./compaction-model-overrides.md). |
+| `compaction.modelOverrides`   | record  | `{}`                                     | Maps model selectors or wildcards to a `{thresholdTokens, thresholdPercent, reserveTokens}` policy. Exact keys beat the first matching wildcard. A match replaces the whole threshold policy and wins over `modelThresholds`. See [compaction-model-overrides.md](./compaction-model-overrides.md). |
 | `compaction.keepRecentTokens` | number  | `20000`                                  | Recent-history token budget for summary compaction. |
 | `compaction.autoContinue`     | boolean | `true`                                   | Continue automatically after compaction.                                                                                                                                                                                                  |
 | `memory.backend`              | enum    | `off`                                    | `off`, `local`, `hindsight`, `mnemopi`. Each backend has its own `hindsight.*` / `mnemopi.*` / `memories.*` tuning keys.                                                                                                                  |
@@ -814,6 +816,37 @@ memory:
 A positive `compaction.thresholdTokens` wins over `thresholdPercent` and is clamped below the context window. Otherwise, a positive percentage is clamped to 1–99%; non-positive percentages use the reserve-based threshold.
 
 `compaction` has additional tuning keys (idle compaction, supersede/drop heuristics) visible in `omp config list`. See [Compaction](./compaction.md) for the full strategy reference.
+
+`compaction.modelThresholds` replaces both global threshold fields when no `compaction.modelOverrides` policy matches.
+It retains the global reserve.
+The `/models` preview shows the effective trigger and its source.
+
+To edit a model threshold:
+
+1. Select a role or fallback row in the **Roles** view.
+2. Press `k`, or click **Compaction limit**.
+3. Enter `90000`, `90k`, `1M`, or `80%`.
+
+Empty input removes the exact model entry.
+The hub writes the exact `provider/model-id` key to the global config.
+By hand:
+
+```yaml
+compaction:
+  thresholdPercent: 80
+  modelThresholds:
+    "deepseek/*": 90000
+    "openrouter/anthropic/*": "60%"
+    anthropic/claude-opus-5.5: 150000
+```
+
+- An exact `provider/model-id` key wins. Otherwise, the longest matching `*`-terminated prefix applies. Only the last character can be `*`. Every key needs a `provider/` part.
+- Entry values follow the same rules as `task.agentCompactionThresholdOverrides` below. `null` clears a lower-layer entry.
+- Model switches, context promotion, and advisors each use their active model's effective policy.
+- A matching `compaction.modelOverrides` policy wins over every `compaction.modelThresholds` entry, including an exact model key.
+- A `task.agentCompactionThresholdOverrides` entry wins over both model maps for that agent, including live edits.
+- The hub rejects a new threshold when a matching fork policy or disabled model maps would hide it.
+- If the project config sets the same model key, edit that key in the project config instead.
 
 Per-agent compaction triggers for task/eval subagents. This keeps the main session at 40,000 tokens while `scout` compacts at 80% of its window and `task` at 90,000 tokens:
 
@@ -830,7 +863,7 @@ task:
 - Keys are exact, case-sensitive agent names (`scout` does not match `Scout`).
 - A number is a fixed token trigger (positive integer); a `"N%"` string is a percentage of the context window, `0 < N ≤ 100`. An entry replaces both `compaction.thresholdTokens` and `compaction.thresholdPercent` for that agent.
 - `null` clears an entry set by a lower-priority settings layer. Any other value fails settings load.
-- Agents without an entry — including agents spawned by an overridden agent — use the main session's `compaction.*` thresholds. The main session and Vibe workers are unaffected.
+- Agents without an entry, including children of an overridden agent, use the root compaction policy and their own model's entries. The main session and Vibe workers keep their existing policies.
 - The resolved trigger is stored with the subagent session and reused when it is revived.
 
 ### Appearance and terminal
@@ -996,6 +1029,7 @@ searxng:
 | `searxng.token`                     | string  | _(unset)_ | SearXNG token; also `searxng.basicUsername`/`searxng.basicPassword`/`searxng.categories`/`searxng.language`/`searxng.engines` (comma-separated engine names or bang shortcuts, e.g. `ddg, br, startpage`, sent as the API's `engines=` parameter)/`searxng.safesearch`.                                                                                                                                                                                                                                                                                                 |
 | `auth.broker.url`                   | string  | _(unset)_ | Auth-broker URL. The actual credential connection uses env then the main global config, not project/config-overlay values.                                                                                                                                                                                                                                                                                                                                                                                  |
 | `auth.broker.token`                 | string  | _(unset)_ | Auth-broker token. `OMP_AUTH_BROKER_TOKEN` wins over the main global config; the broker token file is a fallback. Project/config-overlay values do not redirect credentials.                                                                                                                                                                                                                                                                                                                                                                              |
+| `task.agentAccountPools`            | record  | `{}`      | Exact-name task/eval agent → provider id → OAuth identity keys (the `identityKey` values of [client account pools](./auth-broker-gateway.md#client-account-pools-routing-not-authorization), e.g. `email:<address>\|org:<id>` for Anthropic; `omp usage accounts` lists them). The agent authenticates for each listed provider only with those accounts, never another account or an API key, and fails when none can serve; an empty list allows no account. A malformed entry fails settings load. See [Task agent discovery](./task-agent-discovery.md#model-and-structured-output-precedence). |
 | `secrets.enabled`                   | boolean | `false`   | Enable configured secret obfuscation and built-in credential-shaped token redaction before provider requests. See [Secret obfuscation](./secrets.md).                                                                                                                                                                                                                                                                                  |
 
 Provider credentials and custom model definitions are configured separately — see [Providers](./providers.md) and [Models](./models.md).

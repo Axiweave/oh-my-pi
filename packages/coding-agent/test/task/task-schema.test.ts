@@ -122,5 +122,23 @@ describe("per-call model schema boundaries", () => {
 			tasks: [{ task: "Do work", solutionSpace: "c", model: models }],
 		});
 		expect(batch instanceof type.errors).toBe(false);
+		expect(batch).toMatchObject({ tasks: [{ model: models }] });
 	});
+});
+
+describe("five-level task effort", () => {
+	for (const batchEnabled of [false, true]) {
+		it(`accepts the five-level ladder and rejects old effort names (batch=${batchEnabled})`, () => {
+			const schema = getTaskSchema({ isolationEnabled: false, effortEnabled: true, batchEnabled });
+			for (const effort of ["low", "medium", "high", "xhigh", "max", "lo", "med", "hi"]) {
+				const item = { task: "Do work", solutionSpace: "c", effort };
+				const parsed = schema(batchEnabled ? { context: "Shared context", tasks: [item] } : item);
+				const invalid = ["lo", "med", "hi"].includes(effort);
+				expect(parsed instanceof type.errors).toBe(invalid);
+				if (!invalid) {
+					expect(parsed).toMatchObject(batchEnabled ? { tasks: [{ effort }] } : { effort });
+				}
+			}
+		});
+	}
 });

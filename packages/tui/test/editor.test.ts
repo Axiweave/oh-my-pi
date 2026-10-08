@@ -446,10 +446,26 @@ describe("Editor component", () => {
 		it("inserts a command after the message start a host names", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.setText("-> fix the bug");
+			editor.handleInput("\x1b[D");
+			editor.handleInput("\x1b[D");
 
 			// The `->` queue shorthand owns the line head: the command goes after it.
 			editor.setLeadingSlashCommand("compact", 0, 3);
 			expect(editor.getText()).toBe("-> /compact fix the bug");
+			editor.handleInput("X");
+			expect(editor.getText()).toBe("-> /compact fix the bXug");
+		});
+
+		it("keeps a body cursor at the same text after keyword insertion", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("-> /compact fix the bug");
+			editor.handleInput("\x1b[D");
+			editor.handleInput("\x1b[D");
+
+			editor.insertLeadingKeyword("ultrathink", 0, 3);
+			expect(editor.getText()).toBe("-> /compact ultrathink fix the bug");
+			editor.handleInput("X");
+			expect(editor.getText()).toBe("-> /compact ultrathink fix the bXug");
 		});
 
 		it("appends the body line when the draft has none", () => {

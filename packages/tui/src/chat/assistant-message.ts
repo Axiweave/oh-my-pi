@@ -2,7 +2,7 @@ import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-a
 import { type Component, Container } from "../tui";
 import { Image, type ImageBudget } from "../components/image";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
-import { Markdown, type MarkdownTheme } from "../components/markdown";
+import { Markdown, type MarkdownTheme, rewriteMarkdownLinkDestinations } from "../components/markdown";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
@@ -253,16 +253,22 @@ export class AssistantMessageComponent extends Container {
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
 	/**
 	 * Payload keys ({@link imagePayloadKey}) whose Kitty PNG conversion this
-	 * component already awaits, so a re-delivered image neither re-encodes nor
+	 * component is awaiting, so a re-delivered image neither re-encodes nor
 	 * schedules a second {@link updateContent} cascade. The conversions
-	 * themselves are shared process-wide by {@link convertImageToPngShared}.
+	 * themselves live in the bounded process-wide cache behind
+	 * {@link convertImageToPngShared}; an evicted one is redone on the next
+	 * render instead of being pinned here for the session.
 	 */
 	#kittyConversionsAwaited = new Set<string>();
 	/**
-	 * Conversions this component displays, held so a later re-render (theme
-	 * invalidation) still finds them after the bounded shared cache evicts them.
+	 * Conversions the current image children display, by payload key. Rebuilt
+	 * on every full render pass ({@link updateContent}), so a conversion is held
+	 * only while it is on screen — a re-render after the shared cache evicted
+	 * it still finds it — and released once hidden or replaced.
 	 */
-	#kittyConverted = new Map<string, ImageContent>();
+	#kittyDisplayed = new Map<string, ImageContent>();
+	/** The previous pass's {@link #kittyDisplayed}, readable only during a render pass. */
+	#kittyPreviouslyDisplayed: Map<string, ImageContent> | undefined;
 	#showImages = true;
 	#showToolResultImages = true;
 	/** Charts under numeric tables; off for subagent transcripts. */
@@ -364,6 +370,8 @@ export class AssistantMessageComponent extends Container {
 	#textColorTransform?: (text: string) => string;
 	#linkTargets: ReadonlyMap<string, string> = EMPTY_LINK_TARGETS;
 	#markdownTheme: MarkdownTheme | undefined;
+	/** Text-block sources with {@link #linkTargets} applied, for the native `md` nodes; reset with the targets. */
+	#nativeLinkSources = new Map<string, string>();
 	/** Block this reply reacts to; undefined when the preceding block takes no reactions. */
 	#reactionTarget: ReactionTarget | undefined;
 	/** Reaction lifted from the reply's opening emoji, once resolved. */
@@ -415,6 +423,8 @@ export class AssistantMessageComponent extends Container {
 		this.#fastPathKey = undefined;
 		this.#fastPathItems = undefined;
 		for (const block of this.#figureBlocks.values()) block.restyle();
+		this.#nativeLinkSources.clear();
+		this.#nativeViewVersion++;
 		if (this.#lastMessage) {
 			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
@@ -842,8 +852,20 @@ export class AssistantMessageComponent extends Container {
 				const streaming = live && index === tailIndex;
 				if (content.type === "text" && canonicalizeMessage(content.text)) {
 					const source = content.text.trim();
+					// The terminal renders this source itself and would resolve a relative
+					// link against its own idea of the cwd: hand it the session-resolved
+					// targets (resolved once the segment closes, so never while streaming).
+					const linked = (text: string, live: boolean): string => {
+						if (live || this.#linkTargets.size === 0) return text;
+						const targets = this.#linkTargets;
+						const resolved =
+							this.#nativeLinkSources.get(text) ??
+							rewriteMarkdownLinkDestinations(text, href => targets.get(href));
+						this.#nativeLinkSources.set(text, resolved);
+						return resolved;
+					};
 					if (!this.#showImages || !this.#showTableCharts || !hasChartTable(source)) {
-						children.push(markdown(`t${index}`, `t${index}`, source, streaming));
+						children.push(markdown(`t${index}`, `t${index}`, linked(source, streaming), streaming));
 						continue;
 					}
 					// A chart follows its table as an SVG image node; the prose splits around it.
@@ -851,9 +873,8 @@ export class AssistantMessageComponent extends Container {
 					segments.forEach((segment, part) => {
 						const slot = part === 0 ? `t${index}` : `t${index}.${part}`;
 						if (segment.kind === "markdown") {
-							children.push(
-								markdown(slot, slot, segment.text.trim(), streaming && part === segments.length - 1),
-							);
+							const live = streaming && part === segments.length - 1;
+							children.push(markdown(slot, slot, linked(segment.text.trim(), live), live));
 							return;
 						}
 						const chart = lookupTableChart(segment.table);
@@ -1470,22 +1491,24 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	/** A displayable Kitty PNG for a non-PNG `image`: the shared cache, else this component's displayed copy. */
+	#kittyConversion(image: ImageContent): ImageContent | undefined {
+		const cached = cachedPngConversion(image);
+		if (cached) return cached;
+		const key = imagePayloadKey(image);
+		return this.#kittyDisplayed.get(key) ?? this.#kittyPreviouslyDisplayed?.get(key);
+	}
+
 	#convertImagesForKitty(entries: Array<{ image: ImageContent; key: string }>): void {
 		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
 		for (const { image } of entries) {
-			if (image.mimeType === "image/png") continue;
+			if (image.mimeType === "image/png" || this.#kittyConversion(image)) continue;
 			const key = imagePayloadKey(image);
-			if (this.#kittyConverted.has(key)) continue;
-			const cached = cachedPngConversion(image);
-			if (cached) {
-				this.#kittyConverted.set(key, cached);
-				continue;
-			}
 			if (this.#kittyConversionsAwaited.has(key)) continue;
 			this.#kittyConversionsAwaited.add(key);
 			convertImageToPngShared(image)
-				.then(converted => {
-					this.#kittyConverted.set(key, converted);
+				.then(() => {
+					this.#kittyConversionsAwaited.delete(key);
 					if (this.#lastMessage) {
 						this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 					}
@@ -1503,10 +1526,11 @@ export class AssistantMessageComponent extends Container {
 
 		if (withLeadingSpacer) this.#contentContainer.addChild(new Spacer(1));
 		for (const { image, key } of entries) {
-			const displayImage =
-				TERMINAL.imageProtocol === ImageProtocol.Kitty && image.mimeType !== "image/png"
-					? this.#kittyConverted.get(imagePayloadKey(image))
-					: image;
+			let displayImage: ImageContent | undefined = image;
+			if (TERMINAL.imageProtocol === ImageProtocol.Kitty && image.mimeType !== "image/png") {
+				displayImage = this.#kittyConversion(image);
+				if (displayImage) this.#kittyDisplayed.set(imagePayloadKey(image), displayImage);
+			}
 			if (TERMINAL.imageProtocol && displayImage) {
 				this.#contentContainer.addChild(
 					new Image(
@@ -1721,6 +1745,8 @@ export class AssistantMessageComponent extends Container {
 
 		// Clear content container
 		this.#contentContainer.clear();
+		this.#kittyPreviouslyDisplayed = this.#kittyDisplayed;
+		this.#kittyDisplayed = new Map();
 		this.#thinkingExtensions.clear();
 		this.#emergencyText = undefined;
 		this.#thinkingDots = undefined;
@@ -1806,6 +1832,7 @@ export class AssistantMessageComponent extends Container {
 		}
 
 		this.#renderToolImages();
+		this.#kittyPreviouslyDisplayed = undefined;
 		const errorPresentation = resolveAssistantErrorPresentation(message);
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");
 		if (errorPresentation.kind === "compact-recovered") {

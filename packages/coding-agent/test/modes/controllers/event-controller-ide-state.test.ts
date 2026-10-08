@@ -9,6 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
@@ -67,9 +68,9 @@ function fakeIdeManager({
 	};
 }
 
-/** Drain the notify → then/catch → finally (→ re-flush) microtask chain deterministically. */
+/** Wait one event-loop turn to drain notification and settlement continuations. */
 async function flushMicrotasks(): Promise<void> {
-	for (let i = 0; i < 10; i++) await Promise.resolve();
+	await setImmediate();
 }
 
 const originalWarpProtocolVersion = process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
@@ -124,6 +125,9 @@ function makeTurnEndContext(
 	const session = {
 		isStreaming: false,
 		isCompacting: false,
+		hasPostPromptWork: false,
+		queuedMessageCount: 0,
+		waitForIdle: async () => {},
 		messages: [] as AssistantMessage[],
 		getLastAssistantMessage: () => options.lastAssistantMessage,
 		hasPendingAsyncWork: () => false,
@@ -199,9 +203,11 @@ describe("EventController IDE session-state publishing", () => {
 		}
 	});
 
-	it("does not publish for a non-terminal agent_end", async () => {
+	it("does not publish for a non-terminal agent_end with queued input", async () => {
 		const fake = fakeIdeManager();
-		const controller = new EventController(makeTurnEndContext(fake.manager));
+		const ctx = makeTurnEndContext(fake.manager);
+		Object.assign(ctx.session, { queuedMessageCount: 1 });
+		const controller = new EventController(ctx);
 
 		await controller.handleEvent({
 			...makeAgentEndEvent([makeAssistantMessage("stop")]),

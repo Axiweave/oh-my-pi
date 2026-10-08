@@ -111,13 +111,20 @@ describe("status line speckit-auto mode segment", () => {
 		const text = Bun.stripANSI(renderSegment("mode", both).content);
 		expect(text.indexOf("Speckit · on")).toBeGreaterThanOrEqual(0);
 		expect(text.indexOf("Prewalk")).toBeGreaterThan(text.indexOf("Speckit · on"));
-		const described = describeSegment("mode", both)?.spans.map(part => part.t).join("") ?? "";
+		const described =
+			describeSegment("mode", both)
+				?.spans.map(part => part.t)
+				.join("") ?? "";
 		expect(described).toContain("Speckit · on");
 		expect(described).toContain("Prewalk");
 
 		const alone = createContext(null, null, prewalk);
 		expect(Bun.stripANSI(renderSegment("mode", alone).content)).toContain("Prewalk");
 		expect(Bun.stripANSI(renderSegment("mode", alone).content)).not.toContain("Speckit");
-		expect(describeSegment("mode", alone)?.spans.map(part => part.t).join("")).toBe("Prewalk");
+		expect(
+			describeSegment("mode", alone)
+				?.spans.map(part => part.t)
+				.join(""),
+		).toBe("Prewalk");
 	});
 });
