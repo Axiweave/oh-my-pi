@@ -13,6 +13,7 @@ import type { Model, ServiceTierByFamily } from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
@@ -379,6 +380,66 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(appendSessionInit).toHaveBeenCalledWith(expect.objectContaining({ tools: ["read", "write", "yield"] }));
+	});
+
+	it("persists @advisor expanded against the spawning owner's roles so cold revival keeps its model", async () => {
+		const session = yieldEmittingSession();
+		const appendSessionInit = vi.spyOn(session.sessionManager, "appendSessionInit");
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+		// A nested spawn's owner is a parent subagent whose advisor role overrides the root's.
+		const parentSettings = Settings.isolated({ modelRoles: { advisor: "anthropic/claude-sonnet-4-5" } });
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "nested-advised-child",
+			settings: parentSettings,
+			agent: { ...baseAgent, advisor: "@advisor:high" },
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.settings?.getModelRole("advisor")).toBe("anthropic/claude-sonnet-4-5:high");
+		expect(appendSessionInit).toHaveBeenCalledWith(
+			expect.objectContaining({ advisor: "anthropic/claude-sonnet-4-5:high" }),
+		);
+	});
+
+	it("persists the owner's raw advisor chain while the child keeps inherited cyber protection", async () => {
+		const approvedModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const excludedModel = getBundledModel("anthropic", "claude-haiku-4-5");
+		if (!approvedModel || !excludedModel) throw new Error("Expected bundled models to exist");
+		const approved = `${approvedModel.provider}/${approvedModel.id}`;
+		const excluded = `${excludedModel.provider}/${excludedModel.id}`;
+		const rawChain = `${excluded},${approved}`;
+		const expandedAdvisor = `${excluded}:high,${approved}:high`;
+		const parentSettings = Settings.isolated({
+			modelRoles: { advisor: rawChain, smol: rawChain },
+			cyberModels: [approved],
+		});
+		const allowlist = resolveCyberAllowlist(parentSettings, [approvedModel, excludedModel]);
+		if (!allowlist) throw new Error("The test allowlist did not resolve.");
+		parentSettings.applyCyberRoles("test", allowlist);
+		const session = yieldEmittingSession();
+		const appendSessionInit = vi.spyOn(session.sessionManager, "appendSessionInit");
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "protected-advised-child",
+			settings: parentSettings,
+			agent: { ...baseAgent, advisor: "@advisor:high" },
+		});
+
+		expect(result.exitCode).toBe(0);
+		const childSettings = spy.mock.calls[0]?.[0]?.settings;
+		if (!childSettings) throw new Error("Expected child settings");
+		expect(childSettings.getCyberAllowlist()).toBe(allowlist);
+		expect(childSettings.getModelRole("advisor")).toBe(`${approved}:high`);
+		expect(childSettings.getRawModelRoles()).toMatchObject({ advisor: expandedAdvisor, smol: rawChain });
+		expect(appendSessionInit).toHaveBeenCalledWith(expect.objectContaining({ advisor: expandedAdvisor }));
+		childSettings.clearCyberRoles("parent", { operator: true });
+		expect(childSettings.getModelRole("advisor")).toBe(expandedAdvisor);
+		expect(childSettings.getModelRole("smol")).toBe(rawChain);
+		expect(parentSettings.getModelRole("advisor")).toBe(approved);
 	});
 
 	it("retains inherited MCP proxy tools for normal children", async () => {

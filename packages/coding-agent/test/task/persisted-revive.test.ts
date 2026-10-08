@@ -8,6 +8,7 @@ import { resolveThresholdTokens, shouldCompact } from "@oh-my-pi/pi-agent-core/c
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { EffectiveExtensionRoots } from "@oh-my-pi/pi-coding-agent/capability/types";
+import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
@@ -677,6 +678,71 @@ describe("persisted subagent revival", () => {
 		expect(roleAdvised.getModelRole("advisor")).toBeUndefined();
 		expect(cfgAdvisorEnabled.get(unadvised)).toBe(false);
 	});
+
+	it("keeps a nested spawn's owner-resolved advisor when reviving under root settings with a different advisor", async () => {
+		const cwd = makeTempDir("@pi-nested-advisor-revive-");
+		// What spawn persists for `@advisor:high` under a parent subagent whose advisor role is Sonnet.
+		const sessionFile = await createPersistedSession(cwd, undefined, undefined, "anthropic/claude-sonnet-4-5:high");
+		const rootSettings = Settings.isolated({ modelRoles: { advisor: "anthropic/claude-haiku-4-5" } });
+		let captured: Settings | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			captured = options?.settings;
+			return { session: createRevivedSession([]).session } as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, { settings: rootSettings })(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(captured?.getModelRole("advisor")).toBe("anthropic/claude-sonnet-4-5:high");
+	});
+
+	it.each(["expanded", "legacy-alias"] as const)(
+		"keeps raw role chains and inherited cyber protection when reviving an %s advisor pattern",
+		async patternKind => {
+			const cwd = makeTempDir("@pi-protected-advisor-revive-");
+			const approvedModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+			const excludedModel = getBundledModel("anthropic", "claude-haiku-4-5");
+			if (!approvedModel || !excludedModel) throw new Error("Expected bundled models to exist");
+			const approved = `${approvedModel.provider}/${approvedModel.id}`;
+			const excluded = `${excludedModel.provider}/${excludedModel.id}`;
+			const rawChain = `${excluded},${approved}`;
+			const expandedAdvisor = `${excluded}:high,${approved}:high`;
+			const sessionFile = await createPersistedSession(
+				cwd,
+				undefined,
+				undefined,
+				patternKind === "expanded" ? expandedAdvisor : "@advisor:high",
+			);
+			const rootSettings = Settings.isolated({
+				modelRoles: { advisor: rawChain, smol: rawChain },
+				cyberModels: [approved],
+			});
+			const allowlist = resolveCyberAllowlist(rootSettings, [approvedModel, excludedModel]);
+			if (!allowlist) throw new Error("The test allowlist did not resolve.");
+			rootSettings.applyCyberRoles("test", allowlist);
+			let captured: Settings | undefined;
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				captured = options?.settings;
+				return { session: createRevivedSession([]).session } as CreateAgentSessionResult;
+			});
+
+			const ref = createRef(sessionFile);
+			const reviver = await createFactory(cwd, undefined, { settings: rootSettings })(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await reviver(ref);
+
+			if (!captured) throw new Error("Expected revived child settings");
+			expect(captured.getCyberAllowlist()).toBe(allowlist);
+			expect(captured.getModelRole("advisor")).toBe(`${approved}:high`);
+			expect(captured.getRawModelRoles()).toMatchObject({ advisor: expandedAdvisor, smol: rawChain });
+			captured.clearCyberRoles("parent", { operator: true });
+			expect(captured.getModelRole("advisor")).toBe(expandedAdvisor);
+			expect(captured.getModelRole("smol")).toBe(rawChain);
+			expect(rootSettings.getModelRole("advisor")).toBe(approved);
+		},
+	);
 
 	it("restores the persisted custom model role before reopening the session", async () => {
 		const cwd = makeTempDir("@pi-custom-role-revive-");

@@ -110,6 +110,20 @@ describe("default web chain", () => {
 		expect(attempted).toEqual(["anthropic/claude-sonnet-4-5"]);
 	});
 
+	it("does not prepend excluded xAI models for an X-only search", async () => {
+		const session = sessionModel("anthropic", "claude-sonnet-4-5");
+		const settings = await Settings.init();
+		cfgCyberModels.override(settings, ["anthropic/claude-sonnet-4-5"]);
+		const allowlist = resolveCyberAllowlist(settings, modelRegistry.getAvailable("all"));
+		if (!allowlist) throw new Error("expected the declared allowlist to resolve");
+		settings.applyCyberRoles("test", allowlist);
+
+		await runSearchQuery({ query: "site:x.com release" }, { authStorage, modelRegistry, sessionModel: session });
+
+		expect(attempted).toContain("anthropic/claude-sonnet-4-5");
+		expect(attempted.filter(selector => selector.startsWith("xai/"))).toEqual([]);
+	});
+
 	it("skips web/hosted when the session model has no search grounding", async () => {
 		const realtime = sessionModel("openai", "gpt-realtime-2.1");
 		expect(realtime.webSearch).toBeUndefined();

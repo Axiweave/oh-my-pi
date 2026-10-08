@@ -279,7 +279,10 @@ Related APIs:
 Set `expandPromptTemplates: false` on `followUp()` to preserve literal text.
 `sendUserMessage()` and custom-message APIs do not expand commands or templates.
 
-`deliverAs: "aside"` (both APIs) delivers at the next agent step boundary without interrupting the current tool batch, instead of steering (which skips remaining tools) or waiting for the run to finish. When the session is idle both start a turn instead (in plan mode the custom message is folded into context without a turn).
+`deliverAs: "aside"` (both APIs) delivers at the next agent step boundary without interrupting the current tool batch.
+Unlike steering, it does not skip remaining tools. Unlike follow-up, it does not wait for the run to finish.
+An aside ends a running interruptible `wait` or `vibe_wait` so that the wait does not delay the message.
+When the session is idle, both APIs start a turn. In plan mode, the custom message enters context without a turn.
 
 ## `AgentSession` lifecycle and disposal
 

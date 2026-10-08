@@ -24,6 +24,18 @@
 - Fixed shutdown rearming a destructive history reset while flushing a provider's pending rows.
 - A non-fullscreen bottom overlay (model picker, model profile picker) no longer scrolls on-screen history into native scrollback. The overlay now paints over those rows and restores them when it closes, so the transcript no longer leaves a blank gap above the editor. History offered while the overlay is open is committed after it closes. When the on-screen rows are unknown (after a resize, or image rows), the overlay uses the alternate screen. A resize while the overlay covers history replays the history when the overlay closes.
 
+## [18.8.6] - 2026-10-08
+
+### Changed
+
+- Improved rendering performance for streaming long Markdown lists while preserving nested items, numbering, and reference links.
+
+### Fixed
+
+- Added package exports for the native Tern/TSP modules, allowing extensions in compiled `omp` binaries to import them.
+- Fixed the Tern `/model` picker's Roles tab so typing and Backspace consistently edit the search field without triggering role commands.
+- Fixed the session picker so sessions retain and display their directory when switching between the current folder and all-project views.
+
 ## [18.8.5] - 2026-10-08
 
 ### Added

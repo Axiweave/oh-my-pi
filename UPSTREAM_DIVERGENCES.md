@@ -3,19 +3,21 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.8.5` on 2026-10-08.
+**Reviewed against:** `v18.8.6` on 2026-10-08.
 
-**Verification:** Source setup, final `bun check`, launcher checks, and `omp --smoke-test` passed. The launcher points to this fork and reports `18.8.5`.
-The merge had conflicts in 20 files. The resolutions preserve every fork decision and retain upstream's new behavior.
-The verification exercised 2650 TypeScript test files in separate processes, including the changed fork paths and their transitive consumers.
-The first 2648-file run had eight failures. Corrected test contracts for image chip targets, async session teardown, and resumed worker effort now pass.
-The three terminal failures pass with a plain-terminal environment that removes inherited host flags and selects a dark initial palette.
-Two suites remain red with the same failures at pre-merge commit `62197d4a62`:
+**Verification:** Source setup, `bun check`, launcher checks, and `omp --smoke-test` passed.
+The launcher targets this checkout and reports `18.8.6`.
+The merge had conflicts in six files. The resolutions preserve every fork decision and retain upstream behavior.
+The resolutions also preserve raw advisor chains, filter new xAI search fallbacks, and cancel speckit-auto checks before exit planning.
+The isolated TypeScript run exercised 2908 test files. Of these, 2905 passed on the first run.
+The SIXEL suite then passed after removal of the host's `PI_FORCE_IMAGE_PROTOCOL=kitty` override.
+Two suites retain identical failures at pre-merge commit `eddc3a062b`:
 - `packages/coding-agent/test/sdk-tool-activation.test.ts`: five Cursor cases fail with `No API key found for cursor`.
-- `packages/coding-agent/test/eval/js-package-environment.test.ts`: the missing-project-package case resolves a dependency instead of rejecting it.
-The user authorized the local merge commit with these known baseline failures.
-`bun run test:rs` passes all 3240 tests, with 5 skipped. Local proxy discovery and the pinned composer resize smoke pass.
-Direct and tmux source CLI runs in separate Ghostel buffers report the correct directory through OSC 7.
+- `packages/coding-agent/test/eval/js-package-environment.test.ts`: the missing-project-package case returns exit code 0 instead of 1.
+
+The user authorized the local merge commit with these confirmed baseline failures.
+`bun run test:rs` passed all 3240 tests, with 5 skipped.
+Local proxy discovery, pinned composer resize, and direct and tmux Ghostel directory reporting passed.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -56,6 +58,16 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Why:** Upstream packages and installers replace the fork and omit its changes.
 - **Key paths:** `README.md`, `AGENTS.md`, `packages/coding-agent/README.md`, `scripts/setup.ts`, and `scripts/link-omp.sh`.
 - **Checks:** Follow the command-target and runtime checks in `README.md` under Install.
+
+### Move into an existing worktree
+
+- **Decision:** Keep `/wtmove` to move the current session into an existing worktree without creating a branch or carrying source changes.
+- **Decision:** Match branch names and worktree paths. Preserve exact-root identity for trailing spaces and Unicode spaces.
+- **Decision:** Offer existing worktrees in slash-command completion. Do not add a move destination to the launch's exit-removal list.
+- **Why:** A session must reuse an existing checkout without creating another worktree or changing its files.
+- **Key paths:** `packages/coding-agent/src/session/session-worktree.ts`, `packages/coding-agent/src/modes/controllers/command-controller.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/coding-agent/src/slash-commands/`.
+- **Checks:** `packages/coding-agent/test/session-worktree-move.test.ts`, `packages/coding-agent/test/modes/controllers/move-command.test.ts`, and `packages/coding-agent/test/session-manager/move-to.test.ts`.
+- **Retire when:** Upstream provides the same existing-worktree move and completion behavior.
 
 ### Project-local prompt history
 

@@ -24,7 +24,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const PHASE_COMMANDS = speckitAuto.SPECKIT_PHASE_COMMANDS.map(phase => `speckit.${phase}`);
@@ -204,6 +204,31 @@ describe("InteractiveMode speckit-auto mode", () => {
 		reply = sideReply;
 		return sideReply;
 	}
+
+	it("cancels a pending phase check before shutdown yields to exit planning", async () => {
+		await start();
+		await startRun("/speckit.plan");
+		turnSettles();
+		const decision = Promise.withResolvers<SpeckitVerdict>();
+		classify.mockReturnValue(decision.promise);
+		await tick();
+		expect(classify).toHaveBeenCalledTimes(1);
+		const signal = classify.mock.calls[0]?.[2].signal;
+		expect(signal?.aborted).toBe(false);
+		vi.spyOn(postmortem, "quit").mockResolvedValue();
+		mode.ui.terminal.drainInput = async () => {};
+
+		const closing = mode.shutdown();
+		const abortedBeforeExitPlanning = signal?.aborted;
+		decision.resolve(CLEAN);
+		await flush();
+		await tick(2);
+		await closing;
+
+		expect(abortedBeforeExitPlanning).toBe(true);
+		expect(texts()).toEqual([]);
+		expect(classify).toHaveBeenCalledTimes(1);
+	});
 
 	describe("start timing and the guard", () => {
 		it("submits the successor one tick after the decision, not before", async () => {

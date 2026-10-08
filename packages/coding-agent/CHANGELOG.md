@@ -52,6 +52,9 @@
 
 ### Fixed
 
+- X-only web searches now check the cyber allowlist before adding xAI fallback models.
+- Shutdown and restart cancel pending speckit-auto checks before any worktree exit prompt can wait for input.
+- Subagent creation and cold revival keep raw advisor role chains under inherited cyber protection. Releasing protection restores the configured chain.
 - Fixed speckit-auto answering "Yes, proceed with your recommended option." to a tasks reply that ended with "Run `/speckit.implement`, or say `go`". The agent then ran implement inside the tasks turn and skipped analyze. The mode now removes only that closing handoff sentence before it checks the reply, so it starts the next phase itself. The rest of the paragraph stays, so a completion report, scope request, or error next to the offer still counts. The mode never auto-answers a message that offers another phase command. A plain mention of another phase does not count as an offer. The judge now reads a choice between options as a scope decision that holds the run.
 - Fixed speckit-auto holding with "no readable analyze report" when analyze printed its report in an earlier message and ended with a short summary. The mode now reads the report from the earlier messages of the turn.
 - Fixed the speckit-auto text check (used when the turn check model fails) in these cases:
@@ -119,6 +122,32 @@
 - Fixed the transcript rebuild throwing `Settings not initialized` when a host renders chat rows before `Settings.init()`. Both command-card render gates now fall back to the `display.collapseCommandCards` schema default.
 - Fixed Ghostel prompt navigation landing on blank padding instead of the first input character, including multiline prompts. Synthetic messages and expanded command bodies no longer create extra prompt markers.
 - Fixed the Edit tool's streaming diff preview changing height on nearly every update once a long line pushed the window past its budget. The tail window packed whole lines, so the row count it drew re-quantized between the budget and one line less on each tick, moving the frame's bottom border and re-clipping the block's head in the transcript. A single line taller than the whole window was admitted whole and grew the frame to the line's own row count. The window is now measured on the rows the diff renderer actually draws, clamped to the budget, and padded to a constant height once it saturates, matching the Write tool's streaming preview.
+
+## [18.8.6] - 2026-10-08
+
+### Added
+
+- Added per-session Git worktree support with `worktree.onStart` and `worktree.onExit` settings to create an isolated worktree for each session and clean it up when the session ends.
+- Expanded xAI web search with X post search, including X-only and author-specific queries, author exclusions, date and recency filters, and automatic xAI routing when credentials are available.
+- Added xAI-powered reading of X posts, threads and replies, profiles, searches, and hashtags when logged in, replacing the unavailable Nitter mirrors.
+
+### Changed
+
+- Web search now prefers an authenticated `xai-oauth` login over an `xai` API key when both are available, unless `modelProviderOrder` specifies a different order.
+
+### Fixed
+
+- Fixed judge-gated features continuing to use a stale model chain after switching judge roles.
+- Improved Anthropic prompt-cache reuse when pruning tool results from long conversations.
+- Fixed resumed Claude sessions losing earlier thinking context and prompt-cache reuse when extensions or MCP tools were registered before the first message.
+- Fixed subagent advisors configured with `@advisor` using the built-in `slow` model instead of the configured advisor role.
+- Fixed the `/switch` command and alternate model picker crashing when stored model speed statistics contained an unnamed model.
+- Fixed `lsp` and `generate_image` attempting to read FIFO, terminal, or unbounded device paths, which could hang or exhaust memory.
+- Fixed aside messages from extensions being blocked behind a running wait operation.
+- Fixed extensions importing `@oh-my-pi/pi-tui/native/*` failing to load in compiled `omp` binaries.
+- Fixed raw token markers appearing instead of Nerd Font icons in Anthropic idle recaps, `/btw` and `/omfg` replies, and streaming previews.
+- Fixed sessions moved with `/wt` disappearing from resume lists; sessions in Git worktrees now remain discoverable and can be resumed or relocated if their worktree was removed.
+- Fixed live config reload ignoring edits made during startup or right after a config symlink was retargeted, until the next unrelated edit.
 
 ## [18.8.5] - 2026-10-08
 
