@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, DeveloperMessage, ImageContent, UserMessage } from "@oh-my-pi/pi-ai";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as ideState from "@oh-my-pi/pi-coding-agent/mcp/ide-state";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -41,6 +42,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
 	let session: AgentSession;
+	let jobs: AsyncJobManager;
 	let mode: InteractiveMode;
 	let classify: Mock<typeof speckitAuto.classifySpeckitTurn>;
 	let notify: Mock<typeof TERMINAL.sendNotification>;
@@ -64,11 +66,13 @@ describe("InteractiveMode speckit-auto mode", () => {
 		cfgErrorNotify.override(settings, "on");
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+		jobs = new AsyncJobManager({});
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
 			settings: Settings.isolated({}),
 			modelRegistry,
+			asyncJobManager: jobs,
 		});
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, new EventBus());
 		classify = vi.spyOn(speckitAuto, "classifySpeckitTurn").mockResolvedValue(CLEAN);
@@ -84,6 +88,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		mode.onInputCallback?.({ text: "", cancelled: true, started: false });
 		mode.stop();
 		await session.dispose();
+		await jobs.dispose();
 		vi.restoreAllMocks();
 		resetSettingsForTest();
 		if (ORIGINAL_WARP_PROTOCOL === undefined) delete process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
@@ -256,9 +261,9 @@ describe("InteractiveMode speckit-auto mode", () => {
 				},
 			],
 			[
-				"pending async work",
+				"pending async delivery",
 				() => {
-					const spy = vi.spyOn(session, "hasPendingAsyncWork").mockReturnValue(true);
+					const spy = vi.spyOn(session, "hasPendingAsyncDelivery").mockReturnValue(true);
 					return () => spy.mockReturnValue(false);
 				},
 			],
@@ -466,6 +471,68 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(classify.mock.calls.at(-1)?.[1]).toBe(wakeReply);
 			expect(submitted).toHaveLength(0);
 			expect(saved()?.run?.hold).toBeDefined();
+		});
+
+		/** A detached background job, such as a watcher: it runs until it is cancelled and wakes nobody. */
+		function backgroundJobRuns(): string {
+			return jobs.register("bash", "watcher", ({ signal }) => {
+				const { promise, reject } = Promise.withResolvers<string>();
+				signal.addEventListener("abort", () => reject(new Error("cancelled")));
+				return promise;
+			});
+		}
+
+		it("starts the successor of a finished phase while a background job keeps running", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			backgroundJobRuns();
+			turnSettles();
+			await tick(2);
+
+			expect(texts()).toEqual(["/speckit.tasks"]);
+		});
+
+		it("waits for the job wake instead of holding an unfinished phase while its job runs", async () => {
+			await start();
+			await startRun("/speckit.implement");
+			const job = backgroundJobRuns();
+			turnSettles(HELD);
+			await tick(3);
+			expect(saved()?.run?.hold).toBeUndefined();
+			expect(notify).not.toHaveBeenCalled();
+
+			await ompTurnRuns(ASYNC_RESULT_MESSAGE_TYPE, CLEAN);
+			jobs.cancel(job);
+			await tick(2);
+
+			expect(texts()).toEqual(["/speckit.converge"]);
+		});
+
+		it("holds an unfinished phase once its job ends without a wake", async () => {
+			await start();
+			await startRun("/speckit.implement");
+			const job = backgroundJobRuns();
+			turnSettles(HELD);
+			await tick(2);
+			expect(saved()?.run?.hold).toBeUndefined();
+
+			jobs.cancel(job);
+			await tick();
+
+			expect(saved()?.run?.hold?.kind).toBe("needs-you");
+			expect(submitted).toHaveLength(0);
+		});
+
+		it("holds an unfinished phase at once when the running job started before the phase turn", async () => {
+			await start();
+			backgroundJobRuns();
+			vi.advanceTimersByTime(1_000);
+			await startRun("/speckit.implement");
+			turnSettles(HELD);
+			await tick(2);
+
+			expect(saved()?.run?.hold?.kind).toBe("needs-you");
+			expect(submitted).toHaveLength(0);
 		});
 
 		it("counts a settled turn that waits for its check as acting, so a pause stops the check", async () => {

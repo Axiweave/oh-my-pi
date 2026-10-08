@@ -3195,20 +3195,7 @@ export class AgentSession implements SettingsScope {
 	 * so they don't count.
 	 */
 	#hasPendingAsyncWake(): boolean {
-		const manager = this.#asyncJobManager;
-		if (!manager) return false;
-		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
-		return (
-			manager.getRunningJobs(ownerFilter).some(job => !manager.isDeliverySuppressed(job.id)) ||
-			manager.hasPendingDeliveries(ownerFilter) ||
-			// Delivered but not yet injected: the sink has enqueued the
-			// async-result follow-up on the yield queue, and the manager no
-			// longer reports it. Without this leg a terminal yield in the
-			// (idle-flush delay / step-boundary) handoff window would read as
-			// quiescent and the run driver would drop the queued result. An
-			// entry suppressed after it queued never injects, so it is no wake.
-			this.yieldQueue.hasDeliverable(ASYNC_RESULT_MESSAGE_TYPE)
-		);
+		return this.hasRunningAsyncJobs() || this.hasPendingAsyncDelivery();
 	}
 
 	/**
@@ -3220,6 +3207,40 @@ export class AgentSession implements SettingsScope {
 	 */
 	hasPendingAsyncWork(): boolean {
 		return this.#hasPendingAsyncWake();
+	}
+
+	/**
+	 * Background work: an owner job still runs with an unsuppressed delivery. It
+	 * may wake this session at any later time (a watcher may never finish), so
+	 * the session itself is not busy. `startedSince` (epoch ms) counts only jobs
+	 * started at or after that time.
+	 */
+	hasRunningAsyncJobs(startedSince = 0): boolean {
+		const manager = this.#asyncJobManager;
+		if (!manager) return false;
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		return manager
+			.getRunningJobs(ownerFilter)
+			.some(job => job.startTime >= startedSince && !manager.isDeliverySuppressed(job.id));
+	}
+
+	/**
+	 * Main-session work: a finished job's result is queued, in flight, or on the
+	 * yield queue, so a wake turn is about to start.
+	 */
+	hasPendingAsyncDelivery(): boolean {
+		const manager = this.#asyncJobManager;
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		return (
+			manager?.hasPendingDeliveries(ownerFilter) === true ||
+			// Delivered but not yet injected: the sink has enqueued the
+			// async-result follow-up on the yield queue, and the manager no
+			// longer reports it. Without this leg a terminal yield in the
+			// (idle-flush delay / step-boundary) handoff window would read as
+			// quiescent and the run driver would drop the queued result. An
+			// entry suppressed after it queued never injects, so it is no wake.
+			this.yieldQueue.hasDeliverable(ASYNC_RESULT_MESSAGE_TYPE)
+		);
 	}
 
 	/** True while a submission has been admitted but has not yet started a turn, queued, or bailed. */

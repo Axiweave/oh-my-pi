@@ -1348,6 +1348,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	#speckitRequest: string | undefined;
 	/** True from `agent_start` until the first `message_start`, which opens the turn. */
 	#speckitAwaitOpener = false;
+	/** When the latest phase turn started; a job started since then is the phase's own work. */
+	#speckitTurnStartedAt = 0;
+	/** The hold an unfinished phase reply gets if its own background jobs end without a wake reply. */
+	#speckitAwaitingJob: SpeckitAction | undefined;
 	/**
 	 * Aborts the in-flight `--while` / `--until` evaluation. Esc between
 	 * iterations lands while the condition command is still running, and
@@ -3336,6 +3340,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			((this.#speckitRun?.turnOpen === true && session.isStreaming) ||
 				this.#speckitJudgeAbort !== undefined ||
 				this.#speckitParked !== undefined ||
+				this.#speckitAwaitingJob !== undefined ||
 				// A settled turn waits for its check; compaction and retries hold that check back.
 				(this.#speckitPhaseReply ?? session.getLastAssistantMessage())?.timestamp !== this.#speckitDecidedKey ||
 				session.isCompacting ||
@@ -3391,6 +3396,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		clearTimeout(this.#speckitTimer);
 		this.#speckitTimer = undefined;
 		this.#speckitParked = undefined;
+		this.#speckitAwaitingJob = undefined;
 		this.#speckitOwnTurn = undefined;
 	}
 
@@ -3609,7 +3615,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			session.queuedMessageCount > 0 ||
 			this.compactionQueuedMessages.length > 0 ||
 			session.isRetrying ||
-			session.hasPendingAsyncWork() ||
+			// Only an imminent wake turn blocks; a running background job (a watcher) is not main-session work.
+			session.hasPendingAsyncDelivery() ||
 			this.#pendingSubmittedInput !== undefined ||
 			this.speckitSubmitInFlight > ownSubmits ||
 			this.editor.getText().trim() !== "" ||
@@ -3635,7 +3642,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!run || this.#speckitNextInFlight || this.#speckitJudgeAbort) return;
 		const message = this.#speckitPhaseReply ?? this.session.getLastAssistantMessage();
 		const undecided = message !== undefined && message.timestamp !== this.#speckitDecidedKey;
-		if (!this.#speckitParked && !this.#speckitOwnTurn && !undecided) return;
+		if (!this.#speckitParked && !this.#speckitOwnTurn && !undecided) {
+			const awaited = this.#speckitAwaitingJob;
+			if (!awaited) return;
+			// The phase waits for its own job: the wake reply decides. A job that ends without one leaves the hold.
+			if (this.session.hasPendingAsyncWork() || this.#isSpeckitStartBlocked()) {
+				this.#armSpeckitTick();
+			} else {
+				this.#speckitAwaitingJob = undefined;
+				this.#applySpeckitAction(run, awaited);
+			}
+			return;
+		}
 		if (this.#isSpeckitStartBlocked()) {
 			this.#armSpeckitTick();
 			return;
@@ -3661,6 +3679,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (!undecided) return;
 		this.#speckitDecidedKey = message.timestamp;
+		this.#speckitAwaitingJob = undefined;
 		run.turnOpen = false;
 		const abort = new AbortController();
 		this.#speckitJudgeAbort = abort;
@@ -3692,7 +3711,20 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (current) this.#speckitJudgeAbort = undefined;
 		}
 		if (!current || this.#speckitRun !== run) return;
-		this.#applySpeckitAction(run, decideSpeckitStep(run, verdict));
+		const action = decideSpeckitStep(run, verdict);
+		// An unfinished reply while a job this phase started still runs: the agent waits to be woken, not the user.
+		if (
+			action.kind === "hold" &&
+			action.hold.kind === "needs-you" &&
+			!verdict.failed &&
+			this.session.hasRunningAsyncJobs(this.#speckitTurnStartedAt)
+		) {
+			this.#speckitAwaitingJob = action;
+			this.#updateSpeckitAutoStatus();
+			this.#armSpeckitTick();
+			return;
+		}
+		this.#applySpeckitAction(run, action);
 	}
 
 	/** Applies a decision; a start only parks, so the next clear tick submits it after the grace period. */
@@ -3785,6 +3817,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const text = speckitTurnText(message);
 		// Only the reply of this turn is checked, never the one before it.
 		this.#speckitPhaseReply = undefined;
+		this.#speckitTurnStartedAt = Date.now();
 		this.#speckitDecidedKey = this.session.getLastAssistantMessage()?.timestamp;
 		const own = this.#speckitOwnTurn;
 		let run = this.#speckitRun;
