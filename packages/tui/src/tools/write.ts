@@ -844,41 +844,50 @@ export const writeToolRenderer = {
 		// back to the normalizing stringify.
 		const content = typeof args.content === "string" ? args.content : normalizeDisplayText(args.content);
 		const streamingCache = createRenderedStringCache();
-		return framedToolCard(uiTheme, ({ contentWidth }) => {
-			const body = content
-				? formatStreamingContent(
-						content,
-						Boolean(options?.expanded),
-						lang,
-						uiTheme,
-						contentWidth,
-						options?.spinnerFrame,
-						streamingCache,
-						// `options` is the ToolExecutionComponent's persistent
-						// render-state object — a stable identity across reveal ticks
-						// that keys the incremental preview state. `argsComplete`
-						// flushes the trailing line through the highlighter once.
-						options,
-						options?.argsComplete,
-					)
-				: "";
-			const bodyLines = body ? body.split("\n") : [];
-			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
-			return {
-				header,
-				sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
-				phase: "pending",
-				borderColor: "borderMuted",
-			};
-		});
+		return framedToolCard(
+			uiTheme,
+			({ contentWidth }) => {
+				const body = content
+					? formatStreamingContent(
+							content,
+							Boolean(options?.expanded),
+							lang,
+							uiTheme,
+							contentWidth,
+							options?.spinnerFrame,
+							streamingCache,
+							// `options` is the ToolExecutionComponent's persistent
+							// render-state object — a stable identity across reveal ticks
+							// that keys the incremental preview state. `argsComplete`
+							// flushes the trailing line through the highlighter once.
+							options,
+							options?.argsComplete,
+						)
+					: "";
+				const bodyLines = body ? body.split("\n") : [];
+				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+				return {
+					header,
+					sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
+					phase: "pending",
+					borderColor: "borderMuted",
+				};
+			},
+			// Keep `streamingCache`: its single width-keyed entry is replaced by the next render at a new width.
+			// Only the incremental highlighter state goes.
+			{ onReleaseRenderCaches: () => delete options?.[writeStreamingPreviewStateKey] },
+		);
 	},
 
 	renderResult(
 		result: WriteResult,
-		options: RenderResultOptions & { renderContext?: WriteRenderContext },
+		options: RenderResultOptions & WriteStreamingPreviewStateCarrier & { renderContext?: WriteRenderContext },
 		uiTheme: Theme,
 		args?: WriteRenderArgs,
 	): Component {
+		// Write merges call and result, so this builder runs once per display rebuild after the result arrives and the
+		// call card never renders again: its incremental highlighter state is dead from here on.
+		delete options[writeStreamingPreviewStateKey];
 		const cardPath =
 			typeof args?.path === "string" ? args.path : typeof args?.file_path === "string" ? args.file_path : "";
 		const routed = writeUrlCard(cardPath, result.details);

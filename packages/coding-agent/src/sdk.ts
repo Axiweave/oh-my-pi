@@ -887,6 +887,11 @@ export interface CreateAgentSessionOptions {
 	 */
 	tuiTranscript?: boolean;
 	/**
+	 * Name the unnamed session from the operator's messages once each reply begins
+	 * (see `title.generator`). Only the interactive TUI sets this; ignored for subagents. Default: false.
+	 */
+	autoTitle?: boolean;
+	/**
 	 * Defer `confirm` reserve-policy fallback until AgentSession prompt-time UI is configured.
 	 * ACP uses this while capabilities are negotiated without enabling UI-only tools.
 	 */
@@ -4818,6 +4823,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// resource frame would otherwise report every server as empty.
 			advisorMcpResources: cursorMcpResources,
 			titleSystemPrompt: options.titleSystemPrompt,
+			autoTitle: options.autoTitle === true && !isSubagentSession,
 		});
 		hasSession = true;
 		// A session resumed with the protection recorded on can restore a model the

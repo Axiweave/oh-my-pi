@@ -62,6 +62,7 @@ import {
 import { EnhancedPasteController, type PasteImageCommit } from "../../utils/enhanced-paste";
 import { isEditorRequestPending, openInEditor, takeEditorOrigin } from "../../utils/external-editor";
 import { commandUsage, hintUsage } from "../../utils/usage-counter";
+import { resendProgramStatus } from "../../utils/run-status";
 import { loadImageInput } from "../../utils/image-loading";
 import { materializeImageChipLinks } from "../utils/ui-helpers";
 import {
@@ -1408,10 +1409,6 @@ export class InputController {
 					},
 					{ clearEditor: false },
 				);
-				// Start titling only after the optimistic row painted, so the local
-				// tiny-title worker's subprocess spawn never blocks the first frame.
-				this.#maybeStartTitleGeneration(text);
-
 				this.ctx.onInputCallback(submission);
 			} else {
 				// No input waiter: the main loop is between turns (post-turn
@@ -1425,7 +1422,6 @@ export class InputController {
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.editor.pendingImages = [];
 				this.ctx.editor.pendingImageLinks = [];
-				this.#maybeStartTitleGeneration(text);
 				try {
 					const forwarded = await this.ctx.withLocalSubmission(
 						text,
@@ -1531,11 +1527,7 @@ export class InputController {
 		);
 	}
 
-	/**
-	 * Kick off session-title generation after the optimistic user row paints.
-	 * Local extension commands are consumed before reaching the shared session
-	 * title gate and must not name the conversation.
-	 */
+	/** Whether `text` invokes a registered extension command, which runs locally instead of prompting the model. */
 	#isLocalExtensionCommand(text: string): boolean {
 		const extensionCommandSpace = text.indexOf(" ");
 		return (
@@ -1544,13 +1536,6 @@ export class InputController {
 				extensionCommandSpace === -1 ? text.slice(1) : text.slice(1, extensionCommandSpace),
 			) !== undefined
 		);
-	}
-
-	#maybeStartTitleGeneration(text: string): void {
-		if (this.#isLocalExtensionCommand(text)) {
-			return;
-		}
-		this.ctx.session.maybeStartTitleGeneration(text);
 	}
 
 	/** Submit editor text to the focused subagent session (chat and continue shortcuts only). */
@@ -1692,6 +1677,7 @@ export class InputController {
 			clearInterval(suspendKeepalive);
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
+			resendProgramStatus();
 		};
 		process.once("SIGCONT", onResume);
 

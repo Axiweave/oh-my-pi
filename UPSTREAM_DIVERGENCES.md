@@ -3,21 +3,16 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.8.6` on 2026-10-08.
+**Reviewed against:** `v18.8.7` on 2026-10-09.
 
 **Verification:** Source setup, `bun check`, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.8.6`.
-The merge had conflicts in six files. The resolutions preserve every fork decision and retain upstream behavior.
-The resolutions also preserve raw advisor chains, filter new xAI search fallbacks, and cancel speckit-auto checks before exit planning.
-The isolated TypeScript run exercised 2908 test files. Of these, 2905 passed on the first run.
-The SIXEL suite then passed after removal of the host's `PI_FORCE_IMAGE_PROTOCOL=kitty` override.
-Two suites retain identical failures at pre-merge commit `eddc3a062b`:
-- `packages/coding-agent/test/sdk-tool-activation.test.ts`: five Cursor cases fail with `No API key found for cursor`.
-- `packages/coding-agent/test/eval/js-package-environment.test.ts`: the missing-project-package case returns exit code 0 instead of 1.
-
-The user authorized the local merge commit with these confirmed baseline failures.
-`bun run test:rs` passed all 3240 tests, with 5 skipped.
-Local proxy discovery, pinned composer resize, and direct and tmux Ghostel directory reporting passed.
+The launcher targets this checkout and reports `18.8.7`.
+The merge had conflicts in eight files. The resolutions preserve every fork decision and retain upstream behavior.
+Upstream's OSC 7501 run status (`setRunStatus`) now carries the fork's `working` holds for background jobs and speckit-auto.
+A speckit-auto settle reports `done`, `error`, or `idle`, so a hold keeps the idle title.
+The new upstream `startup-probe-leak` test uses the fork's `helpers/terminal-multiplexer` helper.
+122 test files ran in separate processes: every divergence check, the merged conflict tests, and the new run-status, cache-release, and write tests. All passed.
+`bun run test:rs` passed all 3265 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -342,7 +337,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Keep the builtin speckit-auto mode (`/speckit-auto-mode`, `/speckit-auto <description>|resume|next`). It runs the speckit phases after clarify on its own. It checks each settled phase turn with one judge call and a text fallback, then starts the next phase after an 800 ms grace tick. It holds on questions, errors, and unreadable turns. The setting is `speckitAuto.convergeRounds` (default `3`).
 - **Decision:** In analyze, a user turn without a readable report gets one more judge question, `fixed`, with the user's request in the judge state. A yes re-runs `/speckit.analyze` and counts as a remediation round. Without a judge answer the mode holds.
 - **Decision:** After clarify, the mode removes a closing handoff sentence ("Run `/speckit.implement`, or say `go`") before it checks the reply. It never auto-answers a reply that offers another phase. On a turn that the user starts with free text, the next phase starts only when the reply has the phase's own report. A side reply that prints a phase's own result (such as `✅ Converged`) still counts, so steering answers keep working.
-- **Decision:** While the mode acts between phases (a settled reply waits for its check, a check runs, or a start waits to submit), the terminal title and the IDE state stay `working`. The mode publishes the settled state when it holds (`needs-input`), pauses, or ends the run.
+- **Decision:** While the mode acts between phases (a settled reply waits for its check, a check runs, or a start waits to submit), the terminal title, the OSC 7501 run status, and the IDE state stay `working`. The mode publishes the settled state when it holds (`needs-input`), pauses, or ends the run.
 - **Why:** The user wants an unattended spec-kit pipeline with the same status bar, Esc pause, and notifications as the other modes. An extension cannot reach the submit guard and the mode-exclusion seams.
 - **Retire when:** Upstream ships an equivalent spec-kit pipeline mode.
 - **Key paths:** `packages/coding-agent/src/modes/speckit-auto.ts`, `packages/coding-agent/src/prompts/speckit-auto/`, `packages/coding-agent/src/modes/interactive-mode.ts` (speckit-auto fields, tick, restore, exclusion), `packages/coding-agent/src/modes/controllers/input-controller.ts` (Esc pause, submit counter), `packages/coding-agent/src/modes/controllers/event-controller.ts` (notification suppression), `packages/coding-agent/src/modes/controllers/selector-controller.ts` and `extension-ui-controller.ts` (restore the run after a cancelled or failed session switch), `packages/coding-agent/src/slash-commands/builtin-modes.ts`, `packages/coding-agent/src/modes/settings.ts`, `packages/tui/src/status-line/`.
@@ -350,7 +345,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 
 ### Working state during background-job waits
 
-- **Decision:** Keep the terminal title and the IDE session state at `working` while `AgentSession.hasPendingAsyncWork()` is true. This holds after the model yields with `awaitingAsyncWork`. Publish `idle`, `done`, or `failed` only after the work ends without a wake.
+- **Decision:** Keep the terminal title, the OSC 7501 run status, and the IDE session state at `working` while `AgentSession.hasPendingAsyncWork()` is true. This holds after the model yields with `awaitingAsyncWork`. Publish `idle`, `done`, or `failed` only after the work ends without a wake.
 - **Why:** Upstream drops the title to idle and publishes `done` at the yield, so a session that still waits on a job looks finished.
 - **Key paths:** `packages/coding-agent/src/modes/controllers/event-controller.ts` (`#handleTurnEnd`, `#handleAgentEnd`), `packages/coding-agent/src/modes/controllers/extension-ui-controller.ts`, `packages/coding-agent/src/modes/controllers/session-focus-controller.ts`, and `packages/coding-agent/src/modes/interactive-mode.ts` (`#hidePlanReview`).
 - **Checks:** `packages/coding-agent/test/modes/controllers/event-controller-abort-guard.test.ts` and `packages/coding-agent/test/modes/controllers/event-controller-ide-state.test.ts`.
