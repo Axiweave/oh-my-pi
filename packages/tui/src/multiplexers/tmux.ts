@@ -1,11 +1,12 @@
 import type { TerminalMultiplexerModule } from "./types";
 
-export const zellijMultiplexer = {
-	id: "zellij",
+export const tmuxMultiplexer = {
+	id: "tmux",
 	precedence: "session",
-	sessionEnvKeys: ["ZELLIJ"],
+	sessionEnvKeys: ["TMUX"],
+	termPrefix: "tmux",
 	ownsScreenGrid: true,
 	isInside(env: NodeJS.ProcessEnv = Bun.env): boolean {
-		return Boolean(env.ZELLIJ);
+		return Boolean(env.TMUX);
 	},
 } as const satisfies TerminalMultiplexerModule;
