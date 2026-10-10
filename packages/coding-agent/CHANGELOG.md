@@ -52,6 +52,7 @@
 
 ### Fixed
 
+- Fixed speckit-auto doing nothing when you turned it on after a phase command started. This happened, for example, when goal mode blocked the mode, you ran `/goal drop`, and `/speckit.specify` was already running. `/speckit-auto-mode` now follows the latest user turn when it is a speckit phase command. A finished turn gets its check at once, and a running turn gets it when it ends. If the latest user turn is not a phase command, the mode still waits for one.
 - X-only web searches now check the cyber allowlist before adding xAI fallback models.
 - Shutdown and restart cancel pending speckit-auto checks before any worktree exit prompt can wait for input.
 - Fixed speckit-auto not starting the next phase while any background job ran, such as a watcher that never exits. Now only a finished job whose result is about to wake the session blocks the start. If a reply has not finished and a job that started in the phase turn still runs, the mode waits for that job's wake reply. If the job ends without a wake, the run holds. `AgentSession` now tells background work (`hasRunningAsyncJobs()`) apart from an imminent wake turn (`hasPendingAsyncDelivery()`). `hasPendingAsyncWork()` still covers both.

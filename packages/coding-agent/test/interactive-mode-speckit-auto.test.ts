@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, DeveloperMessage, ImageContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
@@ -726,6 +727,71 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(statusState()).toBe("needs-you");
 			expect(notify).toHaveBeenCalledTimes(1);
 			expect(texts()).toEqual(["/speckit.tasks"]);
+		});
+	});
+
+	describe("turning the mode on after a phase command started", () => {
+		/** The session holds `messages`; the last assistant message is the reply the check reads. */
+		function sessionHas(...messages: AgentMessage[]): void {
+			session.agent.replaceMessages(messages);
+			reply = messages.findLast((message): message is AssistantMessage => message.role === "assistant");
+		}
+		const assistant = (text: string): AssistantMessage => ({
+			...createAssistantMessage(text),
+			stopReason: "stop",
+			timestamp: ++clock,
+		});
+
+		it("checks a settled phase turn and starts its successor", async () => {
+			await start();
+			const before = assistant("earlier answer");
+			const specify = assistant("spec written");
+			sessionHas(userText("an earlier question"), before, userText("/speckit.specify build x"), specify);
+			waitForInput();
+
+			mode.toggleSpeckitAutoMode();
+			expect(saved()?.run).toMatchObject({ phase: "specify", turnOpen: true });
+			await tick();
+			expect(classify).toHaveBeenCalledTimes(1);
+			expect(classify.mock.calls[0][0]).toBe("specify");
+			expect(classify.mock.calls[0][1]).toBe(specify);
+
+			await tick();
+			expect(texts()).toEqual(["/speckit.clarify"]);
+		});
+
+		it("checks a running phase turn once it settles", async () => {
+			await start();
+			sessionHas(userText("/speckit.plan"));
+			setStreaming(() => true);
+
+			mode.toggleSpeckitAutoMode();
+			await tick(2);
+			expect(classify).not.toHaveBeenCalled();
+
+			setStreaming(() => false);
+			turnSettles();
+			await tick(2);
+			expect(classify).toHaveBeenCalledTimes(1);
+			expect(texts()).toEqual(["/speckit.tasks"]);
+		});
+
+		it("waits for a phase command when the latest user turn is not one", async () => {
+			await start();
+			sessionHas(
+				userText("/speckit.specify build x"),
+				assistant("spec written"),
+				userText("a side question"),
+				assistant("an answer"),
+			);
+			waitForInput();
+
+			mode.toggleSpeckitAutoMode();
+			await tick(2);
+			expect(saved()?.run).toBeUndefined();
+			expect(statusState()).toBe("waiting");
+			expect(classify).not.toHaveBeenCalled();
+			expect(submitted).toHaveLength(0);
 		});
 	});
 

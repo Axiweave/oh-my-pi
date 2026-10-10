@@ -3426,35 +3426,62 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.speckitAutoEnabled = true;
 		const run = state.run && { ...state.run, paused: true };
 		this.#speckitRun = run;
-		if (run) {
-			// Replay the turn starts as the live events read them, so resume checks the same reply with the same request.
-			let last: AssistantMessage | undefined;
-			let opens = false;
-			for (const message of this.session.messages) {
-				if (isSpeckitPrelude(message)) continue;
-				// Only a message after a finished reply opens a run; tool results and mid-run messages stay inside it.
-				const opener =
-					opens && (message.role === "user" || message.role === "developer" || message.role === "custom");
-				opens = message.role === "assistant" && message.stopReason !== "toolUse";
-				if (isSpeckitUserTurn(message)) {
-					this.#speckitPhaseReply = undefined;
-					const text = speckitTurnText(message);
-					// The mode's own texts carry no request; its continue keeps the request of the turn it resumes.
-					if (text !== renderSpeckitContinue(run.phase)) {
-						const own =
-							text === SPECKIT_ANSWER_TEXT ||
-							text === SPECKIT_REMEDIATION_TEXT ||
-							parseSpeckitPhaseCommand(text)?.phase !== undefined;
-						this.#speckitRequest = own ? undefined : text;
-					}
-				} else if (opener) {
-					this.#speckitPhaseReply = isSpeckitSideTraffic(message) ? (this.#speckitPhaseReply ?? last) : undefined;
-				} else if (message.role === "assistant") {
-					last = message;
+		if (run) this.#replaySpeckitTurns(run);
+		this.#updateSpeckitAutoStatus();
+	}
+
+	/**
+	 * Replays the turn starts as the live events read them, so a check reads the same reply with the same request.
+	 * Returns the last reply before the latest user turn: the decided key at that turn's start.
+	 */
+	#replaySpeckitTurns(run: SpeckitRun): AssistantMessage | undefined {
+		let last: AssistantMessage | undefined;
+		let beforeTurn: AssistantMessage | undefined;
+		let opens = false;
+		for (const message of this.session.messages) {
+			if (isSpeckitPrelude(message)) continue;
+			// Only a message after a finished reply opens a run; tool results and mid-run messages stay inside it.
+			const opener = opens && (message.role === "user" || message.role === "developer" || message.role === "custom");
+			opens = message.role === "assistant" && message.stopReason !== "toolUse";
+			if (isSpeckitUserTurn(message)) {
+				beforeTurn = last;
+				this.#speckitPhaseReply = undefined;
+				const text = speckitTurnText(message);
+				// The mode's own texts carry no request; its continue keeps the request of the turn it resumes.
+				if (text !== renderSpeckitContinue(run.phase)) {
+					const own =
+						text === SPECKIT_ANSWER_TEXT ||
+						text === SPECKIT_REMEDIATION_TEXT ||
+						parseSpeckitPhaseCommand(text)?.phase !== undefined;
+					this.#speckitRequest = own ? undefined : text;
 				}
+			} else if (opener) {
+				this.#speckitPhaseReply = isSpeckitSideTraffic(message) ? (this.#speckitPhaseReply ?? last) : undefined;
+			} else if (message.role === "assistant") {
+				last = message;
 			}
 		}
+		return beforeTurn;
+	}
+
+	/**
+	 * The mode turned on after a phase command started (another mode blocked it at that time): the run follows
+	 * that turn as if the mode had been on at its start. A settled turn gets its check at once.
+	 */
+	#adoptSpeckitTurn(): void {
+		const opener = this.session.messages.findLast(isSpeckitUserTurn);
+		const phase = opener && parseSpeckitPhaseCommand(speckitTurnText(opener))?.phase;
+		if (!phase) return;
+		const run = newSpeckitRun(phase, normalizeConvergeRounds(cfgSpeckitAutoConvergeRounds.get(this.settings)));
+		run.turnOpen = true;
+		this.#speckitRun = run;
+		this.#speckitTurnStartedAt = opener.timestamp;
+		this.#speckitDecidedKey = this.#replaySpeckitTurns(run)?.timestamp;
+		this.showStatus(`Speckit-auto mode on. Following /speckit.${phase}.`);
+		this.#saveSpeckitAutoState();
 		this.#updateSpeckitAutoStatus();
+		// A running turn arms the tick at its own end.
+		if (!this.session.isStreaming) this.#armSpeckitTick();
 	}
 
 	#notifySpeckitAuto(title: string, body: string): void {
@@ -3506,7 +3533,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	toggleSpeckitAutoMode(): void {
 		if (!this.speckitAutoEnabled) {
-			this.#turnOnSpeckitAuto();
+			if (this.#turnOnSpeckitAuto()) this.#adoptSpeckitTurn();
 			return;
 		}
 		// A running turn finishes; only the mode's own pending steps drop.
