@@ -7,7 +7,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isInsideTmux, matchesKey, type Terminal, wrapTmuxPassthrough } from "@oh-my-pi/pi-tui";
+import { matchesKey, type Terminal, wrapTmuxPassthrough } from "@oh-my-pi/pi-tui";
+import { hasTerminalMultiplexerSession } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { $env, $which, Snowflake } from "@oh-my-pi/pi-utils";
 
 /**
@@ -199,7 +200,7 @@ export async function openInEditor(
 		// A request without a nonce never opens a buffer in any client, so it is not offered.
 		if (options.origin !== "") {
 			const request = `\x1b]52;e;${quoteOscArg("claude-code-ide-session-editor-request")} ${quoteOscArg(id)} ${quoteOscArg(options.origin)} ${quoteOscArg(tmpFile)}\x1b\\`;
-			ui.terminal.write(isInsideTmux() ? wrapTmuxPassthrough(request) : request);
+			ui.terminal.write(hasTerminalMultiplexerSession("tmux") ? wrapTmuxPassthrough(request) : request);
 			const offered = await waitForAnswer(EDITOR_ACK_TIMEOUT_MS);
 			if (offered === "cancel") return null;
 			if (offered === "ack") {
@@ -215,16 +216,7 @@ export async function openInEditor(
 		if (!editorCmd) return undefined;
 		ui.stop();
 		try {
-			const spawnCommand = resolveEditorSpawnCommand(editorCmd, tmpFile);
-			// Inherit the real pane pty so terminal editors (including emacsclient,
-			// which resolves the device via ttyname) render into the visible pane.
-			const child = Bun.spawn(spawnCommand.cmd, {
-				stdin: "inherit",
-				stdout: "inherit",
-				stderr: "inherit",
-				windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
-			});
-			return (await child.exited) === 0 ? await readEdited() : null;
+			return (await openEditorOnPath(editorCmd, tmpFile)) === 0 ? await readEdited() : null;
 		} finally {
 			ui.start();
 		}
@@ -236,4 +228,24 @@ export async function openInEditor(
 			// Ignore cleanup errors
 		}
 	}
+}
+
+/**
+ * Opens an existing file in the user's editor, which writes it in place, and
+ * returns the editor's exit code. The file may have been saved even when the
+ * code is non-zero, so callers that care re-read it.
+ *
+ * The caller is responsible for stopping/starting the TUI around this call.
+ */
+export async function openEditorOnPath(editorCmd: string, filePath: string): Promise<number> {
+	const spawnCommand = resolveEditorSpawnCommand(editorCmd, filePath);
+	// Inherit the real pane pty so terminal editors (including emacsclient,
+	// which resolves the device via ttyname) render into the visible pane.
+	const child = Bun.spawn(spawnCommand.cmd, {
+		stdin: "inherit",
+		stdout: "inherit",
+		stderr: "inherit",
+		windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
+	});
+	return child.exited;
 }

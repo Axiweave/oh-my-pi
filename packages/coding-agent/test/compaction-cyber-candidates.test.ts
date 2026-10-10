@@ -7,8 +7,9 @@
  * largest-context catalog fallback (a raw scan over every available model).
  *
  * These tests exercise the seam directly with a minimal stub host -- the
- * method only ever reads `host.settings`, so no session, agent, or model
- * registry is needed. See `compaction-cyber-dispatch.test.ts` for the
+ * method reads `host.settings` and fits each row through
+ * `host.modelRegistry.fitContextWindow`; these rows have no extended window,
+ * so an identity fit stands in for the registry. See `compaction-cyber-dispatch.test.ts` for the
  * full-session tests proving the fix also reaches the actual network request.
  *
  * Per T057 (specs/001-cyber-mode/tasks.md), FR-006, FR-013, FR-030, FR-031.
@@ -59,7 +60,8 @@ function withProtection(cyberModels: Model<Api>[], catalogForResolution: Model<A
 }
 
 function maintenanceFor(settings: Settings): SessionMaintenance {
-	return new SessionMaintenance({ settings } as unknown as SessionMaintenanceHost);
+	const modelRegistry = { fitContextWindow: (model: Model<Api>) => model };
+	return new SessionMaintenance({ settings, modelRegistry } as unknown as SessionMaintenanceHost);
 }
 
 describe("resolveCompactionModelCandidates honors cyber mode protection", () => {
@@ -170,7 +172,11 @@ describe("resolveContextPromotionTarget honors cyber mode protection", () => {
 	function promotionMaintenance(settings: Settings, availableModels: Model<Api>[]): SessionMaintenance {
 		return new SessionMaintenance({
 			settings,
-			modelRegistry: { getAvailable: () => availableModels, getApiKey: async () => "key" },
+			modelRegistry: {
+				getAvailable: () => availableModels,
+				getApiKey: async () => "key",
+				fitContextWindow: (model: Model<Api>) => model,
+			},
 			sessionId: () => "cyber-promotion-session",
 		} as unknown as SessionMaintenanceHost);
 	}

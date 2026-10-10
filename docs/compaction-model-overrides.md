@@ -2,7 +2,7 @@
 
 `compaction.modelOverrides` sets a different compaction policy for each model.
 A matching policy replaces `compaction.thresholdTokens`, `compaction.thresholdPercent`, and `compaction.reserveTokens`.
-Without a matching policy, `compaction.modelThresholds` supplies the per-model trigger.
+Without a matching policy, `compaction.modelThresholds` supplies the per-model limit: a token base, a fixed trigger, or a percentage.
 Without either model entry, the global policy applies.
 
 ## Configuration
@@ -72,8 +72,15 @@ The precedence is:
 
 The `/models` hub edits `compaction.modelThresholds` and shows the effective policy.
 It rejects a new threshold when a matching `modelOverrides` policy would hide it.
+Its live preview shows nothing for that input.
 Edit that policy in the config instead.
 Empty hub input can remove a saved `modelThresholds` entry even when a fork policy hides it.
+
+## Extended windows
+
+A `modelThresholds` token base past a model's standard window, or a fixed trigger at or past it, opts that model into its extended window.
+A matching `modelOverrides` policy hides that entry, so the model keeps its standard window.
+A `modelOverrides` policy never opts a model into its extended window. Use `extendedContext` for that.
 
 ## Related
 

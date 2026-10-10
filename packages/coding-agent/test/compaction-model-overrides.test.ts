@@ -12,6 +12,8 @@ import {
 import { getSessionCompactionBoundaries } from "@oh-my-pi/pi-coding-agent/session/context-usage-runtime";
 import {
 	describeModelCompactionPoint,
+	planModelCompactionPoint,
+	previewModelCompactionPoint,
 	setModelCompactionPoint,
 } from "@oh-my-pi/pi-coding-agent/session/model-compaction-threshold";
 
@@ -107,8 +109,8 @@ describe("resolveCompactionSettings", () => {
 			reserveTokens: undefined,
 		});
 		expect(resolveCompactionSettings(settings, gpt)).toMatchObject({
-			thresholdTokens: 90_000,
-			thresholdPercent: -1,
+			thresholdTokens: -1,
+			baseWindowTokens: 90_000,
 			reserveTokens: 42_000,
 		});
 	});
@@ -122,7 +124,6 @@ describe("resolveCompactionSettings", () => {
 		});
 		expect(describeModelCompactionPoint(settings, model)).toMatchObject({
 			tokens: 120_000,
-			percent: 60,
 			source: "modelOverrides:anthropic/*",
 		});
 		expect(getSessionCompactionBoundaries(settings, model.contextWindow, model)).toEqual({
@@ -156,7 +157,7 @@ describe("resolveCompactionSettings", () => {
 		const grandchild = createSubagentSettings(agent);
 		expect(resolveCompactionSettings(grandchild, sonnet).thresholdTokens).toBe(80_000);
 		cfgCompactionModelOverrides.override(root, {});
-		expect(resolveCompactionSettings(grandchild, sonnet).thresholdTokens).toBe(60_000);
+		expect(resolveCompactionSettings(grandchild, sonnet).baseWindowTokens).toBe(60_000);
 	});
 });
 
@@ -168,9 +169,26 @@ describe("model hub compaction edits", () => {
 		cfgCompactionModelThresholds.set(settings, { "anthropic/claude-sonnet-4-5": 50_000 });
 		expect(() => setModelCompactionPoint(settings, sonnet, "90k")).toThrow("compaction.modelOverrides.anthropic/*");
 		expect(cfgCompactionModelThresholds.get(settings)).toEqual({ "anthropic/claude-sonnet-4-5": 50_000 });
-		expect(setModelCompactionPoint(settings, sonnet, "")).toBeUndefined();
+		expect(setModelCompactionPoint(settings, sonnet, "")).toMatchObject({ kind: "saved", entry: undefined });
 		expect(cfgCompactionModelThresholds.get(settings)).toEqual({});
 		expect(resolveCompactionSettings(settings, sonnet).thresholdTokens).toBe(70_000);
+	});
+
+	it("previews only what a save would apply under a fork policy", () => {
+		const model = { ...sonnet, contextWindow: 200_000 };
+		const settings = Settings.isolated({
+			extendedContext: false,
+			"compaction.modelOverrides": { "anthropic/*": { thresholdTokens: 70_000 } },
+			"compaction.modelThresholds": { "anthropic/claude-sonnet-4-5": 50_000 },
+		});
+		const tiers = { standard: 200_000, extended: 1_000_000 };
+		expect(planModelCompactionPoint(settings, model, "400k", tiers)).toBeUndefined();
+		expect(previewModelCompactionPoint(settings, model, "400k", tiers)).toBeUndefined();
+		expect(planModelCompactionPoint(settings, model, "", tiers)).toMatchObject({
+			reset: true,
+			window: 200_000,
+			trigger: { kind: "fixed", tokens: 70_000 },
+		});
 	});
 
 	it("keeps model hub edits and reset behavior when no fork policy matches", () => {
@@ -178,7 +196,7 @@ describe("model hub compaction edits", () => {
 			"compaction.thresholdTokens": 200_000,
 			"compaction.modelOverrides": { "openai/*": { thresholdTokens: 70_000 } },
 		});
-		expect(setModelCompactionPoint(settings, sonnet, "60%")).toBe("60%");
+		expect(setModelCompactionPoint(settings, sonnet, "60%")).toMatchObject({ kind: "saved", entry: "60%" });
 		expect(resolveCompactionSettings(settings, sonnet)).toMatchObject({
 			thresholdTokens: -1,
 			thresholdPercent: 60,
@@ -187,7 +205,7 @@ describe("model hub compaction edits", () => {
 			source: "anthropic/claude-sonnet-4-5",
 			draft: "60%",
 		});
-		expect(setModelCompactionPoint(settings, sonnet, "")).toBeUndefined();
+		expect(setModelCompactionPoint(settings, sonnet, "")).toMatchObject({ kind: "saved", entry: undefined });
 		expect(resolveCompactionSettings(settings, sonnet).thresholdTokens).toBe(200_000);
 	});
 

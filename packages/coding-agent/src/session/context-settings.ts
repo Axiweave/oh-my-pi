@@ -24,6 +24,46 @@ export const cfgWorkspaceAdditionalDirectories = register({
 	},
 });
 
+/** Built-in context filenames. Listing them in `contextFiles.extra` would load a second copy or bypass one-per-depth shadowing. */
+const BUILTIN_CONTEXT_FILE_NAMES: Record<string, true> = {
+	"agents.md": true,
+	"claude.md": true,
+	"gemini.md": true,
+	"copilot-instructions.md": true,
+};
+
+/** Why `entry` is not a valid `contextFiles.extra` name; undefined for a plain, non-built-in file name. */
+function contextFileNameError(entry: unknown): string | undefined {
+	if (typeof entry !== "string") return `contextFiles.extra entries must be strings (${String(entry)})`;
+	const name = entry.trim();
+	if (name === "") return "contextFiles.extra entries must not be empty";
+	if (BUILTIN_CONTEXT_FILE_NAMES[name.toLowerCase()] === true) {
+		return `contextFiles.extra cannot list a built-in context file (${name})`;
+	}
+	if (name === "." || name === ".." || name.includes("/") || name.includes("\\") || name.includes("\0")) {
+		return `contextFiles.extra entries must be file names, not paths (${name})`;
+	}
+	return undefined;
+}
+
+/**
+ * Extra instruction filenames discovered in addition to AGENTS.md / CLAUDE.md / GEMINI.md.
+ * Config-file only: the names are open-ended, so there is no settings-panel vocabulary.
+ */
+export const cfgContextFilesExtra = register({
+	id: "contextFiles.extra",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+	validate: raw => {
+		if (raw === undefined) return;
+		if (!Array.isArray(raw)) throw new Error("contextFiles.extra must be a list of file names");
+		for (const entry of raw) {
+			const error = contextFileNameError(entry);
+			if (error !== undefined) throw new Error(error);
+		}
+	},
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Context
 // ────────────────────────────────────────────────────────────────────────
@@ -180,8 +220,12 @@ export const cfgCompactionModelOverrides = register({
 });
 
 /**
- * Per-model compaction points edited from the /models hub.
+ * Per-model compaction limits edited from the /models hub.
  * An exact `provider/model-id` wins, else the longest matching `…*` prefix.
+ * A token entry is the base the policy scales in place of the window (see `applyModelCompactionThreshold`).
+ * A `"f90000"` entry is an exact trigger. A percentage entry replaces both `compaction.threshold*` fields.
+ * A token base past a model's standard window, or a fixed trigger at or past it, opts that model
+ * into its extended window (`ModelRegistry.contextWindowTiers`).
  * A matching `compaction.modelOverrides` policy or per-agent task override wins over this map.
  */
 export const cfgCompactionModelThresholds = register({
@@ -373,8 +417,12 @@ export const cfgCompaction = combine({
 	dropUseless: cfgCompactionDropUseless,
 });
 
-/** Configured compaction policy ({@link cfgCompaction}). */
-export type CompactionSettings = SettingValueOf<typeof cfgCompaction>;
+/**
+ * Configured compaction policy ({@link cfgCompaction}). `baseWindowTokens` is
+ * never configured directly: a `compaction.modelThresholds` token entry sets it
+ * for its model (see `applyModelCompactionThreshold`).
+ */
+export type CompactionSettings = SettingValueOf<typeof cfgCompaction> & { baseWindowTokens?: number };
 
 // Experimental: snapcompact inline imaging (transient, per-request; never persisted)
 export const cfgSnapcompactSystemPrompt = register({
@@ -620,6 +668,7 @@ const appliedModelOverrides = new WeakMap<CompactionSettings, WeakMap<Compaction
 /**
  * Resolve task thresholds, then `modelOverrides`, then `modelThresholds`, then the global policy.
  * A `modelOverrides` match replaces all three threshold fields, including the reserve.
+ * It also hides the `modelThresholds` entry, so that entry opens no extended window.
  * Task threshold overrides disable both model maps for their agent only.
  */
 export function resolveCompactionSettings(

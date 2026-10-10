@@ -77,6 +77,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 		},
 		icon: command.icon,
 		subcommands: command.subcommands,
+		subcommandOptional: command.subcommandOptional,
 		inlineHint: command.inlineHint,
 		getTuiAutocompleteDescription: command.getTuiAutocompleteDescription,
 	}),
@@ -98,8 +99,9 @@ function materializeTuiBuiltinSlashCommand(
 			materialized.getArgumentCompletions = buildEffortArgumentCompletions(runtime);
 			materialized.getInlineHint = buildEffortInlineHint(runtime);
 		} else {
-			materialized.getArgumentCompletions = buildArgumentCompletions(subcommands);
-			materialized.getInlineHint = buildSubcommandInlineHint(subcommands);
+			const options = { optional: cmd.subcommandOptional };
+			materialized.getArgumentCompletions = buildArgumentCompletions(subcommands, options);
+			materialized.getInlineHint = buildSubcommandInlineHint(subcommands, options);
 		}
 	} else if (cmd.name === "cyber") {
 		materialized.getArgumentCompletions = buildCyberArgumentCompletions();

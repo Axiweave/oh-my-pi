@@ -1,5 +1,6 @@
 import * as os from "node:os";
-import { isInsideTmux, type Terminal, wrapTmuxPassthrough } from "@oh-my-pi/pi-tui";
+import { type Terminal, wrapTmuxPassthrough } from "@oh-my-pi/pi-tui";
+import { hasTerminalMultiplexerSession } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { getProjectDir, isTerminalHeadless, logger, onProjectDirChanged } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { cfgTerminalReportCwd } from "../modes/settings";
@@ -13,7 +14,7 @@ export function startTerminalDirectoryReporting(settings: Settings, terminal: Pi
 			const encodedPath = encodeURI(normalizedPath).replaceAll("#", "%23").replaceAll("?", "%3F");
 			const uri = `file://${encodeURIComponent(os.hostname())}${normalizedPath.startsWith("/") ? "" : "/"}${encodedPath}`;
 			const sequence = `\x1b]7;${uri}\x1b\\`;
-			terminal.write(isInsideTmux() ? wrapTmuxPassthrough(sequence) : sequence);
+			terminal.write(hasTerminalMultiplexerSession("tmux") ? wrapTmuxPassthrough(sequence) : sequence);
 		} catch (error) {
 			logger.warn("Could not report the working directory to the terminal.", { error: String(error) });
 		}

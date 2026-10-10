@@ -3,16 +3,18 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.8.7` on 2026-10-09.
+**Reviewed against:** `v18.8.9` on 2026-10-10.
 
 **Verification:** Source setup, `bun check`, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.8.7`.
-The merge had conflicts in eight files. The resolutions preserve every fork decision and retain upstream behavior.
-Upstream's OSC 7501 run status (`setRunStatus`) now carries the fork's `working` holds for background jobs and speckit-auto.
-A speckit-auto settle reports `done`, `error`, or `idle`, so a hold keeps the idle title.
-The new upstream `startup-probe-leak` test uses the fork's `helpers/terminal-multiplexer` helper.
-122 test files ran in separate processes: every divergence check, the merged conflict tests, and the new run-status, cache-release, and write tests. All passed.
-`bun run test:rs` passed all 3265 tests, with 5 skipped.
+The launcher targets this checkout and reports `18.8.9`.
+The merge had conflicts in 13 files. The resolutions preserve every fork decision and retain upstream behavior.
+Upstream's new `modelThresholds` forms (token base, `f` fixed trigger, percentage) and extended-window opt-in now sit below the fork's `modelOverrides` precedence. A matching fork policy also hides the opt-in.
+Upstream removed `isInsideTmux()`. The fork's OSC 7 directory report and Emacs editor request now use `hasTerminalMultiplexerSession("tmux")`.
+The `/annotate` prompt-source editor uses the fork's editor handoff. File sources keep upstream's in-place `openEditorOnPath`.
+249 test files ran in separate processes: every divergence check and every test that upstream or the fork changed between the two releases.
+Upstream's compaction candidate code now calls `modelRegistry.fitContextWindow`, so the fork's `compaction-cyber-candidates` stub host gained an identity fit.
+Five upstream tests fail the same way at the pre-merge commit and at bare `v18.8.9` on this host: `sdk-tool-activation` (no Cursor key), `terminal-launch` and `terminal-launch-tmux` (`/private` temp paths, tmux `/bin/false` shell), `table-chart-native`, and `resize-settle-fused-exit`.
+`bun run test:rs` passed all 3269 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -235,9 +237,10 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Use upstream's `modelThresholds` only when no fork pattern matches. Keep its longest-prefix rule and global reserve.
 - **Decision:** Apply `compaction.modelThresholdsEnabled` to both maps. Restore the root policy for descendants after an exact agent override.
 - **Decision:** Resolve session, advisor, promotion, and Model Hub policies through the same resolver. Reject Model Hub writes that a fork pattern would hide.
+- **Decision:** A matching `modelOverrides` pattern also hides the `modelThresholds` extended-window opt-in. `ModelRegistry` checks fork patterns before it opens an extended window. A fork policy never opens one itself. The Model Hub preview shows nothing for an input that a fork pattern would hide. A hub reset previews the fork policy.
 - **Why:** One global threshold cannot fit models with very different context windows.
-- **Key paths:** `packages/coding-agent/src/session/context-settings.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, and `packages/coding-agent/src/session/session-advisors.ts`.
-- **Checks:** `packages/coding-agent/test/compaction-model-overrides.test.ts`, `packages/coding-agent/test/config/compaction-threshold.test.ts`, `packages/coding-agent/test/task/executor-pass-through.test.ts`, and `packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts`.
+- **Key paths:** `packages/coding-agent/src/session/context-settings.ts`, `packages/coding-agent/src/session/model-compaction-threshold.ts`, `packages/coding-agent/src/config/model-registry.ts`, `packages/coding-agent/src/session/session-maintenance.ts`, and `packages/coding-agent/src/session/session-advisors.ts`.
+- **Checks:** `packages/coding-agent/test/compaction-model-overrides.test.ts`, `packages/coding-agent/test/config/compaction-threshold.test.ts`, `packages/coding-agent/test/model-registry.test.ts`, `packages/coding-agent/test/task/executor-pass-through.test.ts`, and `packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts`.
 
 ### Native JJ snapshot contract test
 
