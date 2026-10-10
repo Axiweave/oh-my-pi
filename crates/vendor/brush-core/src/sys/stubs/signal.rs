@@ -183,6 +183,11 @@ pub(crate) fn lead_new_process_group() -> Result<(), error::Error> {
 	Ok(())
 }
 
+/// No zombies here: an exited process needs no early reap.
+pub(crate) const fn process_exited(_pid: sys::process::ProcessId) -> bool {
+	false
+}
+
 pub(crate) struct FakeSignal {}
 
 impl FakeSignal {

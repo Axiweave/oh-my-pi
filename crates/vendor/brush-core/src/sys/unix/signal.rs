@@ -94,6 +94,13 @@ pub(crate) fn poll_for_stopped_processes(
 	Ok(found_stopped)
 }
 
+/// Returns whether the child exited, without reaping it (`WNOWAIT`).
+pub(crate) fn process_exited(pid: sys::process::ProcessId) -> bool {
+	use nix::sys::wait::{WaitPidFlag, WaitStatus};
+	let flags = WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG | WaitPidFlag::WNOWAIT;
+	matches!(waitid_child(pid, None, flags), Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)))
+}
+
 fn drain_stopped(
 	mut wait: impl FnMut() -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno>,
 ) -> Result<bool, error::Error> {

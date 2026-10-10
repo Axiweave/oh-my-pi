@@ -32,6 +32,9 @@ pub struct ChildProcess {
 	exec_future: WaitableChildProcess,
 	/// Tracks whether this process has already been reaped.
 	reaped:      bool,
+	/// Exit result collected by [`Self::reap`] and not yet consumed by
+	/// [`Self::poll`] or [`Self::wait`].
+	exited:      Option<Result<std::process::Output, std::io::Error>>,
 	/// If available, the process ID of the child.
 	pid:         Option<sys::process::ProcessId>,
 	/// If available, the shared process group ID of the pipeline.
@@ -60,6 +63,7 @@ impl ChildProcess {
 			pgid,
 			stop_pids: None,
 			reaped: false,
+			exited: None,
 			#[cfg(windows)]
 			kill_handle,
 			completion_marker: None,
@@ -127,6 +131,9 @@ impl ChildProcess {
 		// waited on, so this process or one in its pipeline can stop before
 		// this point. Exits need no such check: the child's exec future
 		// registered for them when it was spawned.
+		if let Some(result) = self.exited.take() {
+			return Ok(ProcessWaitResult::Completed(result?));
+		}
 		if self.poll_for_stop()? {
 			return Ok(ProcessWaitResult::Stopped);
 		}
@@ -210,17 +217,31 @@ impl ChildProcess {
 		}
 	}
 
+	/// Collects the exit status if the process has exited, so it does not stay
+	/// a zombie that `kill -0` still finds. The status is kept for a later
+	/// [`Self::poll`] or [`Self::wait`], so `wait $pid` still reports it.
+	pub(crate) fn reap(&mut self) {
+		if self.exited.is_some() {
+			return;
+		}
+		let Some(result) = self.exec_future.as_mut().now_or_never() else {
+			return;
+		};
+		if let Ok(output) = &result {
+			self.reaped = true;
+			self.write_completion_marker(completion_exit_code(&output.status));
+		}
+		self.exited = Some(result);
+	}
+
 	pub(crate) fn poll(&mut self) -> Option<Result<std::process::Output, error::Error>> {
-		let result = self.exec_future.as_mut().now_or_never()?;
-		Some(match result {
-			Ok(output) => {
-				let marker_exit_code = completion_exit_code(&output.status);
-				self.reaped = true;
-				self.write_completion_marker(marker_exit_code);
-				Ok(output)
-			},
-			Err(err) => Err(err.into()),
-		})
+		self.reap();
+		Some(self.exited.take()?.map_err(Into::into))
+	}
+
+	/// Returns whether [`Self::reap`] collected the exit of this process.
+	pub(crate) const fn has_exited(&self) -> bool {
+		self.exited.is_some()
 	}
 }
 

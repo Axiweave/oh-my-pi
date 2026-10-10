@@ -325,6 +325,16 @@ impl JobManager {
 		Ok(results)
 	}
 
+	/// Collects the exit status of every job whose processes have all exited,
+	/// without removing the job: the status stays for `wait`, `fg`, and `jobs`.
+	/// Bash does this on `SIGCHLD`. Without it a finished background child
+	/// stays a zombie, and `kill -0 $!` reports it as alive.
+	pub fn reap(&mut self) {
+		for job in &mut self.jobs {
+			job.reap();
+		}
+	}
+
 	fn sweep_completed_jobs(&mut self) -> Vec<Job> {
 		let mut completed_jobs = vec![];
 
@@ -540,10 +550,12 @@ impl Job {
 	pub fn move_to_background(&mut self) -> Result<(), error::Error> {
 		match &self.state {
 			JobState::Stopped => {
-				let pgid = self
-					.process_group_id()
-					.ok_or(error::ErrorKind::FailedToSendSignal)?;
-				sys::signal::continue_process(pgid)?;
+				if !self.exit_collected() {
+					let pgid = self
+						.process_group_id()
+						.ok_or(error::ErrorKind::FailedToSendSignal)?;
+					sys::signal::continue_process(pgid)?;
+				}
 				self.state = JobState::Running;
 				Ok(())
 			},
@@ -554,6 +566,15 @@ impl Job {
 
 	/// Moves the job to execute in the foreground.
 	pub fn move_to_foreground(&mut self) -> Result<(), error::Error> {
+		if self.exit_collected() {
+			// Every process is gone, and so is the process group: nothing to
+			// continue or give the terminal. `wait` returns the collected status.
+			if matches!(self.state, JobState::Stopped) {
+				self.state = JobState::Running;
+			}
+			return Ok(());
+		}
+
 		if matches!(self.state, JobState::Stopped) {
 			if let Some(pgid) = self.process_group_id() {
 				sys::signal::continue_process(pgid)?;
@@ -568,6 +589,35 @@ impl Job {
 		}
 
 		Ok(())
+	}
+
+	/// Collects the exit status of the job's processes once all of them have
+	/// exited. Until then every member stays unreaped: the first process's PID
+	/// names the job's process group, and `fg` and `bg` signal it.
+	fn reap(&mut self) {
+		let all_exited = self.tasks.iter().all(|task| match task {
+			JobTask::External(process) => {
+				process.has_exited() || process.pid().is_some_and(sys::signal::process_exited)
+			},
+			JobTask::Internal(_) => false,
+		});
+		if !all_exited {
+			return;
+		}
+		for task in &mut self.tasks {
+			if let JobTask::External(process) = task {
+				process.reap();
+			}
+		}
+	}
+
+	/// Returns whether [`Self::reap`] collected an exit. It does so only after
+	/// every process of the job has exited.
+	fn exit_collected(&self) -> bool {
+		self
+			.tasks
+			.iter()
+			.any(|task| matches!(task, JobTask::External(process) if process.has_exited()))
 	}
 
 	/// Kills the job.

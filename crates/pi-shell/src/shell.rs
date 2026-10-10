@@ -6316,6 +6316,29 @@ replace = [{ pattern = "hello", replacement = "HI" }]
 		shell.abort().await;
 	}
 
+	/// A finished background child must not look alive to `kill -0`, as in
+	/// bash: a `while kill -0 $!` watcher loop must end. The early reap must
+	/// keep the exit status, so `wait $!` still reports it.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn finished_background_child_is_reaped_but_keeps_wait_status() {
+		let _guard = shell_test_lock().lock().await;
+		let (result, output) = execute_captured(
+			"sh -c 'exit 3' & R=$!; i=0; while kill -0 $R 2>/dev/null && [ $i -lt 300 ]; do \
+			 i=$((i+1)); sleep 0.01; done; echo \"polls=$i\"; wait $R; echo \"wait=$?\""
+				.into(),
+		)
+		.await;
+		assert_eq!(result.exit_code, Some(0), "{output}");
+		let polls: u32 = output
+			.lines()
+			.find_map(|line| line.strip_prefix("polls="))
+			.and_then(|n| n.parse().ok())
+			.unwrap_or_else(|| panic!("no polls line: {output}"));
+		assert!(polls < 300, "kill -0 still found the exited child: {output}");
+		assert!(output.contains("wait=3"), "wait lost the exit status: {output}");
+	}
+
 	/// `Shell::pids` reports the in-flight run's live external children without
 	/// waiting on the session lock that the running command holds, and goes
 	/// empty once the run returns — including through cancellation.

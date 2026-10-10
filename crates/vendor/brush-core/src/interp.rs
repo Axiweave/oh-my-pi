@@ -1555,6 +1555,7 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::SimpleComma
 		mut params: ExecutionParameters,
 	) -> Result<ExecutionSpawnResult, error::Error> {
 		ensure_not_cancelled(&params)?;
+		context.shell.jobs_mut().reap();
 		let prefix_iter = self.prefix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
 		let suffix_iter = self.suffix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
 		let cmd_name_items = self

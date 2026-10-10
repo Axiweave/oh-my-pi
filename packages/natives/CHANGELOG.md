@@ -6,6 +6,7 @@
 
 - Fixed default macOS accessibility snapshots hiding Contacts and Calendar content inside unnamed split groups ([#13651](https://github.com/can1357/oh-my-pi/issues/13651)).
 - Fixed `glob`, `grep`, `fuzzyFind`, and `listWorkspace` ignoring the main repository's `.git/info/exclude` in a linked git worktree. The walker now follows the worktree's `.git` file to the main repository's `info/exclude`, as git does. The same fix applies to submodules. A file excluded in the main checkout is now also excluded in each of its worktrees.
+- Fixed a finished `&` background process staying a zombie inside one bash tool call. Because of the zombie, `kill -0 $!` reported it as alive, and a `while kill -0 $pid` watcher loop never ended. The shell now collects finished background processes before each command, as bash does. `wait $pid` still returns the exit status of the process.
 
 ## [18.8.7] - 2026-10-09
 
