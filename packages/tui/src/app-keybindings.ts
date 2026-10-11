@@ -63,6 +63,7 @@ interface AppKeybindings {
 	"app.tree.unfoldOrDown": true;
 	"app.plan.toggle": true;
 	"app.prewalk.toggle": true;
+	"app.speckitAuto.toggle": true;
 	"app.history.search": true;
 	"app.stt.pushToTalk": true;
 	"app.stt.toggle": true;
@@ -256,6 +257,10 @@ export const KEYBINDINGS = {
 	"app.prewalk.toggle": {
 		defaultKeys: [],
 		description: "Arm or drop a prewalk handoff (/prewalk, /prewalk off)",
+	},
+	"app.speckitAuto.toggle": {
+		defaultKeys: [],
+		description: "Toggle speckit-auto mode (/speckit-auto-mode)",
 	},
 	"app.history.search": {
 		defaultKeys: "ctrl+r",

@@ -719,6 +719,9 @@ export class InputController {
 				void executeBuiltinSlashCommand(command, { ctx: this.ctx, draftDetached: true });
 			});
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.speckitAuto.toggle")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.toggleSpeckitAutoMode());
+		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleClearCommand());
