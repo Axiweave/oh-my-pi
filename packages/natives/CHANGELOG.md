@@ -8,6 +8,37 @@
 - Fixed `glob`, `grep`, `fuzzyFind`, and `listWorkspace` ignoring the main repository's `.git/info/exclude` in a linked git worktree. The walker now follows the worktree's `.git` file to the main repository's `info/exclude`, as git does. The same fix applies to submodules. A file excluded in the main checkout is now also excluded in each of its worktrees.
 - Fixed a finished `&` background process staying a zombie inside one bash tool call. Because of the zombie, `kill -0 $!` reported it as alive, and a `while kill -0 $pid` watcher loop never ended. The shell now collects finished background processes before each command, as bash does. `wait $pid` still returns the exit status of the process.
 
+## [18.9.2] - 2026-10-11
+
+### Fixed
+
+- Fixed stalls when highlighting Markdown tool previews containing many inline spans or backslash escapes.
+
+## [18.9.1] - 2026-10-11
+
+### Fixed
+
+- Fixed executable scripts without a `#!` line failing with "Exec format error" in the embedded shell ([#15271](https://github.com/can1357/oh-my-pi/pull/15271) by [@iliaal](https://github.com/iliaal)).
+
+## [18.9.0] - 2026-10-11
+
+### Added
+
+- Added `applyBinaryPatch(oldPath, patchPath, outPath)` for applying HDiffPatch single-stream delta patches, including zstd-compressed patches, to files.
+- macOS desktop sessions now keep the display awake while in use and expose screen-lock and display-sleep state through capabilities, `screenState`, and screen captures.
+
+### Changed
+
+- Improved Linux embedded-shell startup performance for external commands.
+- Improved macOS computer-use performance, including faster screenshots and accessibility queries, with better handling of large numbers of off-screen windows.
+- Updated `grep()` and `search()` to truncate matching lines around the first match when they exceed `maxColumns`, mark truncated sides with `...`, and report the match's character column.
+
+### Fixed
+
+- Fixed macOS accessibility and window-management operations requiring Screen Recording permission; only screenshots and display listing now require that permission, and window listing includes windows beyond the frontmost 48. Window titles from other applications remain unavailable without Screen Recording permission.
+- Fixed macOS menu inspection and selection for menus containing items whose titles cannot be read; those items are now skipped safely.
+- Fixed syntax highlighting and language detection for several languages, including TOML, PowerShell, SCSS, Less, Vim script, GraphQL, Protobuf, Terraform/HCL, Dockerfile, CMake, INI, gitignore, Kotlin, Swift, Elixir, Sass, Python f-strings, Julia interpolations, and Elixir interpolations.
+
 ## [18.8.8] - 2026-10-10
 
 ### Changed

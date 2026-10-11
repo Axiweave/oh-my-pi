@@ -3,18 +3,18 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.8.9` on 2026-10-10.
+**Reviewed against:** `v18.9.2` on 2026-10-11.
 
 **Verification:** Source setup, `bun check`, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.8.9`.
+The launcher targets this checkout and reports `18.9.2`.
 The merge had conflicts in 13 files. The resolutions preserve every fork decision and retain upstream behavior.
-Upstream's new `modelThresholds` forms (token base, `f` fixed trigger, percentage) and extended-window opt-in now sit below the fork's `modelOverrides` precedence. A matching fork policy also hides the opt-in.
-Upstream removed `isInsideTmux()`. The fork's OSC 7 directory report and Emacs editor request now use `hasTerminalMultiplexerSession("tmux")`.
-The `/annotate` prompt-source editor uses the fork's editor handoff. File sources keep upstream's in-place `openEditorOnPath`.
-249 test files ran in separate processes: every divergence check and every test that upstream or the fork changed between the two releases.
-Upstream's compaction candidate code now calls `modelRegistry.fitContextWindow`, so the fork's `compaction-cyber-candidates` stub host gained an identity fit.
-Five upstream tests fail the same way at the pre-merge commit and at bare `v18.8.9` on this host: `sdk-tool-activation` (no Cursor key), `terminal-launch` and `terminal-launch-tmux` (`/private` temp paths, tmux `/bin/false` shell), `table-chart-native`, and `resize-settle-fused-exit`.
-`bun run test:rs` passed all 3269 tests, with 5 skipped.
+Upstream moved the `auto` effort criteria into `prompts/judge/auto-thinking.json`. The fork's task effort guidance now reads that file, and the fork's `auto-thinking/criteria.ts` copy is gone.
+Upstream replaced image placement state with a live-placement registry. The fork's content-tag supersession now clears `#placementGeometry`, as upstream's `#retire` does.
+Upstream added a constant `isTranscriptBlockFinalized()` to user messages. The fork's optimistic-row version replaces it.
+The fork's overlay-restore repaint now runs after upstream's relocated image retirement and transmits.
+Upstream's empty-Enter gate (`hasInterruptibleInput`) now reads the fork's broader `queuedMessageCount`.
+315 test files ran in separate processes: every divergence check and every test file that this merge changes. Only `sixel-probe` fails, and it fails the same way at bare `v18.9.2` on this host.
+`bun run test:rs` passed all 3297 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -44,9 +44,10 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Count displayable live-steering claims as pending until the agent loop records their delivery.
 - **Behavior:** Empty Enter interrupts the active response and resumes with the pending message in both main and focused sessions.
 - **Why:** Upstream commit `a969abf4d6` introduced live steering. A claimed message left the queue count at zero while the screen still showed `Steering · 1`, disabling empty-Enter interruption.
+- **Upstream as of `v18.9.2`:** Upstream gates empty Enter through `hasInterruptibleInput`, which also peeks undelivered messages. Its `queuedMessageCount` still omits them. The fork keeps the broader count, which also feeds RPC `queuedMessageCount`, `hasPendingMessages`, and settle checks.
 - **Key paths:** `packages/agent/src/agent.ts` and `packages/coding-agent/src/session/agent-session.ts`.
 - **Checks:** `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts` covers accepted and rejected claims in main and focused sessions. `packages/coding-agent/test/rpc-queued-message.test.ts` (`withdraws a steer the streaming response already claimed live`) waits for the fixture's `live-steer-claimed` marker, because the RPC state still counts the claimed steer. It then checks that `abort_and_restore_queue` withdraws that steer.
-- **Retire when:** Upstream pending counts include unrecorded live-steering deliveries and the regression check passes.
+- **Retire when:** Upstream's `queuedMessageCount` includes unrecorded live-steering deliveries and the regression check passes.
 
 
 ### Local source installation
@@ -225,6 +226,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 
 - **Decision:** Keep `low`, `medium`, `high`, `xhigh`, and `max`. Reject upstream's `lo`, `med`, and `hi` names.
 - **Decision:** Resolve effort through the role model map and retain the `task.maxEffort` ceiling.
+- **Decision:** The task tool lists each level with the `auto` classifier's criterion, read from `packages/coding-agent/src/prompts/judge/auto-thinking.json`.
 - **Decision:** Caller effort wins over an explicit selector suffix, agent effort, and inherited parent effort.
 - **Key paths:** `packages/coding-agent/src/task/types.ts`, `packages/coding-agent/src/task/executor.ts`, `packages/coding-agent/src/prompts/tools/task.md`, and `docs/tools/task.md`.
 - **Checks:** `packages/coding-agent/test/task/task-schema.test.ts`, `packages/coding-agent/test/task/executor-pass-through.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, and `packages/tui/test/task-render.test.ts`.

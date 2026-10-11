@@ -3,6 +3,7 @@ import { Settings, settings } from "../config/settings";
 import { getCurrentIdeFile, getCurrentIdeSelection } from "../mcp/ide-selection";
 import type { AgentSession } from "../session/agent-session";
 import { getSessionCompactionBoundaries } from "../session/context-usage-runtime";
+import { classifyResetExpiry, formatResetExpiryNotice } from "../session/reset-expiry";
 import { limitMatchesActiveAccount } from "../slash-commands/helpers/active-oauth-account";
 import { resolveActiveRepoContextSync } from "../utils/active-repo-context";
 import { GH_COMMAND_TIMEOUT_MS, github } from "../utils/github";
@@ -64,6 +65,8 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
 	limitMatchesActiveAccount,
 	ideSelection: getCurrentIdeSelection,
 	ideFile: getCurrentIdeFile,
+	classifyResetExpiry,
+	resetExpiryNotice: formatResetExpiryNotice,
 	computeCompactionBoundaries: (session, contextWindow, model) =>
 		getSessionCompactionBoundaries(session.settings ?? settings, contextWindow, model),
 };

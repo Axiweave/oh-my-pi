@@ -36,7 +36,7 @@ import taskSpawnFeedbackTemplate from "../prompts/tools/task-spawn-feedback.md" 
 import taskSpecializationAdvisoryTemplate from "../prompts/tools/task-specialization-advisory.md" with { type: "text" };
 import taskFollowUpTemplate from "../prompts/tools/task-follow-up.md" with { type: "text" };
 import { TASK_EFFORTS, type TaskEffort } from "@oh-my-pi/pi-tui/thinking";
-import { LEVEL_CRITERIA, MAX_CRITERION } from "../auto-thinking/criteria";
+import autoThinkingQuestions from "../prompts/judge/auto-thinking.json" with { type: "json" };
 import { truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
@@ -159,11 +159,11 @@ interface TaskDescriptionOptions {
 	parentSpawns: string;
 }
 
-/** Per-spawn `effort` guidance: the `auto` classifier's criteria for each task level. */
-const EFFORT_LEVELS = [
-	...Object.entries(LEVEL_CRITERIA).map(([level, criterion]) => ({ level, criterion })),
-	{ level: "max", criterion: MAX_CRITERION },
-];
+/** Per-spawn `effort` guidance: the `auto` classifier's criteria for each task level, `max` last. */
+const EFFORT_LEVELS = Object.entries(autoThinkingQuestions.level.criteria).map(([level, criterion]) => ({
+	level,
+	criterion,
+}));
 
 /** Render the tool description from a cached agent list and current settings. */
 function renderDescription(options: TaskDescriptionOptions): string {
