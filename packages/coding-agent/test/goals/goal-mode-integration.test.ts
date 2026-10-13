@@ -759,6 +759,31 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.session.getGoalModeState()?.goal.tokensUsed).toBe(42);
 	});
 
+	it("edits the objective via /goal edit while keeping goal identity, usage, and budget", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		await harness.mode.handleGoalModeCommand("budget 500");
+		const goal = harness.session.getGoalModeState()?.goal;
+		if (!goal) throw new Error("expected active goal");
+		goal.tokensUsed = 42;
+		vi.spyOn(harness.mode, "showHookEditor").mockResolvedValue("Ship the release and update the changelog");
+
+		await harness.mode.handleGoalModeCommand("edit");
+
+		const after = harness.session.getGoalModeState();
+		expect(after?.goal.objective).toBe("Ship the release and update the changelog");
+		expect(after?.goal.id).toBe(goal.id);
+		expect(after?.goal.tokensUsed).toBe(42);
+		expect(after?.goal.tokenBudget).toBe(500);
+		expect(after?.goal.status).toBe("active");
+		expect(harness.session.goalRuntime.buildActivePrompt()).toContain("update the changelog");
+
+		vi.spyOn(harness.mode, "showHookSelector").mockResolvedValue("Pause");
+		await harness.mode.handleGoalModeCommand();
+		await harness.mode.handleGoalModeCommand("edit Ship v2");
+		expect(harness.session.getGoalModeState()?.goal.objective).toBe("Ship v2");
+		expect(harness.mode.goalModePaused).toBe(true);
+	});
+
 	it("refuses /goal budget while only a paused goal exists (fix #5)", async () => {
 		await harness.mode.handleGoalModeCommand("Ship the release");
 		vi.spyOn(harness.mode, "showHookSelector").mockResolvedValue("Pause");
@@ -819,6 +844,32 @@ describe("InteractiveMode goal mode integration", () => {
 		);
 
 		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "next turn" }));
+		await nextTurn;
+	});
+
+	it("reopens a completed goal via /goal edit with the last objective prefilled", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		const goalTool = (await createTools(harness.toolSession, harness.session.getActiveToolNames())).find(
+			tool => tool.name === "goal",
+		);
+		if (!goalTool) throw new Error("Expected goal tool to be active");
+		await goalTool.execute("call-1", { op: "complete" });
+		const nextTurn = harness.mode.getUserInput();
+		for (let i = 0; i < 100 && harness.session.getGoalModeState() !== undefined; i++) {
+			await Promise.resolve();
+		}
+		expect(harness.session.getGoalModeState()).toBeUndefined();
+		const showHookEditor = vi
+			.spyOn(harness.mode, "showHookEditor")
+			.mockResolvedValue("Ship the release and tag it");
+
+		expect(await harness.mode.handleGoalModeCommand("edit")).toBe(true);
+
+		expect(showHookEditor).toHaveBeenCalledWith("Edit goal", "Ship the release", undefined, { promptStyle: true });
+		const state = harness.session.getGoalModeState();
+		expect(state?.goal.objective).toBe("Ship the release and tag it");
+		expect(state?.goal.status).toBe("active");
+		expect(harness.mode.goalModeEnabled).toBe(true);
 		await nextTurn;
 	});
 });

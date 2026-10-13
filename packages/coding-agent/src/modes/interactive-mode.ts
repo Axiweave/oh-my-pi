@@ -609,9 +609,17 @@ function formatHudNoteMarker(count: number): string {
 	return theme.fg("dim", chalk.italic(` \u207a${sub}`));
 }
 
-type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
+type GoalSubcommand = "set" | "edit" | "show" | "pause" | "resume" | "drop" | "budget";
 
-const GOAL_SUBCOMMANDS = new Set<GoalSubcommand>(["set", "show", "pause", "resume", "drop", "budget"]);
+const GOAL_SUBCOMMANDS: Record<GoalSubcommand, true> = {
+	set: true,
+	edit: true,
+	show: true,
+	pause: true,
+	resume: true,
+	drop: true,
+	budget: true,
+};
 const PLAN_KEEP_CONTEXT_OPTION_INDEX = 2;
 const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
 const PLAN_SAVE_AND_QUIT_OPTION = "Save and quit";
@@ -641,7 +649,7 @@ function parseGoalSubcommand(args: string): {
 	const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
 	if (!match) return { sub: undefined, rest: trimmed };
 	const first = match[1].toLowerCase();
-	if (GOAL_SUBCOMMANDS.has(first as GoalSubcommand)) {
+	if (Object.hasOwn(GOAL_SUBCOMMANDS, first)) {
 		return { sub: first as GoalSubcommand, rest: match[2]?.trim() ?? "" };
 	}
 	return { sub: undefined, rest: trimmed };
@@ -7210,6 +7218,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		switch (sub) {
 			case "set":
 				return await this.#handleGoalSetSubcommand(rest, input);
+			case "edit":
+				return await this.#handleGoalEditSubcommand(rest, input);
 			case "show":
 				this.#showGoalDetails();
 				return false;
@@ -7245,13 +7255,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		const title = state === "active" ? `Goal: ${summary} (${goal.status})` : `Goal paused: ${summary}`;
 		const items =
 			state === "active"
-				? ["Show details", "Adjust budget…", "Pause", "Drop"]
-				: ["Resume", "Show details", "Adjust budget…", "Drop"];
+				? ["Show details", "Edit objective…", "Adjust budget…", "Pause", "Drop"]
+				: ["Resume", "Show details", "Edit objective…", "Adjust budget…", "Drop"];
 		const choice = await this.showHookSelector(title, items);
 		if (!choice) return;
 		switch (choice) {
 			case "Show details":
 				this.#showGoalDetails();
+				return;
+			case "Edit objective…":
+				await this.#handleGoalEditSubcommand("");
 				return;
 			case "Adjust budget…":
 				await this.#promptGoalBudgetEdit();
@@ -7299,6 +7312,44 @@ export class InteractiveMode implements InteractiveModeContext {
 		)?.trim();
 		if (!input) return;
 		await this.#handleGoalBudgetCommand(input);
+	}
+
+	async #handleGoalEditSubcommand(
+		rest: string,
+		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+	): Promise<boolean> {
+		const goal = this.session.getGoalModeState()?.goal;
+		// A completed goal clears the live state; edit its last objective into a fresh goal instead.
+		const completed = goal
+			? undefined
+			: this.sessionManager
+					.getBranch()
+					.findLast(entry => entry.type === "custom" && entry.customType === "goal-completed");
+		const completedData = completed?.type === "custom" ? (completed.data as { objective?: unknown }) : undefined;
+		const previous = goal?.objective ?? (typeof completedData?.objective === "string" ? completedData.objective : "");
+		if (!previous) {
+			this.showWarning("No goal to edit.");
+			return false;
+		}
+		const objective = (
+			rest || (await this.showHookEditor("Edit goal", previous, undefined, { promptStyle: true }))
+		)?.trim();
+		if (!objective) return false;
+		if (!goal) return await this.#startGoalFromObjective(objective, input);
+		if (objective === goal.objective) return false;
+		const state = await this.session.goalRuntime.editObjective(objective);
+		if (!state) return false;
+		this.session.setGoalModeState(state);
+		this.#updateGoalModeStatus();
+		this.showStatus("Goal objective updated.");
+		if (!this.goalModeEnabled) return false;
+		if (this.session.isStreaming) {
+			await this.session.sendGoalModeContext({ deliverAs: "steer" });
+			return false;
+		}
+		this.#resetGoalContinuationSuppression();
+		this.#scheduleGoalContinuation();
+		return false;
 	}
 
 	async #pauseGoalAction(): Promise<void> {

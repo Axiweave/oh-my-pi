@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `/goal edit [objective]`. It changes the objective of the current goal (active or paused) and keeps its id, status, token usage, time, and budget. With no text, it opens an "Edit goal" editor that shows the current objective. After a goal completes, `/goal edit` shows the last objective and starts a new goal from the edited text. The `/goal` menu also has an "Edit objective…" item. An active goal gets the new objective at once: as a steer while the agent runs, or as a continuation when it is idle.
 - Added the `prewalk.into` setting (default `@smol`). It sets the prewalk handoff target for `--prewalk`, `prewalk.enabled`, and `/prewalk`. A role keeps its fallback order. `--prewalk-into` still overrides it for one session.
 - Added the `@@` prewalk target. It keeps the model that the session or subagent starts on and still runs the plan, todo gate, and checklist flow. `@@:<level>` keeps the model and changes only the thinking level at the handoff. It works in `prewalk.into`, `--prewalk-into`, agent `prewalk:` frontmatter, and `task.agentPrewalk`.
 - Added `/prewalk off`. It drops a pending prewalk handoff for the current session and keeps the active model. `prewalk.enabled` does not change. The drop shows no notice. The prewalk segment leaves the status line.

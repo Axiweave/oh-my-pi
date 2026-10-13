@@ -318,6 +318,21 @@ export class GoalRuntime {
 		});
 	}
 
+	/** Rewrite the objective in place; id, status, usage, and budget stay. */
+	async editObjective(objective: string): Promise<GoalModeState | undefined> {
+		const trimmed = objective.trim();
+		if (!trimmed) throw new Error("objective is required");
+		return await this.#withAccounting(async () => {
+			await this.#flushUsageLocked("suppressed");
+			const state = this.#getStateClone();
+			if (!state?.goal) return undefined;
+			state.goal.objective = trimmed;
+			state.goal.updatedAt = this.#now();
+			await this.#commitState(state, { persist: state.enabled ? "goal" : "goal_paused" });
+			return state;
+		});
+	}
+
 	/** `currentUsage` defaults to the host's live totals, read only once a token delta is needed. */
 	async #flushUsageLocked(
 		steering: GoalBudgetSteering,
