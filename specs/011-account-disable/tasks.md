@@ -231,3 +231,7 @@ Agent C: T005, T005a, T006, T006a    (tests)
 
 - [X] T032 Make an explicit `credentialId` on a disabled account fail in `selectOAuthAccount` (`packages/coding-agent/src/security/auth.ts:66-67`) with the T031 disabled error, instead of selecting the account. A scan has no session to move, and the disable mark overrides an explicit choice. Change the explicit-id assertion of the T030 property to match. Per FR-002 and spec Assumptions (contradicts)
 - [X] T033 Leave disabled accounts out of `/models` discovery in `resolveOAuthDiscoveryAccounts` (`packages/coding-agent/src/config/model-provider-discovery.ts:160`). Today it fetches the provider's `/models` with the token of every stored account, disabled ones included. A disabled account whose refresh fails must not abort discovery. `omp dry-balance` keeps disabled accounts, because check commands keep them visible. Per US1 and US1/AC1 (contradicts)
+
+## Phase 12: Convergence
+
+- [X] T034 Leave disabled accounts out of `OAuthAccounts.accessAll` (`packages/ai/src/auth/oauth.ts:287-297`), before it resolves or refreshes them, so no caller gets their tokens. Today `omp dry-balance` (`dry-balance-cli.ts:475-485`) sends a real completion with every account's token, which spends a disabled account's quota. This one filter also covers `/models` discovery and the catalog script, so remove the T033 filter in `model-provider-discovery.ts` and its stub test. `oauth.accounts()` keeps listing disabled rows. Add a seeded property test: `accessAll` never returns a disabled account. Per US1 and FR-002 (contradicts)
