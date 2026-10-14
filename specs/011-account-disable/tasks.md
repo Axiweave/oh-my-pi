@@ -235,3 +235,7 @@ Agent C: T005, T005a, T006, T006a    (tests)
 ## Phase 12: Convergence
 
 - [X] T034 Leave disabled accounts out of `OAuthAccounts.accessAll` (`packages/ai/src/auth/oauth.ts:287-297`), before it resolves or refreshes them, so no caller gets their tokens. Today `omp dry-balance` (`dry-balance-cli.ts:475-485`) sends a real completion with every account's token, which spends a disabled account's quota. This one filter also covers `/models` discovery and the catalog script, so remove the T033 filter in `model-provider-discovery.ts` and its stub test. `oauth.accounts()` keeps listing disabled rows. Add a seeded property test: `accessAll` never returns a disabled account. Per US1 and FR-002 (contradicts)
+
+## Phase 13: Convergence
+
+- [X] T035 Never redeem a saved reset for a disabled account. Before planning, `#planCodexResets` and `#planClaudeResets` (`packages/coding-agent/src/session/agent-session.ts:13535-13595`) remove disabled accounts. Both the blocked-turn restore and the expiring-credit salvage go through them, for Codex and Claude. Today the automatic salvage sweep can spend a disabled account's reset. Reset listings stay, because they are read-only checks like the usage report (US3/AC1). Add a seeded property test in `codex-auto-reset-integration.test.ts` with a redeem spy. No redeem targets a disabled account, and every enabled account with an expiring credit is still redeemed. Per US1 and FR-002 (contradicts)
