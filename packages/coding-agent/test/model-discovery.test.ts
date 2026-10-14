@@ -19,10 +19,7 @@ import {
 	discoverOpenAIModelsList,
 	discoveryProbeTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/config/model-discovery";
-import {
-	RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS,
-	resolveOAuthDiscoveryAccounts,
-} from "@oh-my-pi/pi-coding-agent/config/model-provider-discovery";
+import { RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS } from "@oh-my-pi/pi-coding-agent/config/model-provider-discovery";
 import { kNoAuth, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resolveCliModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { ProviderDiscoverySchema } from "@oh-my-pi/pi-coding-agent/config/models-config-schema";
@@ -3717,63 +3714,5 @@ describe("ModelRegistry runtime discovery", () => {
 
 		expect(registry.find("github-copilot", cachedAlias.id)).toBeUndefined();
 		expect(registry.find("github-copilot", bundledBase.id)?.headers).toEqual(bundledBase.headers);
-	});
-});
-
-describe("resolveOAuthDiscoveryAccounts", () => {
-	test("never returns a disabled account's token, and a disabled account's failure never aborts discovery", async () => {
-		const seed = Number(process.env.ROUTING_SEED ?? 20_260_511);
-		let state = seed >>> 0;
-		const draw = (n: number) => {
-			state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
-			return (state >>> 16) % n;
-		};
-		for (let run = 0; run < 200; run++) {
-			const count = 1 + draw(4);
-			const disabled = Array.from({ length: count }, () => draw(2) === 1);
-			const failed = Array.from({ length: count }, () => draw(3) === 0);
-			const enabled = disabled.flatMap((isDisabled, index) => (isDisabled ? [] : [index]));
-			if (enabled.length === 0) continue;
-			// The cascade only serves an enabled account, so the resolved token is one of theirs.
-			const resolvedIndex = enabled[draw(enabled.length)]!;
-			const token = (index: number) => `token-${index}`;
-			const storage = {
-				oauth: {
-					accessAll: async () =>
-						disabled.map((_d, index) =>
-							failed[index]
-								? {
-										ok: false as const,
-										credentialId: index + 1,
-										email: `u${index}@x.test`,
-										error: "refresh failed",
-									}
-								: {
-										ok: true as const,
-										credentialId: index + 1,
-										email: `u${index}@x.test`,
-										accessToken: token(index),
-									},
-						),
-					policy: (_provider: string, identity: { email?: string }) =>
-						disabled[Number(identity.email?.slice(1, identity.email.indexOf("@")))]
-							? { disabled: true }
-							: undefined,
-				},
-				credentials: { all: () => ({}) },
-			};
-			// A stub of the two AuthStorage members discovery reads.
-			const authStorage = storage as unknown as AuthStorage;
-			const where = `ROUTING_SEED=${seed} run=${run} disabled=${disabled} failed=${failed}`;
-			const accounts = await resolveOAuthDiscoveryAccounts(authStorage, "openai-codex", token(resolvedIndex));
-			const enabledFailed = enabled.some(index => failed[index]);
-			const tokens = accounts?.map(account => account.accessToken).sort();
-			const disabledTokens = disabled.flatMap((isDisabled, index) => (isDisabled ? [token(index)] : []));
-			expect({
-				where,
-				aborted: accounts === null,
-				leaked: tokens?.filter(t => disabledTokens.includes(t)) ?? [],
-			}).toEqual({ where, aborted: enabledFailed, leaked: [] });
-		}
 	});
 });

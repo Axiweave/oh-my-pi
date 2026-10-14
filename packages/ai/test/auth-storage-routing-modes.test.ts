@@ -2308,6 +2308,20 @@ describe("disabled accounts", () => {
 		);
 	});
 
+	it("accessAll resolves every enabled account and never a disabled one", async () => {
+		await forAll(CASES, async g => {
+			const accounts: Account[] = Array.from({ length: g.int(1, 4) }, () => ({
+				usage: randomUsage(g, true),
+				disabled: g.chance(0.5),
+			}));
+			await withPool(accounts, { routing: { mode: g.pick(MODES) } }, async pool => {
+				const enabled = accounts.flatMap((account, index) => (account.disabled ? [] : [emailOf(index)]));
+				const resolved = await pool.authStorage.oauth.accessAll(PROVIDER);
+				expect(resolved.map(access => access.email)).toEqual(enabled);
+			});
+		});
+	});
+
 	it("an unpinned session's active account is never a disabled one", async () => {
 		await withoutEnvKeys([PROVIDER], () =>
 			forAll(CASES, async g => {
@@ -2338,7 +2352,11 @@ describe("disabled accounts", () => {
 					const pinned = explicit ? g.int(0, accounts.length - 1) : await pool.select("s");
 					if (explicit) expect(pool.authStorage.sessions.pin(PROVIDER, "s", pool.ids[pinned]!)).toBe(true);
 					const disabled = new Set([pinned, ...accounts.flatMap((_a, index) => (g.chance(0.4) ? [index] : []))]);
-					applyPolicies(pool.authStorage, marked(accounts, index => disabled.has(index)), routing);
+					applyPolicies(
+						pool.authStorage,
+						marked(accounts, index => disabled.has(index)),
+						routing,
+					);
 					const held = stays === "strict" && !explicit;
 					const enabled = accounts.flatMap((_a, index) => (disabled.has(index) ? [] : [emailOf(index)]));
 					const identity = pool.authStorage.oauth.identity(PROVIDER, "s")?.email;

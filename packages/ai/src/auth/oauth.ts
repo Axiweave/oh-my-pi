@@ -282,7 +282,9 @@ export class OAuthAccounts implements OAuthApi {
 	 * Refreshes credentials through the same broker/local path as
 	 * {@link OAuthAccounts.access}, but does not rank, round-robin, or
 	 * stop after the first usable account. Intended for diagnostics that must
-	 * exercise each stored account exactly once.
+	 * exercise each stored account exactly once. An account that
+	 * `auth.accountPolicies` disables is skipped: callers send requests with
+	 * these tokens, and a disabled account never sends one.
 	 */
 	async accessAll(provider: string, options?: AuthApiKeyOptions): Promise<OAuthAccessResolution[]> {
 		if (this.#deps.overrides.has(provider)) {
@@ -290,9 +292,9 @@ export class OAuthAccounts implements OAuthApi {
 		}
 		const providerKey = providerTypeKey(provider, "oauth");
 		return Promise.all(
-			this.#getStoredOAuthSelections(provider).map(selection =>
-				this.#resolveStoredOAuthAccess(provider, selection, providerKey, options),
-			),
+			this.#getStoredOAuthSelections(provider)
+				.filter(selection => !this.#deps.policies.isDisabled(provider, selection.credential))
+				.map(selection => this.#resolveStoredOAuthAccess(provider, selection, providerKey, options)),
 		);
 	}
 

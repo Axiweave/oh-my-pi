@@ -160,8 +160,6 @@ export async function resolveOAuthDiscoveryAccounts(
 	const accesses = await authStorage.oauth.accessAll(provider);
 	const accounts: OAuthAccess[] = [];
 	for (const access of accesses) {
-		// A disabled account never sends a request, and its refresh failure must not abort discovery.
-		if (authStorage.oauth.policy(provider, access)?.disabled) continue;
 		if (!access.ok) return null;
 		accounts.push(access);
 	}
