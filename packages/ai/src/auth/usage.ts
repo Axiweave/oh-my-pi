@@ -119,6 +119,8 @@ export class UsageService implements UsageApi {
 	#usageRequestInFlight: Map<string, { refreshEpoch: number; promise: Promise<UsageReport | null> }> = new Map();
 	#usageHeaderIngestAt: Map<string, number> = new Map();
 	#usageReportsInFlight: Map<string, Promise<UsageReport[] | null>> = new Map();
+	/** Decayed input+output tokens each credential served lately (one-hour half-life), by provider. */
+	#recentTokens: Map<string, Map<number, { tokens: number; atMs: number }>> = new Map();
 	readonly fetch: typeof fetch;
 	readonly logger: UsageLogger;
 	readonly requestTimeoutMs: number;
@@ -144,6 +146,22 @@ export class UsageService implements UsageApi {
 	 */
 	providerFor(provider: Provider): UsageProvider | undefined {
 		return this.#runtimeUsageProviderOverrides.get(provider)?.provider ?? this.#deps.usageProviders(provider);
+	}
+
+	/** Whether `provider`'s usage can be learned from response headers. */
+	canLearnFromHeaders(provider: Provider): boolean {
+		return this.providerFor(provider)?.parseRateLimitHeaders !== undefined;
+	}
+
+	/** Tokens `credentialId` served lately, halved per hour since they were recorded. */
+	recentTokens(provider: string, credentialId: number, nowMs: number): number {
+		const tally = this.#recentTokens.get(provider)?.get(credentialId);
+		return tally ? tally.tokens * 0.5 ** (Math.max(0, nowMs - tally.atMs) / (60 * 60 * 1000)) : 0;
+	}
+
+	/** Forget `provider`'s recent-token tallies (its credential set changed). */
+	clearRecentTokens(provider: string): void {
+		this.#recentTokens.delete(provider);
 	}
 
 	/**
@@ -455,6 +473,17 @@ export class UsageService implements UsageApi {
 	 * the call is a no-op.
 	 */
 	observe(entry: ObservedUsageInput): void {
+		const at = entry.at ?? Date.now();
+		if (entry.credentialId !== undefined) {
+			let tally = this.#recentTokens.get(entry.provider);
+			if (!tally) {
+				tally = new Map();
+				this.#recentTokens.set(entry.provider, tally);
+			}
+			const tokens =
+				this.recentTokens(entry.provider, entry.credentialId, at) + entry.usage.input + entry.usage.output;
+			tally.set(entry.credentialId, { tokens, atMs: at });
+		}
 		const record = this.#deps.store.recordObservedUsage;
 		if (!record) return;
 		try {
@@ -462,7 +491,7 @@ export class UsageService implements UsageApi {
 				this.#deps.store,
 				[
 					{
-						at: entry.at ?? Date.now(),
+						at,
 						provider: entry.provider,
 						model: entry.model,
 						requests: 1,

@@ -933,6 +933,12 @@ describe("AuthStorage persistent session stickiness", () => {
 		expect(session).toBeDefined();
 		expect(freshToken).toBeDefined();
 
+		// The probe's key check pinned the session, and the pin outlives a restart.
+		authStorage.close();
+		authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(dbPath)));
+		await authStorage.credentials.reload();
+		expect(authStorage.oauth.accounts(provider, session).find(account => account.active)?.credentialId).toBe(stuckId);
+
 		expect(await authStorage.credentials.removeById(provider, rows[0].id)).toBe(true);
 		authStorage.close();
 

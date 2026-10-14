@@ -179,7 +179,7 @@ export interface AgentOptions {
 	 * Resolves an API key or resolver dynamically for each LLM call.
 	 * Useful for expiring tokens and model-scoped credential routing.
 	 */
-	getApiKey?: (model: Model) => Promise<ApiKey | undefined> | ApiKey | undefined;
+	getApiKey?: (model: Model, context?: { withinTurn: boolean }) => Promise<ApiKey | undefined> | ApiKey | undefined;
 
 	/**
 	 * Inspect or replace provider payloads before they are sent.
@@ -508,13 +508,15 @@ export class Agent {
 	#appendOnlyContext?: AppendOnlyContextManager;
 	#beforeQueuedMessageDequeueHooks = new Set<(signal?: AbortSignal) => Promise<void> | void>();
 	#beforeModelCallHooks = new Set<(signal?: AbortSignal) => Promise<void> | void>();
+	/** Set by {@link startNewTurn}; the next key lookup reports `withinTurn: false`. */
+	#nextRequestStartsTurn = false;
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
 	#cursorToolResultDrain: CursorToolResultEntry[] | undefined;
 
 	streamFn: StreamFn;
-	getApiKey?: (model: Model) => Promise<ApiKey | undefined> | ApiKey | undefined;
+	getApiKey?: (model: Model, context?: { withinTurn: boolean }) => Promise<ApiKey | undefined> | ApiKey | undefined;
 	/** Prepare actual queue deliveries after dequeue gates; commit runs only while ownership remains valid. */
 	prepareQueuedMessages?: PrepareQueuedMessages;
 	/**
@@ -1668,6 +1670,14 @@ export class Agent {
 		return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
 	}
 
+	/**
+	 * Make the next model request a new turn even after tool results, so the
+	 * account `stays` rule selects again. A retry after an error uses this.
+	 */
+	startNewTurn(): void {
+		this.#nextRequestStartsTurn = true;
+	}
+
 	async continue(signal?: AbortSignal) {
 		if (this.#state.isStreaming) {
 			throw new AgentBusyError();
@@ -1842,6 +1852,7 @@ export class Agent {
 			return entry.toolResult;
 		};
 
+		const getApiKey = this.getApiKey;
 		let claimedToolChoice: ToolChoice | undefined;
 		const getToolChoice = (): ToolChoiceDirective | undefined => {
 			claimedToolChoice = undefined;
@@ -1909,7 +1920,13 @@ export class Agent {
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
 			onSseEvent: this.#onSseEvent,
-			getApiKey: this.getApiKey,
+			getApiKey:
+				getApiKey &&
+				((requestModel, context) => {
+					const startsTurn = this.#nextRequestStartsTurn;
+					this.#nextRequestStartsTurn = false;
+					return getApiKey(requestModel, startsTurn ? { withinTurn: false } : context);
+				}),
 			getToolContext: this.#getToolContext,
 			syncContextBeforeModelCall: async (context, signal) => {
 				await this.#runBeforeModelCallHooks(signal);

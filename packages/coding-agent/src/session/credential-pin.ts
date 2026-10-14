@@ -17,41 +17,9 @@
  * stick or re-rank.
  */
 
+import { credentialPinHash } from "@oh-my-pi/pi-ai/auth/affinity";
 import type { AuthStorage } from "./auth-storage";
 import type { SessionManager } from "./session-manager";
-
-/** Account fields shared by `OAuthAccountIdentity` and `OAuthAccountSummary`. */
-interface CredentialPinIdentity {
-	accountId?: string;
-	email?: string;
-	projectId?: string;
-	orgId?: string;
-}
-
-/**
- * Stable identifier for a provider account within its billing scope. The
- * digest covers the full scope tuple — the same account in two orgs (Anthropic
- * multi-subscription) or projects (Gemini) is two distinct cache domains and
- * must produce two distinct pins. The digest input is the persisted contract
- * for `CredentialPinEntry.hash` — changing it orphans every recorded pin.
- *
- * Hashing avoids embedding raw emails/uuids in session files, but an unsalted
- * digest of a guessable email is still linkable — treat exported sessions
- * accordingly.
- *
- * Returns `undefined` when the identity carries no account key at all.
- */
-export function credentialPinHash(provider: string, identity: CredentialPinIdentity): string | undefined {
-	if (!identity.accountId && !identity.email) return undefined;
-	const key = [
-		provider,
-		identity.accountId ?? "",
-		identity.email ?? "",
-		identity.orgId ?? "",
-		identity.projectId ?? "",
-	].join("\0");
-	return new Bun.CryptoHasher("sha256").update(key).digest("hex");
-}
 
 /**
  * Record the account that served the latest assistant turn for `provider`.
@@ -81,14 +49,21 @@ export function recordCredentialPin(
  * same account whose last use predates the pin is advanced to the pin's time:
  * the persisted sticky is written lazily, so the session file can be newer.
  * Seeds with the session's effective last-use time so stale resumes still fall
- * through to usage ranking.
+ * through to usage ranking. Under `stays: strict` a gone account holds the
+ * session instead, so it keeps failing as it did before a restart that lost the
+ * store's own hold (a remote broker keeps that hold in memory only).
  */
 export function seedCredentialPins(authStorage: AuthStorage, sessionManager: SessionManager, sessionId: string): void {
 	for (const [provider, pin] of sessionManager.getCredentialPins()) {
 		const accounts = authStorage.oauth.accounts(provider, sessionId);
-		if (accounts.length === 0) continue;
 		const match = accounts.find(account => credentialPinHash(provider, account) === pin.hash);
-		if (!match) continue;
+		if (!match) {
+			// Only a strict session keeps failing; others would drop the hold at their next lookup.
+			if (authStorage.routing.config(provider).stays === "strict") {
+				authStorage.sessions.holdGone(provider, sessionId, pin);
+			}
+			continue;
+		}
 		const active = accounts.find(account => account.active);
 		if (active && (active !== match || (active.lastUsedAtMs ?? 0) >= pin.lastUsedAt)) continue;
 		authStorage.sessions.pin(provider, sessionId, match.credentialId, {

@@ -312,7 +312,7 @@ async function generateTitleOnlineWithModels(
 					registry.authStorage.sessions.pin(model.provider, sessionId, foregroundCredential.credentialId);
 				}
 			}
-			const apiKey = await registry.getApiKey(model, sessionId);
+			const apiKey = await registry.getApiKey(model, sessionId, { skipMissing: true });
 			if (!apiKey) {
 				logger.warn("title-generator: no API key", { ...modelContext, reason: "missing-api-key" });
 				continue;
@@ -324,9 +324,8 @@ async function generateTitleOnlineWithModels(
 				});
 				return null;
 			}
-			// Resolve metadata after getApiKey so the session-sticky credential for this
-			// request is already recorded; metadataResolver can then return the correct
-			// account_uuid rather than the snapshot-at-call-site value.
+			// Resolve metadata after getApiKey, which pins the session's account, so
+			// metadataResolver reads that account's account_uuid rather than none.
 			const metadata = metadataResolver?.(model.provider);
 
 			// Title generation is a 3-7 word task, but the ceiling has to survive

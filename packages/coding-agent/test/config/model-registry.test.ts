@@ -296,7 +296,7 @@ describe("ModelRegistry", () => {
 	});
 	test("resolves API keys and provider headers for legacy extensions", async () => {
 		const model = testModel;
-		vi.spyOn(registry, "getApiKey").mockResolvedValue("test-key");
+		vi.spyOn(registry, "getApiKeyWithCredentialForProvider").mockResolvedValue({ apiKey: "test-key" });
 		vi.spyOn(registry, "getProviderHeaders").mockResolvedValue({ "x-test": "value" });
 
 		expect(await registry.getApiKeyAndHeaders(model)).toEqual({
@@ -315,7 +315,7 @@ describe("ModelRegistry", () => {
 
 	test("maps legacy extension auth failures into the result contract", async () => {
 		const model = testModel;
-		vi.spyOn(registry, "getApiKey").mockRejectedValue(new Error("auth failed"));
+		vi.spyOn(registry, "getApiKeyWithCredentialForProvider").mockRejectedValue(new Error("auth failed"));
 
 		expect(await registry.getApiKeyAndHeaders(model)).toEqual({ ok: false, error: "auth failed" });
 	});

@@ -14,6 +14,8 @@ export interface ApiKeyResolverOptions {
 	baseUrl?: string;
 	/** Provider model id forwarded to model-scoped usage ranking/backoff. */
 	modelId?: string;
+	/** The request continues a tool-use turn (forwarded to the account stays rule). */
+	withinTurn?: boolean;
 }
 
 /**
@@ -29,20 +31,20 @@ export interface ApiKeyResolverRegistry {
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
 	): Promise<ApiKeyResolution>;
-	authStorage: Pick<AuthStorage, "limits">;
+	authStorage: Pick<AuthStorage, "limits" | "routing">;
 	/**
 	 * Build an {@link ApiKeyResolver} implementing the central a/b/c auth-retry
 	 * policy: initial → resolve; step (b) → force-refresh same account; step (c)
 	 * → rotate to a sibling and re-resolve, unless quota exhaustion has no sibling.
 	 *
 	 * Two call forms: `resolver(provider, options?)` for provider-scoped keys,
-	 * and `resolver(model, sessionId?)` which derives `baseUrl`/`modelId` from
-	 * the model. The resolver is stateless (safe to reuse across requests).
+	 * and `resolver(model, sessionIdOrOptions?)` which derives `baseUrl`/`modelId`
+	 * from the model. The resolver is stateless (safe to reuse across requests).
 	 * Callers that need the initial key for a guard can call
 	 * `resolveApiKeyOnce(resolver)`.
 	 */
 	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
-	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
+	resolver(model: ApiKeyResolverModel, sessionIdOrOptions?: string | ApiKeyResolverOptions): ApiKeyResolver;
 }
 
 /**
@@ -54,22 +56,14 @@ export function createApiKeyResolver(
 	provider: string,
 	options: ApiKeyResolverOptions = {},
 ): ApiKeyResolver {
-	const { sessionId, baseUrl, modelId } = options;
-	const resolveKey = (
-		forceRefresh: boolean | undefined,
-		signal?: AbortSignal,
-		refreshReason?: AuthApiKeyOptions["refreshReason"],
-	): Promise<ApiKeyResolution> =>
-		registry.getApiKeyWithCredentialForProvider(provider, sessionId, {
-			baseUrl,
-			modelId,
-			forceRefresh,
-			signal,
-			refreshReason,
-		});
+	const { sessionId, baseUrl, modelId, withinTurn } = options;
+	// Auth retries (steps b and c) continue the same request, so they pass
+	// `withinTurn: true` and keep the account that the request selected.
+	const resolveKey = (keyOptions: AuthApiKeyOptions): Promise<ApiKeyResolution> =>
+		registry.getApiKeyWithCredentialForProvider(provider, sessionId, { baseUrl, modelId, ...keyOptions });
 	return async ({ lastChance, error, signal, previousKey }) => {
 		if (error === undefined) {
-			return resolveKey(undefined);
+			return resolveKey({ withinTurn });
 		}
 		if (lastChance) {
 			// Account constraint (401 / usage / account-rate-limit): rotate to a
@@ -78,12 +72,16 @@ export function createApiKeyResolver(
 			// sleeps out a sibling block that clears within seconds. Longer
 			// no-sibling backoff is owned by `markUsageLimitReached` (default +
 			// server usage-report reset) and the outer whole-turn retry layer.
+			// `strict` never leaves its account: `rotate` only records the block, and the error reaches the user.
+			// Read it first: `rotate` may clear an explicit pin, which would read as strict afterwards.
+			const strict = registry.authStorage.routing.strict(provider, sessionId);
 			const rotation = await registry.authStorage.limits.rotate(provider, sessionId, {
 				error,
 				modelId,
 				signal,
 				apiKey: previousKey,
 			});
+			if (strict) return undefined;
 			if (!rotation.switched) {
 				const status = AIError.status(error);
 				const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
@@ -92,9 +90,14 @@ export function createApiKeyResolver(
 				// auth decline can instead mean a peer refreshed the bearer.
 				if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) return undefined;
 			}
-			const resolved = await resolveKey(undefined);
+			const resolved = await resolveKey({ withinTurn: true });
 			return rotation.afterSiblingWait ? markAfterSiblingWait(resolved) : resolved;
 		}
-		return resolveKey(true, signal, AIError.status(error) === 401 ? "auth-recovery" : undefined);
+		return resolveKey({
+			forceRefresh: true,
+			signal,
+			refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,
+			withinTurn: true,
+		});
 	};
 }

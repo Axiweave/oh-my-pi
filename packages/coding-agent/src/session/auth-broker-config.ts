@@ -40,7 +40,7 @@ import { resolveConfigValue } from "../config/resolve-config-value";
 import { Settings } from "../config/settings";
 import type { AuthStorage } from "./auth-storage";
 
-import { cfgAuthAccountPolicies, cfgAuthBrokerToken, cfgAuthBrokerUrl } from "../config/model-settings";
+import { cfgAuthAccountPolicies, cfgAuthBrokerToken, cfgAuthBrokerUrl, cfgAuthRouting } from "../config/model-settings";
 import { cfgRetryUsageReservePct } from "./settings";
 
 export { type AuthBrokerClientConfig, getAuthBrokerTokenFilePath };
@@ -75,13 +75,14 @@ export async function resolveEffectiveSettings({
 	return Settings.loadReadOnly({ cwd, agentDir });
 }
 
-/** Resolve `auth.accountPolicies` + `retry.usageReservePct` from effective settings (SDK discovery, auth-gateway). */
+/** Resolve `auth.accountPolicies` + `auth.routing` + `retry.usageReservePct` from effective settings (SDK discovery, auth-gateway). */
 export async function loadEffectiveAuthAccountPolicyConfig(
 	scope: EffectiveSettingsScope = {},
 ): Promise<AuthAccountPolicyConfig> {
 	const settings = await resolveEffectiveSettings(scope);
 	return loadAuthAccountPolicyConfig({
 		accountPolicies: cfgAuthAccountPolicies.get(settings),
+		routing: cfgAuthRouting.get(settings),
 		usageReservePct: cfgRetryUsageReservePct.get(settings),
 	});
 }
@@ -129,6 +130,7 @@ const cfgAuthStorageSettings = combine({
 	brokerUrl: cfgAuthBrokerUrl,
 	brokerToken: cfgAuthBrokerToken,
 	accountPolicies: cfgAuthAccountPolicies,
+	routing: cfgAuthRouting,
 	usageReservePct: cfgRetryUsageReservePct,
 });
 
@@ -140,9 +142,24 @@ export interface AuthStorageSettingsSync {
 	stop(): void;
 }
 
+/** Per `Settings`: waits for its sync, then throws the refused account policy change, if any. */
+const syncsBySettings = new WeakMap<Settings, () => Promise<void>>();
+
+/**
+ * Wait until the auth settings of `settings` have been applied to its auth storage, and throw
+ * the error of an account policy change that was refused (for example, a cap on a provider
+ * without usage reports). The error stays until a later change applies, so every
+ * `/reload-config` of the same bad file reports it like an invalid setting.
+ */
+export async function authSettingsApplied(settings: Settings): Promise<void> {
+	// The settings listener delivers a change on the next microtask.
+	await Promise.resolve();
+	await syncsBySettings.get(settings)?.();
+}
+
 /**
  * Keeps a long-lived `authStorage` in step with the auth settings of `scope`:
- * - `auth.accountPolicies` / `retry.usageReservePct` re-apply account routing policy.
+ * - `auth.accountPolicies` / `auth.routing` / `retry.usageReservePct` re-apply account routing settings.
  * - `auth.broker.url` / `auth.broker.token` flush pending writes, re-resolve the
  *   broker with startup precedence (env → config.yml → token file; project layers
  *   never redirect credentials), and swap the credential store in place when the
@@ -160,11 +177,14 @@ export function createAuthStorageSettingsSync(scope: ScopeLike, authStorage: Aut
 		() => null,
 	);
 	let pending: Promise<void> = Promise.resolve();
+	let policyError: unknown;
 
 	const applyPolicies = async () => {
 		try {
 			authStorage.setAccountPolicies(await loadEffectiveAuthAccountPolicyConfig({ settings }));
+			policyError = undefined;
 		} catch (error) {
+			policyError = error;
 			logger.warn("Account policy change not applied; keeping the previous policy", { error: String(error) });
 		}
 	};
@@ -194,14 +214,26 @@ export function createAuthStorageSettingsSync(scope: ScopeLike, authStorage: Aut
 		const brokerChanged = next.brokerUrl !== previous.brokerUrl || next.brokerToken !== previous.brokerToken;
 		const policiesChanged =
 			next.usageReservePct !== previous.usageReservePct ||
-			!Bun.deepEquals(next.accountPolicies, previous.accountPolicies);
+			!Bun.deepEquals(next.accountPolicies, previous.accountPolicies) ||
+			!Bun.deepEquals(next.routing, previous.routing);
 		pending = pending.then(async () => {
 			if (brokerChanged) await applyBroker();
 			if (policiesChanged) await applyPolicies();
 		});
 		return pending;
 	});
-	return { settled: () => pending, stop };
+	// Kept for `authSettingsApplied`: waits out the queue, then reports a refused policy.
+	syncsBySettings.set(settings, async () => {
+		await pending;
+		if (policyError !== undefined) throw policyError;
+	});
+	return {
+		settled: () => pending,
+		stop: () => {
+			stop();
+			syncsBySettings.delete(settings);
+		},
+	};
 }
 
 /**

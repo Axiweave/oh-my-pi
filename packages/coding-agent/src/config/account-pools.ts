@@ -127,7 +127,7 @@ export class SessionAccountPoolScope {
 	 */
 	registry(registry: ModelRegistry): ModelRegistry {
 		const target = scopedRegistryTargets.get(registry) ?? registry;
-		const getApiKey = (model: Model<Api>, sessionId?: string, options?: { signal?: AbortSignal }) =>
+		const getApiKey = (model: Model<Api>, sessionId?: string, options?: Parameters<ModelRegistry["getApiKey"]>[2]) =>
 			target.getApiKey(model, this.#sessionIdFor(model.provider, sessionId), options);
 		const getApiKeyWithCredentialForProvider = (provider: string, sessionId?: string, options?: AuthApiKeyOptions) =>
 			target.getApiKeyWithCredentialForProvider(provider, this.#sessionIdFor(provider, sessionId), options);
@@ -138,7 +138,12 @@ export class SessionAccountPoolScope {
 				target.getApiKeyForProvider(provider, this.#sessionIdFor(provider, sessionId), options),
 			getApiKeyAndHeaders: async model => {
 				try {
-					const apiKey = await getApiKey(model);
+					const apiKey = (
+						await getApiKeyWithCredentialForProvider(model.provider, undefined, {
+							baseUrl: model.baseUrl,
+							modelId: model.id,
+						})
+					)?.apiKey;
 					if (apiKey === undefined) {
 						return { ok: false, error: `No API key found for "${model.provider}"` };
 					}

@@ -52,16 +52,57 @@ export interface AuthAccountSelector {
 	readonly projectId?: string;
 	/** Optional organization/workspace qualifier; not a base identity by itself. */
 	readonly orgId?: string;
+	/** Matches an API-key credential whose key ends with this suffix (at least 4 characters). */
+	readonly keySuffix?: string;
 }
 
-/** Priority and reserve policy for a provider account. */
+/** Priority, weight, and usage-cap policy for a provider account. */
 export interface AuthAccountPolicy {
 	readonly provider: string;
 	readonly account: AuthAccountSelector;
 	/** Higher values win after hard, plan, reserve, hot-window, and measured-usage safety checks. */
 	readonly priority?: number;
-	/** Protected remaining quota percentage for this account. */
-	readonly reservePct?: number;
+	/** Share in `weight` routing mode (integer 1–1000, default 1). */
+	readonly weight?: number;
+	/** Highest used percentage (1–100) of every reserve-scoped window before the account counts as in reserve. */
+	readonly capPct?: number;
+	/** Per-window cap (1–100) by usage window id; overrides `capPct` for that window. */
+	readonly windowCapPct?: Readonly<Record<string, number>>;
+}
+
+/** Account routing mode for one provider. */
+export type RoutingMode = "smart" | "order" | "rotate" | "weight" | "usage" | "pace";
+
+/** How long a session keeps its selected account. */
+export type StaysMode = "auto" | "session" | "turn" | "off" | "strict";
+
+/** Per-provider routing settings (`auth.routing.<provider>`). */
+export interface ProviderRouting {
+	readonly mode?: RoutingMode;
+	readonly stays?: StaysMode;
+	readonly sink?: boolean;
+}
+
+/** Effective routing settings plus the credential the next selection would pick and why. */
+export type RoutingPreview = Required<ProviderRouting> & { next?: { label: string; reason: string } };
+
+/** Read access to the effective routing settings. */
+export interface RoutingApi {
+	/** Routing settings for `provider` with defaults (`smart`, `auto`, no sink) filled in. */
+	config(provider: string): Required<ProviderRouting>;
+	/**
+	 * Settings plus the credential the next sessionless selection would pick, ranked
+	 * from `reports` without advancing any routing state. No `next` below two credentials;
+	 * a lone OAuth account beside API keys is `next`, since OAuth serves first.
+	 */
+	preview(provider: string, reports: readonly UsageReport[]): RoutingPreview;
+	/** Whether `stays: strict` holds `sessionId` on its pin: strict routing and no explicit user pin. */
+	strict(provider: string, sessionId: string | undefined): boolean;
+	/**
+	 * Each stored API key's routing weight (1 without a policy weight), labeled `key …<last4>` as in
+	 * {@link preview}. Empty unless `provider` routes in `weight` mode or a key policy sets a weight.
+	 */
+	weights(provider: string): { label: string; weight: number }[];
 }
 
 /** Read-only set of per-account routing policies. */
@@ -335,8 +376,14 @@ export type AuthStorageOptions = {
 	usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	accountPolicies?: AuthAccountPolicies;
-	/** Global reserve fallback for accounts without a matching reservePct policy. */
+	/** Global reserve fallback for accounts without a matching `capPct` policy. */
 	defaultReservePct?: number;
+	/**
+	 * Per-provider routing settings (`auth.routing`). Passing it, even `{}`, marks the caller as
+	 * settings-backed: at construction, strict session holds of every provider not `strict` here are
+	 * dropped. Without it no hold is touched.
+	 */
+	routing?: Readonly<Record<string, ProviderRouting>>;
 	usageFetch?: typeof fetch;
 	usageRequestTimeoutMs?: number;
 	usageLogger?: UsageLogger;
@@ -497,6 +544,8 @@ export type AuthApiKeyOptions = {
 	refreshReason?: OAuthRefreshReason;
 	/** When false, select as `sessionId` would without recording the choice as that session's sticky credential. */
 	recordAffinity?: boolean;
+	/** True when the request continues a turn (the last context message is a tool result). */
+	withinTurn?: boolean;
 };
 
 /**
@@ -727,6 +776,8 @@ export type ObservedUsageInput = {
 	at?: number;
 	/** Attribution override; defaults to this process's install identity. */
 	client?: ClientUsageIdentity;
+	/** Stored credential that served the request. */
+	credentialId?: number;
 };
 
 /** Mark a session credential blocked with caller and provider timing. */
@@ -920,7 +971,11 @@ export interface KeysApi {
 	 * Resolves `undefined` when no permitted credential can serve, including when
 	 * OAuth refresh failed transiently (network, timeout, 5xx), so availability
 	 * probes move on to their next candidate. Request paths use
-	 * {@link KeysApi.getWithCredential}, which surfaces that failure.
+	 * {@link KeysApi.getWithCredential}, which surfaces that failure. This is a
+	 * key check: it picks the credential a request would and records the session
+	 * pin, but only `getWithCredential` spends a `rotate` turn or a `weight` share.
+	 * Under `stays: strict`, both throw `MissingApiKeyError` for a session whose
+	 * account was signed out.
 	 */
 	get(provider: string, sessionId?: string, options?: AuthApiKeyOptions): Promise<string | undefined>;
 	/**
@@ -1154,13 +1209,28 @@ export interface SessionsApi {
 	 */
 	pin(provider: string, sessionId: string, credentialId: number, options?: { restoredAtMs?: number }): boolean;
 	/**
+	 * Hold a `stays: strict` session whose recorded account is gone (a resume finds no stored
+	 * account matching the session file's pin, its `credentialPinHash`), so its requests
+	 * fail as before the restart instead of moving to another account. The hold keeps only that
+	 * hash: the session goes back to the account when it signs in again. Any other change in the
+	 * provider's accounts ends the hold, as does the session's next key lookup once stays is not
+	 * `strict`. Does nothing for a record older than the pin's lifetime, a session that has a
+	 * session restriction ({@link restrict}), or a session the store already holds. A session on a
+	 * broker client whose account pool hides the account is held too: it cannot tell a hidden
+	 * account from a removed one.
+	 */
+	holdGone(provider: string, sessionId: string, pin: { hash: string; lastUsedAt: number }): void;
+	/**
 	 * Copy stored credential affinities from one live session to another.
 	 *
 	 * The target receives its own sticky entries, so request resolution, usage
 	 * blocking, credential rotation, metadata, and persisted pins all continue
 	 * through the target session id without retaining a live dependency on the
 	 * source session. `include` limits the copy to the providers it accepts,
-	 * given whether the source's affinity is an explicit user pin.
+	 * given whether the source's affinity is an explicit user pin. The account a
+	 * strict source stays on goes too, but to a restricted target only when the
+	 * target's pool contains that account (for a hold restored from a session
+	 * file, only while an allowed account has its pin hash).
 	 */
 	inherit(
 		sourceSessionId: string,
@@ -1175,7 +1245,11 @@ export interface SessionsApi {
 	 * fallback passes, and rotation never leave the list, and runtime, config,
 	 * environment, and stored API keys are not used for that session; when no
 	 * listed account can serve, key resolution fails instead of borrowing
-	 * another account. An empty list allows no account. Replaces any earlier
+	 * another account. An empty list allows no account. A `stays: strict`
+	 * session also stops failing for an account outside the list (one it
+	 * inherited, say), since it can never serve there. A hold restored from a
+	 * session file stays only while an allowed account has its pin hash, and a
+	 * session that is already restricted gets no restored hold. Replaces any earlier
 	 * restriction for the same provider and session; {@link inherit} does not
 	 * copy restrictions. Restrictions are never evicted, because that would
 	 * widen a live session; the owner passes the returned lease to
@@ -1339,7 +1413,9 @@ export interface LimitsApi {
 	 *   without marking its credential suspect, then rotate through siblings.
 	 * - otherwise (hard 401 / auth failure) → mark the credential suspect (or
 	 *   reload when no broker hook is wired) and block it, then drop matching
-	 *   sticky state.
+	 *   sticky state. Under `stays: strict` (no explicit pin) the sticky state stays
+	 *   and nothing switches, so the caller surfaces the error. An invalidated token
+	 *   there also signs the account out, and that session's later requests fail.
 	 *
 	 * For usage-limit and account-policy failures with no free sibling, waits
 	 * (abortable via `options.signal`) when a sibling's block expires within a
@@ -1356,6 +1432,11 @@ export interface LimitsApi {
 		apiKey: string,
 		options?: InvalidateCredentialMatchingOptions,
 	): Promise<boolean>;
+	/**
+	 * Record that `credentialId` was refused while its usage report showed quota left.
+	 * With `sink` routing on, it moves behind every credential not refused since.
+	 */
+	noteRateLimited(provider: string, credentialId: number): void;
 }
 
 /** Saved reset-credit listing and redemption. */

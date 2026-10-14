@@ -252,6 +252,8 @@ export interface TurnRecoveryHost {
 		source: string;
 		delayMs?: number;
 		generation?: number;
+		/** A retry or re-sample: the next request starts a new turn. */
+		newTurn?: boolean;
 		shouldContinue?: () => boolean;
 		onError?: (error: unknown) => void;
 	}): void;
@@ -1949,10 +1951,12 @@ export class TurnRecovery {
 		if (health.state === "healthy") {
 			// A healthy sibling does not end the selected account's reserve episode.
 			if (selectedAccount?.state === "healthy") this.#usageReserveApproval = undefined;
+			// `stays: strict` never moves its account, even to a healthy sibling.
 			if (
 				selectedAccount &&
 				selectedAccount.state !== "healthy" &&
-				health.accounts.some(account => account.state === "healthy")
+				health.accounts.some(account => account.state === "healthy") &&
+				!this.#host.modelRegistry.authStorage.routing.strict(currentModel.provider, this.#host.sessionId())
 			) {
 				this.#host.modelRegistry.authStorage.sessions.release(currentModel.provider, this.#host.sessionId());
 			}
@@ -2016,7 +2020,11 @@ export class TurnRecovery {
 						if (
 							selected &&
 							selected.state !== "healthy" &&
-							candidateHealth.accounts.some(account => account.state === "healthy")
+							candidateHealth.accounts.some(account => account.state === "healthy") &&
+							!this.#host.modelRegistry.authStorage.routing.strict(
+								candidateModel.provider,
+								this.#host.sessionId(),
+							)
 						) {
 							this.#host.modelRegistry.authStorage.sessions.release(
 								candidateModel.provider,
@@ -2302,7 +2310,9 @@ export class TurnRecovery {
 				// entry instead of moving the session onto a model the operators asked it
 				// to avoid.
 				if (!this.#host.cyberAllowsModel(candidate)) continue;
-				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
+				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), {
+					skipMissing: true,
+				});
 				if (!apiKey) continue;
 				const previousEditMode = this.#host.resolveActiveEditMode();
 				const applied = await this.applyRetryFallbackCandidate(role, selector, currentSelector, {
@@ -2415,7 +2425,7 @@ export class TurnRecovery {
 		// A degrade is still a model switch: when the allowlist covers the Fast
 		// variant but not its base id, the session stays on the variant it has.
 		if (!this.#host.cyberAllowsModel(baseModel)) return false;
-		const apiKey = await this.#host.modelRegistry.getApiKey(baseModel, this.#host.sessionId());
+		const apiKey = await this.#host.modelRegistry.getApiKey(baseModel, this.#host.sessionId(), { skipMissing: true });
 		if (!apiKey) return false;
 		const baseSelector = formatModelStringWithRouting(baseModel);
 		const previousEditMode = this.#host.resolveActiveEditMode();
@@ -2487,7 +2497,9 @@ export class TurnRecovery {
 		// Refusing before `clearActiveRetryFallback` keeps the chain record, so the
 		// session still reports how it reached the model it runs on.
 		if (!this.#host.cyberAllowsModel(primaryModel)) return false;
-		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId());
+		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId(), {
+			skipMissing: true,
+		});
 		if (!apiKey) return false;
 
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();
@@ -2595,6 +2607,21 @@ export class TurnRecovery {
 		const accountPolicyDenial = AIError.is(id, AIError.Flag.AccountPolicy);
 		const recordedUsageLimitOutcome = await this.#usageLimitOutcomes.get(message);
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
+		// `stays: strict` never leaves its account: a usage limit ends the turn at
+		// once, with no reset wait, sibling account, or model fallback. An explicit
+		// user pin keeps the normal recovery.
+		const strictModel = this.#host.model();
+		if (
+			strictModel &&
+			AIError.is(id, AIError.Flag.UsageLimit) &&
+			this.#host.modelRegistry.authStorage.routing.strict(strictModel.provider, this.#host.sessionId())
+		) {
+			await this.#closeRetrySaga(
+				{ success: false, attempt: this.#retryAttempt, finalError: errorMessage },
+				{ terminalTurn: message },
+			);
+			return false;
+		}
 		let delayMs = staleOpenAIResponsesReplayError
 			? 0
 			: calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
@@ -2607,11 +2634,16 @@ export class TurnRecovery {
 		if (
 			!staleOpenAIResponsesReplayError &&
 			!AIError.is(id, AIError.Flag.UsageLimit) &&
-			parsedRetryAfterMs === undefined &&
 			(rateLimitReason === "CONCURRENT_LIMIT" || rateLimitReason === "RATE_LIMIT_EXCEEDED")
 		) {
-			const reasonBackoffMs = calculateRateLimitBackoffMs(rateLimitReason);
-			if (reasonBackoffMs > delayMs) delayMs = reasonBackoffMs;
+			// A rate limit with quota left: `sink` moves this account behind the others.
+			if (message.credentialId !== undefined) {
+				this.#host.modelRegistry.authStorage.limits.noteRateLimited(message.provider, message.credentialId);
+			}
+			if (parsedRetryAfterMs === undefined) {
+				const reasonBackoffMs = calculateRateLimitBackoffMs(rateLimitReason);
+				if (reasonBackoffMs > delayMs) delayMs = reasonBackoffMs;
+			}
 		}
 		let switchedCredential = false;
 		let switchedModel = false;
@@ -3017,6 +3049,8 @@ export class TurnRecovery {
 			source: "automatic-retry",
 			delayMs: 1,
 			generation,
+			// A retry after an error is a new turn: `stays: turn` selects again.
+			newTurn: true,
 			shouldContinue: () => this.#retryAttempt > 0,
 			onError: error =>
 				void this.#failRetryAfterLocalContinueError(message, error).catch(failure =>
@@ -3241,8 +3275,8 @@ export class TurnRecovery {
 		// Reset retry budget for a fresh attempt
 		this.#retryAttempt = 0;
 
-		// Re-attempt the turn
-		this.#host.scheduleAgentContinue({ source: "manual-retry", delayMs: 1 });
+		// Re-attempt the turn as a new turn, so `stays: turn` selects again
+		this.#host.scheduleAgentContinue({ source: "manual-retry", delayMs: 1, newTurn: true });
 
 		return true;
 	}

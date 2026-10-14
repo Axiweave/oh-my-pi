@@ -354,7 +354,7 @@ export async function attemptEditAutoRepair(options: {
 	const sessionId = session.getSessionId?.() ?? undefined;
 	// Resolve the key eagerly so the session-sticky credential is recorded and
 	// an unauthenticated smol role bails before any region work.
-	const apiKey = await registry.getApiKey(model, sessionId);
+	const apiKey = await registry.getApiKey(model, sessionId, { skipMissing: true });
 	if (!apiKey) return undefined;
 
 	// Repair against the bytes on disk, not the snapshot: a later operation in

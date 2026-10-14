@@ -5,6 +5,7 @@ import { stripVTControlCharacters } from "node:util";
 import {
 	AuthStorage,
 	type OAuthCredential,
+	type ProviderRouting,
 	SqliteAuthCredentialStore,
 	type UsageReport,
 	type UsageResetCredit,
@@ -30,6 +31,7 @@ import {
 	collectUnreportedAccounts,
 	type UsageAccountIdentity,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/usage-accounts";
+import { createCodexUsageReport, createCredential, createRoutingStorage } from "../../ai/test/helpers/routing-fixtures";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const HOUR = 3_600_000;
@@ -569,7 +571,7 @@ describe("formatUsageBreakdown", () => {
 		expect(text).not.toContain("policy:");
 	});
 
-	it("shows an explicit priority and reserve override with the observed eligibility reason", () => {
+	it("shows an explicit priority and cap override", () => {
 		const report = makeReport("openai-codex", "protected@example.test", [
 			makeLimit({
 				id: "5h",
@@ -587,7 +589,7 @@ describe("formatUsageBreakdown", () => {
 							provider: "openai-codex",
 							account: { email: "protected@example.test" },
 							priority: 100,
-							reservePct: 50,
+							capPct: 50,
 						}
 					: undefined,
 		};
@@ -596,7 +598,7 @@ describe("formatUsageBreakdown", () => {
 			formatUsageBreakdown([report], [], Date.now(), undefined, [], policyOptions),
 		);
 
-		expect(text).toContain("policy: priority 100 · reserve 50% (override) · eligible · 80.0% left");
+		expect(text).toContain("policy: priority 100 · cap 50% (override) · 80.0% left");
 	});
 
 	it("shows the inherited global reserve for an unconfigured sibling in a policy-enabled provider", () => {
@@ -636,7 +638,7 @@ describe("formatUsageBreakdown", () => {
 			formatUsageBreakdown(reports, [], Date.now(), undefined, [], policyOptions),
 		);
 		const inheritedSection = text.slice(text.indexOf("inherited@example.test"));
-		expect(inheritedSection).toContain("policy: priority 0 · reserve 10% (global) · inside reserve · 5.0% left");
+		expect(inheritedSection).toContain("policy: priority 0 · cap 90% (global) · inside cap · 5.0% left");
 	});
 
 	it("reports an exhausted account as exhausted rather than inside a 0% reserve", () => {
@@ -649,7 +651,6 @@ describe("formatUsageBreakdown", () => {
 				provider: "openai-codex",
 				account: { email: "team@example.test" },
 				priority: 10,
-				reservePct: 0,
 			}),
 		};
 
@@ -657,7 +658,7 @@ describe("formatUsageBreakdown", () => {
 			formatUsageBreakdown([report], [], Date.now(), undefined, [], policyOptions),
 		);
 
-		expect(text).toContain("policy: priority 10 · reserve 0% (override) · exhausted · 0.0% left");
+		expect(text).toContain("policy: priority 10 · cap 90% (global) · exhausted · 0.0% left");
 	});
 
 	it("reports an account sitting exactly on its reserve as inside reserve", () => {
@@ -677,7 +678,7 @@ describe("formatUsageBreakdown", () => {
 			getAccountPolicy: () => ({
 				provider: "openai-codex",
 				account: { email: "boundary@example.test" },
-				reservePct: 30,
+				capPct: 70,
 			}),
 		};
 
@@ -685,7 +686,7 @@ describe("formatUsageBreakdown", () => {
 			formatUsageBreakdown(reports, [], Date.now(), undefined, [], policyOptions),
 		);
 		const policyLine = text.split("\n").find(line => line.includes("policy:"));
-		expect(policyLine).toContain("· inside reserve ·");
+		expect(policyLine).toContain("· inside cap ·");
 		expect(policyLine).toContain("30.0% left");
 	});
 
@@ -702,7 +703,7 @@ describe("formatUsageBreakdown", () => {
 			formatUsageBreakdown([report], [], Date.now(), undefined, [], policyOptions),
 		);
 
-		expect(text).toContain("policy: priority 0 · reserve 0% (global) · exhausted · 0.5% left");
+		expect(text).toContain("policy: priority 0 · cap 100% (global) · exhausted · 0.5% left");
 	});
 
 	it("marks reserve state unknown when a configured account has no transient usage report", () => {
@@ -717,7 +718,7 @@ describe("formatUsageBreakdown", () => {
 							provider: "anthropic",
 							account: { email: "offline@example.test" },
 							priority: -5,
-							reservePct: 40,
+							capPct: 60,
 						}
 					: undefined,
 		};
@@ -727,7 +728,98 @@ describe("formatUsageBreakdown", () => {
 		);
 
 		expect(text).toContain("offline@example.test — no usage data");
-		expect(text).toContain("policy: priority -5 · reserve 40% (override) · reserve unknown");
+		expect(text).toContain("policy: priority -5 · cap 60% (override) · reserve unknown");
+	});
+
+	it.each([
+		{
+			name: "window caps override the account cap",
+			mode: "smart" as const,
+			policy: { priority: 50, capPct: 90, windowCapPct: { "5h": 50, "7d": 40 } },
+			used: { "5h": 0.3, "7d": 0.42 },
+			line: "policy: priority 50 · cap 90% (5h 50%, 7d 40%) · inside cap · 58.0% left",
+		},
+		{
+			name: "order ignores the global reserve",
+			mode: "order" as const,
+			policy: { priority: 100 },
+			used: { "5h": 0.88, "7d": 0.1 },
+			line: "policy: priority 100 · cap none (order) · 12.0% left",
+		},
+		{
+			name: "an account without caps inherits the global cap",
+			mode: "smart" as const,
+			policy: {},
+			used: { "5h": 0.6, "7d": 0.1 },
+			line: "policy: priority 0 · cap 90% (global) · 40.0% left",
+		},
+	])("labels caps: $name", ({ mode, policy, used, line }) => {
+		const report = makeReport(
+			"anthropic",
+			"capped@example.test",
+			Object.entries(used).map(([windowId, usedFraction]) =>
+				makeLimit({ id: `anthropic:${windowId}`, usedFraction, durationMs: FIVE_HOURS, windowId }),
+			),
+		);
+		const policyOptions: UsagePolicyDiagnosticsOptions = {
+			globalReservePct: 10,
+			getAccountPolicy: () => ({ provider: "anthropic", account: { email: "capped@example.test" }, ...policy }),
+			getRoutingMode: () => mode,
+		};
+
+		const text = stripVTControlCharacters(
+			formatUsageBreakdown([report], [], Date.now(), undefined, [], policyOptions),
+		);
+
+		expect(text).toContain(line);
+		// Each row names the window id `windowCapPct` keys on.
+		expect(text).toContain("window 5h");
+		expect(text).toContain("window 7d");
+	});
+
+	it.each([
+		{ mode: "weight", weights: [3, 1, undefined], policy: true, shown: ["3", "1", "1"] },
+		{ mode: "weight", weights: [], policy: false, shown: ["1", "1", "1"] },
+		{ mode: "smart", weights: [], policy: true, shown: [undefined, undefined, undefined] },
+		{ mode: "smart", weights: [], policy: false, shown: [undefined, undefined, undefined] },
+	] as const)("shows every account's weight in $mode mode (policy: $policy)", ({ mode, weights, policy, shown }) => {
+		// Two accounts with reports, one stored account without.
+		const emails = ["heavy@example.test", "light@example.test", "spare@example.test"];
+		const reports = emails
+			.slice(0, 2)
+			.map(email =>
+				makeReport("anthropic", email, [
+					makeLimit({ id: "anthropic:5h", usedFraction: 0.2, durationMs: FIVE_HOURS }),
+				]),
+			);
+		const policyOptions: UsagePolicyDiagnosticsOptions = {
+			globalReservePct: 10,
+			getAccountPolicy: (_provider, identity) =>
+				policy
+					? {
+							provider: "anthropic",
+							account: { email: identity.email },
+							weight: weights[emails.indexOf(identity.email!)],
+						}
+					: undefined,
+			getRoutingMode: () => mode,
+		};
+
+		const lines = stripVTControlCharacters(
+			formatUsageBreakdown(
+				reports,
+				emails.map(email => ({ provider: "anthropic", type: "oauth" as const, email })),
+				Date.now(),
+				undefined,
+				[],
+				policyOptions,
+			),
+		).split("\n");
+
+		// The line under each account row carries its weight, if any.
+		const weightOf = (email: string) =>
+			lines[lines.findIndex(line => line.includes(email)) + 1]?.match(/weight (\d+)/)?.[1];
+		expect(emails.map(weightOf)).toEqual([...shown]);
 	});
 
 	it("shows the live Codex plan without exposing an ID for one account", () => {
@@ -888,10 +980,10 @@ describe("formatUsageBreakdown", () => {
 		expect(limitRows).toEqual([
 			// weekly-only@example.test
 			"○ 5 hours not reported",
-			"● 7 days 7.0% used",
+			"● 7 days 7.0% used · window 7 days",
 			// both-windows@example.test
-			"● 5 hours 100.0% used",
-			"● 7 days 16.0% used",
+			"● 5 hours 100.0% used · window 5 hours",
+			"● 7 days 16.0% used · window 7 days",
 		]);
 	});
 
@@ -933,10 +1025,10 @@ describe("formatUsageBreakdown", () => {
 					.replace(/\s+/g, " "),
 			),
 		).toEqual([
-			"● Usage (Pro) (5 hours) 10.0% used",
-			"● Usage (Longer Tier) (5 hours) 20.0% used",
+			"● Usage (Pro) (5 hours) 10.0% used · window 5h",
+			"● Usage (Longer Tier) (5 hours) 20.0% used · window 5h",
 			"○ Usage (Pro) (5 hours) not reported",
-			"● Usage (Longer Tier) (5 hours) 30.0% used",
+			"● Usage (Longer Tier) (5 hours) 30.0% used · window 5h",
 		]);
 		// Bars start in the same column on every row.
 		expect(new Set(rows.map(line => line.search(/[█░·]/))).size).toBe(1);
@@ -1472,6 +1564,223 @@ describe("formatUsageBreakdown", () => {
 		// Here we assert the CLI doesn't add spurious duplicates beyond one-per-limit.
 		const occurrences = text.split(note).length - 1;
 		expect(occurrences).toBe(2);
+	});
+});
+
+describe("formatUsageBreakdown routing line", () => {
+	const email = (index: number) => `user${index}@example.test`;
+
+	/** A real `openai-codex` pool (one account per `used` entry, both windows at that fraction) rendered through `omp usage`. */
+	async function withCodexPool(
+		routing: ProviderRouting,
+		used: readonly number[],
+		run: (pool: { render(): string; select(): Promise<string | undefined> }) => Promise<void>,
+	): Promise<void> {
+		const reports = used.map((usedFraction, index) =>
+			createCodexUsageReport({
+				accountId: `acct-${index}`,
+				primary: { usedFraction, resetInMs: HOUR },
+				secondary: { usedFraction, resetInMs: 72 * HOUR },
+				metadata: { email: email(index) },
+			}),
+		);
+		const { authStorage, store } = await createRoutingStorage({
+			credentials: used.map((_used, index) => createCredential(`acct-${index}`, email(index))),
+			usageByAccount: new Map(reports.map((report, index) => [`acct-${index}`, report])),
+			routing: { "openai-codex": routing },
+		});
+		const policyOptions: UsagePolicyDiagnosticsOptions = {
+			globalReservePct: 10,
+			getAccountPolicy: () => undefined,
+			getRoutingPreview: (provider, providerReports) => authStorage.routing.preview(provider, providerReports),
+		};
+		try {
+			await run({
+				render: () =>
+					stripVTControlCharacters(formatUsageBreakdown(reports, [], Date.now(), undefined, [], policyOptions)),
+				async select() {
+					const key = (await authStorage.keys.getWithCredential("openai-codex"))?.apiKey;
+					return key === undefined ? undefined : email(Number(key.slice("api-acct-".length)));
+				},
+			});
+		} finally {
+			vi.restoreAllMocks();
+			store.close();
+		}
+	}
+
+	const routingLine = (text: string) =>
+		text
+			.split("\n")
+			.find(line => line.includes("routing:"))
+			?.trim();
+
+	it.each([
+		{
+			routing: { mode: "order", stays: "turn" } as const,
+			used: [0.5, 0.1],
+			line: "routing: order · stays turn · sink off · next: user0@example.test (first in order)",
+		},
+		{
+			routing: { mode: "usage", stays: "turn", sink: true } as const,
+			used: [0.6, 0.2],
+			line: "routing: usage · stays turn · sink on · next: user1@example.test (least used: 20%)",
+		},
+	])("names the next $routing.mode pick after the provider notes", async ({ routing, used, line }) => {
+		await withCodexPool(routing, used, async pool => {
+			const text = pool.render();
+			expect(routingLine(text)).toBe(line);
+			expect(text.indexOf("routing:")).toBeLessThan(text.indexOf("●"));
+		});
+	});
+
+	it("prints no routing line for a single-account provider", async () => {
+		await withCodexPool({ mode: "order" }, [0.1], async pool => {
+			expect(pool.render()).not.toContain("routing:");
+		});
+	});
+
+	it("does not advance the selection when rendered", async () => {
+		await withCodexPool({ mode: "rotate", stays: "off" }, [0.1, 0.1, 0.1], async pool => {
+			for (let request = 0; request < 4; request += 1) {
+				const line = routingLine(pool.render());
+				expect(routingLine(pool.render())).toBe(line);
+				expect(line).toContain(`next: ${await pool.select()} (its turn)`);
+			}
+		});
+	});
+
+	it("routes a provider's section iff it holds 2+ credentials, and keeps usage-less keys out of accountsWithoutUsage", async () => {
+		const seed = Number(process.env.ROUTING_SEED ?? 20_260_511);
+		console.log(`ROUTING_SEED=${seed}`);
+		for (let index = 0; index < 20; index += 1) {
+			// mulberry32
+			let state = (seed + index) >>> 0;
+			const random = () => {
+				state = (state + 0x6d2b79f5) >>> 0;
+				let t = Math.imul(state ^ (state >>> 15), state | 1);
+				t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+				return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+			};
+			// Every pool-size class: without a usage provider, with one, and with one plus a
+			// reported OAuth account (which hides the API keys from the report rows), shuffled.
+			const pools = [0, 1, 2, -1].flatMap(size =>
+				[
+					{ usage: false, reported: false },
+					{ usage: true, reported: false },
+					{ usage: true, reported: true },
+				].map(kind => ({ size: size < 0 ? 3 + Math.floor(random() * 4) : size, ...kind })),
+			);
+			pools.sort(() => random() - 0.5);
+			const name = (pool: number) => `pool-${pool}`;
+			const oauthEmail = (pool: number) => `oauth-p${pool}@example.test`;
+			const usageProviders = pools.flatMap((pool, at) => (pool.usage ? [name(at)] : []));
+			const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")), {
+				usageProviderResolver: provider =>
+					usageProviders.includes(provider) ? { id: provider, fetchUsage: async () => null } : undefined,
+				routing: Object.fromEntries(pools.map((_pool, at) => [name(at), { mode: "order" as const }])),
+			});
+			const reports: UsageReport[] = [];
+			for (const [at, pool] of pools.entries()) {
+				// Each key ends in `p<pool>k<key>`, so its routing label names its provider.
+				const credentials: Array<OAuthCredential | { type: "api_key"; key: string }> = Array.from(
+					{ length: pool.size },
+					(_key, key) => ({ type: "api_key" as const, key: `sk-p${at}k${key}` }),
+				);
+				if (pool.reported) {
+					credentials.push({
+						type: "oauth",
+						access: `access-p${at}`,
+						refresh: `refresh-p${at}`,
+						expires: Date.now() + HOUR,
+						email: oauthEmail(at),
+					});
+					reports.push(
+						makeReport(name(at), oauthEmail(at), [
+							makeLimit({ id: `${name(at)}:5h`, provider: name(at), usedFraction: 0.2, durationMs: FIVE_HOURS }),
+						]),
+					);
+				}
+				if (credentials.length > 0) await authStorage.credentials.set(name(at), credentials);
+			}
+			vi.spyOn(authStorage, "close").mockImplementation(() => {});
+			vi.spyOn(authStorage.usage, "reports").mockResolvedValue(reports);
+			vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(Settings.isolated());
+			vi.spyOn(sdkModule, "discoverAuthStorage").mockResolvedValue(authStorage);
+			const output: string[] = [];
+			vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+				output.push(String(chunk));
+				return true;
+			});
+			try {
+				await runUsageCommand({ noExtensions: true });
+				const text = stripVTControlCharacters(output.join(""));
+				output.length = 0;
+				await runUsageCommand({ noExtensions: true, json: true });
+				const { accountsWithoutUsage } = JSON.parse(output.join("")) as {
+					accountsWithoutUsage: UsageAccountIdentity[];
+				};
+				const context = `ROUTING_SEED=${seed} case ${index} ${JSON.stringify(pools)}`;
+				const sections = text.split("\n\n");
+				const routed = (at: number) =>
+					sections.find(section => section.startsWith(`Pool ${at} —`))?.includes("routing: order") ?? false;
+				expect({
+					context,
+					routed: pools.map((_pool, at) => routed(at)),
+					withoutUsage: accountsWithoutUsage.map(account => account.provider).sort(),
+				}).toEqual({
+					context,
+					routed: pools.map(pool => pool.size + (pool.reported ? 1 : 0) >= 2),
+					withoutUsage: pools
+						.flatMap((pool, at) => (pool.usage && !pool.reported ? Array(pool.size).fill(name(at)) : []))
+						.sort(),
+				});
+			} finally {
+				vi.restoreAllMocks();
+				authStorage.close();
+			}
+		}
+	});
+
+	it.each([
+		{ mode: "weight", policies: [3, 1], line: "weights: key …1111 3 · key …2222 1" },
+		{ mode: "smart", policies: [], line: undefined },
+	] as const)("lists API-key weights under the $mode routing line", async ({ mode, policies, line }) => {
+		const keys = ["sk-or-first-1111", "sk-or-second-2222"];
+		const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")), {
+			routing: { openrouter: { mode } },
+			accountPolicies: policies.map((weight, index) => ({
+				provider: "openrouter",
+				account: { keySuffix: keys[index]!.slice(-4) },
+				weight,
+			})),
+		});
+		await authStorage.credentials.set(
+			"openrouter",
+			keys.map(key => ({ type: "api_key" as const, key })),
+		);
+		vi.spyOn(authStorage, "close").mockImplementation(() => {});
+		vi.spyOn(authStorage.usage, "reports").mockResolvedValue([]);
+		vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(Settings.isolated());
+		vi.spyOn(sdkModule, "discoverAuthStorage").mockResolvedValue(authStorage);
+		const output: string[] = [];
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			output.push(String(chunk));
+			return true;
+		});
+		try {
+			await runUsageCommand({ noExtensions: true });
+		} finally {
+			vi.restoreAllMocks();
+			authStorage.close();
+		}
+		const lines = stripVTControlCharacters(output.join(""))
+			.split("\n")
+			.map(text => text.trim());
+		const routingAt = lines.findIndex(text => text.startsWith("routing:"));
+		expect(routingAt).toBeGreaterThan(-1);
+		expect(lines.find(text => text.startsWith("weights:"))).toBe(line);
+		if (line) expect(lines[routingAt + 1]).toBe(line);
 	});
 });
 

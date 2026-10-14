@@ -18,7 +18,8 @@ export class StencilCredential {
 		const fromEnv = process.env[STREAM_AUTH_ENV]?.trim();
 		if (fromEnv) return fromEnv;
 		this.#storage ??= await discoverAuthStorage();
-		const token = await this.#storage.keys.get(STREAM_AUTH_PROVIDER);
+		// The token is sent to the service, so take it through the request path.
+		const token = (await this.#storage.keys.getWithCredential(STREAM_AUTH_PROVIDER))?.apiKey;
 		return token?.trim() || null;
 	}
 

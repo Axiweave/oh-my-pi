@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { OAuthCredential, UsageReport } from "@oh-my-pi/pi-ai";
 import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
+import { credentialPinHash } from "@oh-my-pi/pi-ai/auth/affinity";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -11,7 +12,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { credentialPinHash, recordCredentialPin } from "@oh-my-pi/pi-coding-agent/session/credential-pin";
+import { recordCredentialPin } from "@oh-my-pi/pi-coding-agent/session/credential-pin";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -69,7 +70,7 @@ function claudeUsage(accountId: string, usedFraction: number): UsageReport {
 	};
 }
 
-/** Account B is 70% used and inside its 50% reserve; A is 20% used, so only an explicit pin keeps B. */
+/** Account B is 70% used and past its 50% cap; A is 20% used, so only an explicit pin keeps B. */
 function reserveAuthStorage(): AuthStorage {
 	const usedFractionByAccount: Record<string, number> = { "account-a": 0.2, "account-b": 0.7 };
 	return new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")), {
@@ -84,7 +85,7 @@ function reserveAuthStorage(): AuthStorage {
 						},
 					}
 				: undefined,
-		accountPolicies: [{ provider: "anthropic", account: { accountId: "account-b" }, reservePct: 50 }],
+		accountPolicies: [{ provider: "anthropic", account: { accountId: "account-b" }, capPct: 50 }],
 	});
 }
 

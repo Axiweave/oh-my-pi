@@ -679,6 +679,8 @@ type ScheduledAgentContinueOptions = {
 	source: string;
 	delayMs?: number;
 	generation?: number;
+	/** A retry or re-sample: the next request starts a new turn (`stays: turn` selects again). */
+	newTurn?: boolean;
 	shouldContinue?: () => boolean;
 	onSkip?: (reason: AgentContinueSkipReason) => void;
 	onError?: (error: unknown) => void;
@@ -4483,6 +4485,7 @@ export class AgentSession implements SettingsScope {
 						cacheWrite: assistantMsg.usage.cacheWrite,
 					},
 					costUsd: assistantMsg.usage.cost.total,
+					credentialId: assistantMsg.credentialId,
 				});
 				// Persist which account served this turn so a resumed process can
 				// re-pin it and keep the provider's account-scoped prompt cache
@@ -5131,6 +5134,7 @@ export class AgentSession implements SettingsScope {
 					}
 				}
 
+				if (options.newTurn) this.agent.startNewTurn();
 				this.#beginInFlight();
 				const coalescedSources = new Set([options.source]);
 				const promise = this.#runAgentContinue(signal, request, coalescedSources);

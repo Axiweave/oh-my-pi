@@ -339,7 +339,9 @@ export class KeyCascade implements KeysApi {
 	 * `baseUrl`) owns the provider, rather than using any other credential.
 	 * A transient OAuth refresh failure resolves `undefined`, so availability
 	 * probes move on to their next candidate; request paths use
-	 * {@link KeyCascade.getWithCredential}, which surfaces it.
+	 * {@link KeysApi.getWithCredential}, which surfaces it. A probe picks the
+	 * credential a request would and records the session pin, but does not
+	 * advance `rotate`/`weight` state.
 	 */
 	async get(provider: string, sessionId?: string, options?: AuthApiKeyOptions): Promise<string | undefined> {
 		try {
@@ -357,6 +359,8 @@ export class KeyCascade implements KeysApi {
 		options?: AuthApiKeyOptions,
 		onCredentialId?: (id: number, identity?: OAuthRequestIdentity) => void,
 	): Promise<string | undefined> {
+		// Only the request path (`getWithCredential`) advances rotate/weight/sink/learn-once state.
+		const advance = onCredentialId !== undefined;
 		const restricted = this.#deps.affinity.isRestricted(provider, sessionId);
 		// Runtime override takes highest priority
 		const runtimeKey = restricted ? undefined : this.#deps.overrides.runtimeKey(provider);
@@ -384,10 +388,13 @@ export class KeyCascade implements KeysApi {
 		// then a stored static api_key (which may be a stale broker-migrated copy) as a last resort.
 		// A transient OAuth refresh failure still lets later sources serve the request; it is
 		// rethrown only when none can, so callers retry instead of reporting a missing key.
+		// `strict` never moves a session off its OAuth pin: no key fallback, and the pin stays.
+		// Checked after resolving: a strict session whose pin was dropped gets it back there, and
+		// one whose account is gone throws there.
 		let oauthResolved: OAuthResolutionResult | undefined;
 		let oauthRefreshFailure: AIError.OAuthRefreshUnavailableError | undefined;
 		try {
-			oauthResolved = await this.#deps.selector.resolveOAuth(provider, sessionId, options);
+			oauthResolved = await this.#deps.selector.resolveOAuth(provider, sessionId, options, advance);
 		} catch (error) {
 			if (!(error instanceof AIError.OAuthRefreshUnavailableError)) throw error;
 			oauthRefreshFailure = error;
@@ -406,11 +413,19 @@ export class KeyCascade implements KeysApi {
 				`No API key for provider: ${provider} (session ${sessionId} is restricted to its OAuth account pool and none of those accounts is available)`,
 			);
 		}
+		if (
+			this.#deps.selector.strict(provider, sessionId) &&
+			this.#deps.affinity.get(provider, sessionId)?.type === "oauth"
+		) {
+			if (oauthRefreshFailure) throw oauthRefreshFailure;
+			return undefined;
+		}
 		const loginApiKeySelection = await this.#deps.selector.selectApiKey(
 			provider,
 			sessionId,
 			options,
 			credential => credential.source === "login" && !this.isKeylessFallback(provider, credential),
+			advance,
 		);
 		if (loginApiKeySelection) {
 			if (options?.recordAffinity !== false) {
@@ -439,6 +454,7 @@ export class KeyCascade implements KeysApi {
 			sessionId,
 			options,
 			credential => credential.source !== "login",
+			advance,
 		);
 		if (apiKeySelection) {
 			if (options?.recordAffinity !== false) {

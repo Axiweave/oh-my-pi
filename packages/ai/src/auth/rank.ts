@@ -16,6 +16,8 @@ export type UsageCandidate<T extends AuthCredential> = {
 	selection: CredentialSelection<T>;
 	usage: UsageReport | null;
 	usageChecked: boolean;
+	/** Stored row id; set by ranking and by the unranked `sink` order. */
+	credentialId?: number;
 	/** Present after policy-aware ranking; used to decide whether a warm automatic pin may be evicted. */
 	inReserve?: boolean;
 	/** True only when reserve ranking had a usable remaining-fraction measurement. */
@@ -51,6 +53,10 @@ export type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> &
 	secondaryRequiredDrain: number;
 	primaryUsed: number;
 	primaryRequiredDrain: number;
+	/** Fullest current reserve-scoped window used fraction; 0 when unknown. */
+	shareUsed: number;
+	/** Weekly quota left per hour until the weekly reset; a full week when unknown. */
+	pace: number;
 	orderPos: number;
 };
 /** OAuth candidate with complete ranking metrics. */
@@ -140,17 +146,9 @@ function compareUsageRankedCandidates(
 }
 
 /** Sort ranked candidates by blocks, plan, spent allowance, reserve, boost, hot window, usage and drain. */
-export function orderUsageRankedCandidates<T extends AuthCredential>(
-	candidates: UsageRankedCandidate<T>[],
+export function orderUsageRankedCandidates<C extends UsageRankedCandidate<AuthCredential>>(
+	candidates: C[],
 	planGated: boolean,
-): UsageCandidate<T>[] {
-	candidates.sort((left, right) => compareUsageRankedCandidates(left, right, planGated));
-	return candidates.map(candidate => ({
-		selection: candidate.selection,
-		usage: candidate.usage,
-		usageChecked: candidate.usageChecked,
-		inReserve: candidate.inReserve,
-		reserveMeasured: candidate.reserveMeasured,
-		allowanceSpent: candidate.allowanceSpent,
-	}));
+): C[] {
+	return candidates.sort((left, right) => compareUsageRankedCandidates(left, right, planGated));
 }

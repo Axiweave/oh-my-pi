@@ -28,6 +28,7 @@ import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import type { InteractiveModeContext } from "../modes/types";
 import ratchetKickoffPrompt from "../prompts/ratchet-kickoff.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import { authSettingsApplied } from "../session/auth-broker-config";
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 import { noThinkingMessage, resolveThinkingArgument } from "./helpers/effort";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
@@ -442,6 +443,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handle: async (_command, runtime) => {
 			try {
 				await runtime.settings.reloadFromDisk();
+				await authSettingsApplied(runtime.settings);
 				await runtime.output("Config reloaded.");
 			} catch (error) {
 				await runtime.output(`Config reload failed: ${errorMessage(error)}`);
@@ -451,6 +453,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (_command, runtime) => {
 			try {
 				await runtime.ctx.settings.reloadFromDisk();
+				await authSettingsApplied(runtime.ctx.settings);
 				runtime.ctx.showStatus("Config reloaded.");
 			} catch (error) {
 				runtime.ctx.showError(`Config reload failed: ${errorMessage(error)}`);

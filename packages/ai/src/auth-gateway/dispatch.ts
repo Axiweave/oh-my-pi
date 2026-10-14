@@ -13,7 +13,7 @@ import type { AuthApiKeyOptions, AuthStorage } from "../auth-storage";
 import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
 import { isUsageLimitOutcome } from "../error/rate-limit";
-import type { Api, FetchImpl, Model, Usage } from "../types";
+import type { Api, AssistantMessage, FetchImpl, Model, Usage } from "../types";
 import type { ClientUsageIdentity } from "../usage";
 import { extractProviderRetryHint } from "../utils/retry-after";
 import type { AuthGatewayServerOptions } from "./types";
@@ -87,7 +87,8 @@ export function resolveGatewayAccount(
  * and its OAuth identity together (refreshing through the broker when needed).
  * Keep this selection snapshot intact even if another request replaces the
  * stored token before dispatch. Storage failures map through
- * {@link classifyGatewayError}; a provider without any credential is a 401.
+ * {@link classifyGatewayError}; a provider without any credential, or a strict
+ * session whose account was signed out, is a 401.
  */
 export async function resolveGatewayApiKey(
 	storage: AuthStorage,
@@ -95,14 +96,24 @@ export async function resolveGatewayApiKey(
 	sessionId: string,
 	signal: AbortSignal,
 	peer: string,
+	withinTurn?: boolean,
 ): Promise<ResolvedApiKey | GatewayErrorClassification> {
 	let apiKey: ResolvedApiKey | undefined;
 	try {
-		apiKey = await storage.keys.getWithCredential(model.provider, sessionId, modelKeyOptions(model, signal));
+		apiKey = await storage.keys.getWithCredential(model.provider, sessionId, {
+			...modelKeyOptions(model, signal),
+			withinTurn,
+		});
 	} catch (error) {
-		const classified = classifyGatewayError(error);
-		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
-		return classified;
+		// A strict session's signed-out account has no credential for it, like an empty provider.
+		// That error names the account and session, so clients get only the generic 401 below.
+		const classified = error instanceof AIError.MissingApiKeyError ? undefined : classifyGatewayError(error);
+		logger.warn("auth-gateway getApiKey threw", {
+			provider: model.provider,
+			peer,
+			error: classified?.message ?? String(error),
+		});
+		if (classified) return classified;
 	}
 	if (apiKey) return apiKey;
 	return {
@@ -127,12 +138,15 @@ export async function resolveGatewayApiKey(
  *   reset window is several hours away — exactly the bug this helper exists
  *   to avoid.
  * - **auth-failure** → {@link AuthStorage.limits.invalidateMatching}.
- *   Suspect/delete the row so it doesn't get re-picked next request.
+ *   Suspect/delete the row so it doesn't get re-picked next request. Under
+ *   `stays: strict` the session keeps its pin and the gateway returns the
+ *   error instead of picking another account.
  *
  * In both branches we return the next `getWithCredential` result (sticky on the
  * same `sessionId`) so the client can transparently retry the pre-emit
  * failure with a fresh credential. Returning `undefined` aborts the retry
- * and surfaces the original error to the caller.
+ * and surfaces the original error to the caller. A `stays: strict` session
+ * records the failure but never moves, so it always surfaces the error.
  */
 async function refreshGatewayApiKeyAfterAuthError(
 	storage: AuthStorage,
@@ -144,6 +158,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 	signal: AbortSignal,
 	format: string,
 	peer: string,
+	strict: boolean,
 ): Promise<ResolvedApiKey | undefined> {
 	const message = error instanceof Error ? error.message : String(error);
 	const status = extractHttpStatusFromError(error);
@@ -166,7 +181,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 			retryAtMs,
 			error: message,
 		});
-		if (!switched) return undefined;
+		if (!switched || strict) return undefined;
 		return storage.keys.getWithCredential(provider, sessionId, modelKeyOptions(model, signal));
 	}
 	await storage.limits.invalidateMatching(provider, oldKey, { sessionId, signal });
@@ -176,12 +191,22 @@ async function refreshGatewayApiKeyAfterAuthError(
 		peer,
 		error: message,
 	});
+	if (strict) return undefined;
 	return storage.keys.getWithCredential(provider, sessionId, modelKeyOptions(model, signal));
 }
 
-/** Model-scoped key options: usage ranking by model id, routing to accounts discovery saw serve it. */
+/**
+ * Model-scoped key options: usage ranking by model id, routing to accounts discovery saw serve it.
+ * Auth retries continue the same request, so they keep its account (`withinTurn: true`); the
+ * first resolve overrides it with the request's own turn state.
+ */
 function modelKeyOptions(model: Model<Api>, signal: AbortSignal): AuthApiKeyOptions {
-	return { modelId: model.id, accountIds: model.accountAccess && Object.keys(model.accountAccess), signal };
+	return {
+		modelId: model.id,
+		accountIds: model.accountAccess && Object.keys(model.accountAccess),
+		signal,
+		withinTurn: true,
+	};
 }
 
 /**
@@ -212,6 +237,8 @@ export function buildGatewayApiKeyResolver(
 	onResolvedKey?: (apiKey: string) => void,
 ): ApiKeyResolver {
 	let lastKey = initialKey.apiKey;
+	// Read once per request: step (b) drops an explicit pin whose sign-in died, which would read as strict afterwards.
+	const strict = storage.routing.strict(model.provider, sessionId);
 	return async ({ lastChance, error, signal, previousKey }) => {
 		const sig = signal ?? requestSignal;
 		if (error === undefined) {
@@ -238,6 +265,7 @@ export function buildGatewayApiKeyResolver(
 			sig,
 			format,
 			peer,
+			strict,
 		);
 		lastKey = next?.apiKey ?? lastKey;
 		if (next) onResolvedKey?.(next.apiKey);
@@ -258,6 +286,7 @@ export function recordGatewayUsage(
 	client: ClientUsageIdentity,
 	usage: Usage,
 	at?: number,
+	credentialId?: number,
 ): void {
 	if (usage.input + usage.output + usage.cacheRead + usage.cacheWrite === 0) return;
 	storage.usage.observe({
@@ -267,7 +296,28 @@ export function recordGatewayUsage(
 		usage: { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite },
 		costUsd: usage.cost.total,
 		client,
+		credentialId,
 	});
+}
+
+/**
+ * Settle one upstream turn: record its usage and, like the agent's turn
+ * recovery, note a rate limit with quota left so `sink` routing moves the
+ * account behind its siblings.
+ */
+export function recordGatewayMessage(
+	storage: AuthStorage,
+	model: Model<Api>,
+	client: ClientUsageIdentity,
+	message: AssistantMessage,
+): void {
+	recordGatewayUsage(storage, model, client, message.usage, message.timestamp || undefined, message.credentialId);
+	if (message.stopReason !== "error" || message.credentialId === undefined) return;
+	if (AIError.is(AIError.classifyMessage(message), AIError.Flag.UsageLimit)) return;
+	const reason = AIError.parseRateLimitReason(message.errorMessage ?? "");
+	if (reason === "CONCURRENT_LIMIT" || reason === "RATE_LIMIT_EXCEEDED") {
+		storage.limits.noteRateLimited(message.provider, message.credentialId);
+	}
 }
 
 /**

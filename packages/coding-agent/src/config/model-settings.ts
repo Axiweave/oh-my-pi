@@ -3,7 +3,9 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { register, type SettingValueOf } from "./registry";
-import type { AuthAccountPolicies } from "@oh-my-pi/pi-ai/auth-storage";
+import { parseAuthRouting, validateAccountPolicies } from "@oh-my-pi/pi-ai/auth/policy";
+import { ConfigurationError } from "@oh-my-pi/pi-ai/error";
+import type { AuthAccountPolicies, ProviderRouting } from "@oh-my-pi/pi-ai/auth-storage";
 import type { cfgDefaultThinkingLevel } from "../session/settings";
 
 /** Named model-role bundles (`modelProfiles`): profile name → role → model id. */
@@ -39,6 +41,7 @@ const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const EMPTY_MODEL_PROFILES_RECORD: ModelProfilesSettings = {};
 const EMPTY_MODEL_PRESETS_RECORD: Record<string, ModelPreset> = {};
 const EMPTY_AUTH_ACCOUNT_POLICIES: AuthAccountPolicies = [];
+const EMPTY_AUTH_ROUTING: Readonly<Record<string, ProviderRouting>> = {};
 
 // Auth broker — credentials proxied through a remote `omp auth-broker serve`
 // host. Hidden from the UI; populate via env vars or hand-edited config.yml. Env takes
@@ -64,6 +67,22 @@ export const cfgAuthAccountPolicies = register({
 	id: "auth.accountPolicies",
 	type: "array",
 	default: EMPTY_AUTH_ACCOUNT_POLICIES,
+	validate: value => {
+		if (value === undefined) return;
+		if (!Array.isArray(value) || value.some(entry => entry === null || typeof entry !== "object")) {
+			throw new ConfigurationError("auth.accountPolicies must be an array of objects");
+		}
+		validateAccountPolicies(value as AuthAccountPolicies);
+	},
+});
+
+/** Per-provider account routing (`auth.routing.<provider>`: `{ mode, stays, sink }`). */
+export const cfgAuthRouting = register({
+	id: "auth.routing",
+	type: "record",
+	default: EMPTY_AUTH_ROUTING,
+	validate: parseAuthRouting,
+	normalize: parseAuthRouting,
 });
 
 export const cfgEnabledModels = register({

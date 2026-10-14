@@ -48,6 +48,8 @@ interface TtsrContinueOptions {
 	source: string;
 	delayMs?: number;
 	generation?: number;
+	/** A re-sample: the next request starts a new turn. */
+	newTurn?: boolean;
 	shouldContinue?: () => boolean;
 	onSkip?: (reason: TtsrContinueSkipReason) => void;
 	onError?: () => void;
@@ -719,9 +721,11 @@ export class TtsrCoordinator {
 					);
 					this.#markInjected(details.rules);
 				}
+				// The interrupted reply is re-sampled, so the request starts a new turn.
 				this.#host.scheduleAgentContinue({
 					source: "ttsr-interrupt",
 					generation,
+					newTurn: true,
 					onSkip: () => this.resolveResume(),
 					onError: () => this.resolveResume(),
 				});

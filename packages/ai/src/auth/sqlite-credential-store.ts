@@ -1618,6 +1618,16 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	/** Keys of the cache rows that start with the supplied prefix. */
+	cacheKeys(prefix: string): string[] {
+		try {
+			const rows = this.#db.query("SELECT key FROM cache WHERE substr(key, 1, ?) = ?").all(prefix.length, prefix);
+			return (rows as { key: string }[]).map(row => row.key);
+		} catch {
+			return [];
+		}
+	}
+
 	cleanExpiredCache(): void {
 		try {
 			this.#deleteExpiredCacheStmt.run();

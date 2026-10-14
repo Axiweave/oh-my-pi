@@ -2020,7 +2020,9 @@ async function streamAssistantResponse(
 			: providerAbortSignals.length === 1
 				? providerAbortSignals[0]!
 				: AbortSignal.any(providerAbortSignals);
-	const requestApiKey = (config.getApiKey ? await config.getApiKey(model) : undefined) ?? config.apiKey;
+	const withinTurn = context.messages.at(-1)?.role === "toolResult";
+	const requestApiKey =
+		(config.getApiKey ? await config.getApiKey(model, { withinTurn }) : undefined) ?? config.apiKey;
 	let resolvedCredential: ApiKeyResolution;
 	const resolvedApiKey = await resolveApiKeyOnce(requestApiKey, finalRequestSignal, resolved => {
 		resolvedCredential = resolved;

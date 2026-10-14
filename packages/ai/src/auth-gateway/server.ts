@@ -47,7 +47,7 @@ import {
 	buildGatewayApiKeyResolver,
 	mirrorRequestAbort,
 	normalizeClientSessionKey,
-	recordGatewayUsage,
+	recordGatewayMessage,
 	resolveGatewayAccount,
 	resolveGatewayApiKey,
 } from "./dispatch";
@@ -143,6 +143,25 @@ function deriveSessionId(modelId: string, context: Context, toolsJson = serializ
 /** `JSON.stringify(context.tools)`, or `undefined` when the request declares none. */
 function serializeTools(context: Context): string | undefined {
 	return context.tools && context.tools.length > 0 ? JSON.stringify(context.tools) : undefined;
+}
+
+/**
+ * Whether a request continues a tool-use turn (FR-012): its last item is a
+ * tool result. Reads raw wire items (an OpenAI Chat `role: "tool"` message, an
+ * OpenAI Responses `function_call_output` item, an Anthropic `user` message
+ * with only `tool_result` blocks) and pi-native `toolResult` messages.
+ */
+export function isWithinTurn(messages: readonly unknown[]): boolean {
+	const last = messages.at(-1);
+	if (typeof last !== "object" || last === null) return false;
+	const { role, type, content } = last as { role?: unknown; type?: unknown; content?: unknown };
+	if (role === "tool" || role === "toolResult" || type === "function_call_output") return true;
+	return (
+		role === "user" &&
+		Array.isArray(content) &&
+		content.length > 0 &&
+		content.every(block => (block as { type?: unknown } | null)?.type === "tool_result")
+	);
 }
 
 function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: AbortSignal): SimpleStreamOptions {
@@ -353,12 +372,17 @@ async function handleFormatEndpoint(
 	const toolsJson = clientKey === undefined ? serializeTools(parsed.context) : undefined;
 	const sessionId = clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
 	parsed.options.promptCacheKey = sessionId;
+	// Chat and Anthropic carry the history in `messages`, Responses in `input`.
+	const wire = body as { messages?: unknown; input?: unknown };
+	const withinTurn = isWithinTurn(
+		Array.isArray(wire.input) ? wire.input : Array.isArray(wire.messages) ? wire.messages : [],
+	);
 
 	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
 	// expected to resolve the credential and pass it as `options.apiKey`.
 	// For OAuth providers this returns the access token (refreshed via the
 	// broker override on AuthStorage when needed).
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer, withinTurn);
 	if (controller.signal.aborted) return clientClosedResponse(route);
 	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
@@ -404,7 +428,7 @@ async function handleFormatEndpoint(
 		try {
 			if (controller.signal.aborted) return clientClosedResponse(route);
 			const message = await completeSimple(model, parsed.context, streamOpts);
-			recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+			recordGatewayMessage(bootOpts.storage, model, client, message);
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
 					message.errorMessage ??
@@ -459,9 +483,7 @@ async function handleFormatEndpoint(
 		if (controller.signal.aborted) return clientClosedResponse(route);
 		void events
 			.result()
-			.then(message =>
-				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined),
-			)
+			.then(message => recordGatewayMessage(bootOpts.storage, model, client, message))
 			.catch(() => {})
 			.finally(() => lease.release());
 		streamOwnsLease = true;
@@ -553,7 +575,14 @@ async function handlePiNative(
 	const sessionId = clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
 	parsed.options.sessionId = sessionId;
 
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts.storage,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		isWithinTurn(parsed.context.messages),
+	);
 	if (controller.signal.aborted) return aborted();
 	if ("status" in apiKey) return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
 
@@ -621,7 +650,7 @@ async function handlePiNative(
 		try {
 			if (controller.signal.aborted) return aborted();
 			const message = await completeSimple(model, parsed.context, streamOpts);
-			recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+			recordGatewayMessage(bootOpts.storage, model, client, message);
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
 					message.errorMessage ??
@@ -672,9 +701,7 @@ async function handlePiNative(
 		if (controller.signal.aborted) return aborted();
 		void events
 			.result()
-			.then(message =>
-				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined),
-			)
+			.then(message => recordGatewayMessage(bootOpts.storage, model, client, message))
 			.catch(() => {})
 			.finally(() => lease.release());
 		streamOwnsLease = true;

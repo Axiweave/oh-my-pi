@@ -2089,7 +2089,10 @@ export class SessionAdvisors {
 			!this.#canReplayAdvisorHistory(advisor, primaryModel)
 		)
 			return;
-		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, advisor.providerSessionId, { signal });
+		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, advisor.providerSessionId, {
+			signal,
+			skipMissing: true,
+		});
 		if (!apiKey) return;
 		signal.throwIfAborted();
 
@@ -2166,6 +2169,11 @@ export class SessionAdvisors {
 		let usagePriorBlockedUntilMs: number | undefined;
 		let usagePriorBlockedUntilTimed: boolean | undefined;
 		if (usageLimit) {
+			// Read it first: `markReached` may clear an explicit pin, which would read as strict afterwards.
+			const strict = this.#host.modelRegistry.authStorage.routing.strict(
+				currentModel.provider,
+				advisor.providerSessionId,
+			);
 			const outcome = await this.#host.modelRegistry.authStorage.limits.markReached(
 				currentModel.provider,
 				advisor.providerSessionId,
@@ -2177,6 +2185,8 @@ export class SessionAdvisors {
 					signal,
 				},
 			);
+			// `stays: strict` never leaves its account: no reset wait, sibling account, or model fallback.
+			if (strict) return false;
 			if (outcome.switched) return true;
 			usageRetryAtMs = outcome.retryAtMs;
 			usageBlockedUntilMs = outcome.blockedUntilMs;
@@ -2246,7 +2256,10 @@ export class SessionAdvisors {
 				// skip it and move on to the next entry the protection covers.
 				if (!cyberAllowsModel(this.#host.settings, candidate)) continue;
 				if (!this.#canReplayAdvisorHistory(advisor, candidate)) continue;
-				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisor.providerSessionId, { signal });
+				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisor.providerSessionId, {
+					signal,
+					skipMissing: true,
+				});
 				if (!apiKey) continue;
 				signal.throwIfAborted();
 
@@ -2538,7 +2551,10 @@ export class SessionAdvisors {
 		});
 
 		for (const candidate of candidates) {
-			const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisorProviderSessionId, { signal });
+			const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisorProviderSessionId, {
+				signal,
+				skipMissing: true,
+			});
 			if (!apiKey) continue;
 			if (
 				nativeCompactionFailure &&

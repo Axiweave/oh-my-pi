@@ -43,7 +43,9 @@ import type {
 	KeysApi,
 	LimitsApi,
 	OAuthApi,
+	ProviderRouting,
 	ResetsApi,
+	RoutingApi,
 	SessionsApi,
 	UsageApi,
 } from "./auth/types";
@@ -74,6 +76,7 @@ interface AuthStorageModules {
 	limits: RateLimits;
 	resets: ResetCredits;
 	blocks: CredentialBlocks;
+	selector: CredentialSelector;
 }
 
 /**
@@ -94,9 +97,16 @@ export class AuthStorage {
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
 		this.#options = options;
 		this.#overrides = new KeyOverrides(options.configValueResolver);
-		this.#policies = new AccountPolicies(options.accountPolicies ?? [], options.defaultReservePct);
+		this.#policies = new AccountPolicies(options.accountPolicies ?? [], options.defaultReservePct, options.routing);
 		this.#modules = this.#compose(store, options.sourceLabel);
 		if (options.onCredentialDisabled) this.#modules.pool.onDisabled(options.onCredentialDisabled);
+		// A provider that is not `strict` now keeps no strict holds, even one no setting names any more.
+		// Only settings-backed callers pass `routing`; a tool without settings must not erase holds.
+		if (options.routing !== undefined) {
+			this.#modules.sessions.dropStrictExcept(
+				this.#policies.routedProviders().filter(provider => this.#policies.routingFor(provider).stays === "strict"),
+			);
+		}
 	}
 
 	/** Stored credential rows, change/disable events, broker snapshot. */
@@ -136,18 +146,57 @@ export class AuthStorage {
 		return this.#modules.blocks;
 	}
 
+	/** Effective per-provider routing settings (`auth.routing`). */
+	readonly routing: RoutingApi = {
+		config: provider => this.#policies.routingFor(provider),
+		preview: (provider, reports) => this.#modules.selector.preview(provider, reports),
+		strict: (provider, sessionId) => this.#modules.selector.strict(provider, sessionId),
+		weights: provider => {
+			const keys = this.#modules.pool.credentials(provider).flatMap(credential =>
+				credential.type === "api_key"
+					? [
+							{
+								label: `key …${credential.key.slice(-4)}`,
+								weight: this.#policies.forCredential(provider, credential)?.weight,
+							},
+						]
+					: [],
+			);
+			if (this.#policies.routingFor(provider).mode !== "weight" && keys.every(key => key.weight === undefined)) {
+				return [];
+			}
+			return keys.map(({ label, weight }) => ({ label, weight: weight ?? 1 }));
+		},
+	};
+
 	/**
-	 * Apply new account routing policy (live `auth.accountPolicies` /
-	 * `retry.usageReservePct` change). Throws a configuration error, leaving the
-	 * active policy untouched, when a policy is malformed, a selector matches
-	 * several stored OAuth accounts, or two policies claim the same account; a
-	 * policy naming an absent account stays inactive and logs a warning.
+	 * Apply new account routing settings (live `auth.accountPolicies` /
+	 * `auth.routing` / `retry.usageReservePct` change). Throws a configuration
+	 * error, leaving the active settings untouched, when a policy or routing entry
+	 * is malformed, a cap names a provider without usage reports right now, a
+	 * selector matches several stored credentials, or two policies claim the same
+	 * credential; a policy naming an absent account stays inactive and logs a warning.
 	 */
-	setAccountPolicies(config: { accountPolicies: AuthAccountPolicies; defaultReservePct: number }): void {
+	setAccountPolicies(config: {
+		accountPolicies: AuthAccountPolicies;
+		defaultReservePct: number;
+		routing: Readonly<Record<string, ProviderRouting>>;
+	}): void {
 		const pool = this.#modules.pool;
 		const stored = new Map<string, AuthCredential[]>();
 		for (const provider of pool.providers()) stored.set(provider, pool.credentials(provider));
-		this.#policies.replace(config.accountPolicies, config.defaultReservePct, stored);
+		const routed = this.#policies.routedProviders();
+		this.#policies.replace(config.accountPolicies, config.defaultReservePct, config.routing, stored, provider =>
+			this.#modules.usage.canFetchOAuthUsage(provider),
+		);
+		this.#dropStrictHolds(new Set([...routed, ...this.#policies.routedProviders()]));
+	}
+
+	/** A provider that is not `strict` keeps no strict holds, so going back to `strict` never fails for an old account. */
+	#dropStrictHolds(providers: Iterable<string>): void {
+		for (const provider of providers) {
+			if (this.#policies.routingFor(provider).stays !== "strict") this.#modules.sessions.dropStrict(provider);
+		}
 	}
 
 	/**
@@ -185,6 +234,7 @@ export class AuthStorage {
 			blockHealth,
 			onReset: provider => {
 				selector.resetRoundRobin(provider);
+				usage.clearRecentTokens(provider);
 				affinity.clearProvider(provider);
 			},
 		});
@@ -229,7 +279,17 @@ export class AuthStorage {
 			refresher,
 			strategies,
 		});
-		const limits = new RateLimits({ store, pool, overrides, blocks, affinity, usage, strategies });
+		const limits = new RateLimits({
+			store,
+			pool,
+			overrides,
+			blocks,
+			affinity,
+			usage,
+			strategies,
+			policies,
+			selector,
+		});
 		const keys = new KeyCascade({
 			pool,
 			overrides,
@@ -261,6 +321,7 @@ export class AuthStorage {
 			limits,
 			resets: new ResetCredits({ store, pool, oauth, usage, usageCache, blocks }),
 			blocks,
+			selector,
 		};
 	}
 

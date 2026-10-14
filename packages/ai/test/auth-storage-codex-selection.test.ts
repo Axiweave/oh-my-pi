@@ -17,9 +17,15 @@ import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { OAuthRefresher } from "../src/auth/refresh";
 import { removeWithRetries } from "../../utils/src/temp";
-
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const HOUR_MS = 60 * 60 * 1000;
+import {
+	countApiKeySelections,
+	createCodexUsageReport,
+	createCredential,
+	createLimit,
+	HOUR_MS,
+	type UsageWindowConfig,
+	WEEK_MS,
+} from "./helpers/routing-fixtures";
 
 const FIVE_HOUR_MS = 5 * HOUR_MS;
 const STALE_BLOCK_GUARD_MS = 5 * 60_000 + 1;
@@ -59,95 +65,6 @@ function readCodexBlock(db: Database, credentialId: number, blockScope: string):
 	return row?.blocked_until_ms;
 }
 
-type UsageWindowSpec = {
-	usedFraction: number;
-	resetInMs: number;
-};
-
-type UsageWindowConfig = {
-	windowId: string;
-	windowLabel: string;
-	durationMs: number;
-};
-
-type CodexUsageMetadata = {
-	accountId?: string;
-	allowed?: boolean;
-	limitReached?: boolean;
-	planType?: string;
-	email?: string;
-};
-
-function createLimit(args: {
-	key: "primary" | "secondary";
-	windowId: string;
-	windowLabel: string;
-	durationMs: number;
-	usedFraction: number;
-	resetInMs: number;
-}): UsageLimit {
-	const clamped = Math.min(Math.max(args.usedFraction, 0), 1);
-	const used = clamped * 100;
-	return {
-		id: `openai-codex:${args.key}`,
-		label: args.windowLabel,
-		scope: {
-			provider: "openai-codex",
-			windowId: args.windowId,
-			shared: true,
-		},
-		window: {
-			id: args.windowId,
-			label: args.windowLabel,
-			durationMs: args.durationMs,
-			resetsAt: Date.now() + args.resetInMs,
-		},
-		amount: {
-			unit: "percent",
-			used,
-			limit: 100,
-			remaining: 100 - used,
-			usedFraction: clamped,
-			remainingFraction: Math.max(0, 1 - clamped),
-		},
-		status: clamped >= 1 ? "exhausted" : clamped >= 0.9 ? "warning" : "ok",
-	};
-}
-
-function createCodexUsageReport(args: {
-	accountId: string;
-	primary: UsageWindowSpec;
-	secondary: UsageWindowSpec;
-	primaryWindow?: UsageWindowConfig;
-	secondaryWindow?: UsageWindowConfig;
-	metadata?: CodexUsageMetadata;
-}): UsageReport {
-	const primaryWindow = args.primaryWindow ?? { windowId: "1h", windowLabel: "1 Hour", durationMs: HOUR_MS };
-	const secondaryWindow = args.secondaryWindow ?? { windowId: "7d", windowLabel: "7 Day", durationMs: WEEK_MS };
-	return {
-		provider: "openai-codex",
-		fetchedAt: Date.now(),
-		limits: [
-			createLimit({
-				key: "primary",
-				windowId: primaryWindow.windowId,
-				windowLabel: primaryWindow.windowLabel,
-				durationMs: primaryWindow.durationMs,
-				usedFraction: args.primary.usedFraction,
-				resetInMs: args.primary.resetInMs,
-			}),
-			createLimit({
-				key: "secondary",
-				windowId: secondaryWindow.windowId,
-				windowLabel: secondaryWindow.windowLabel,
-				durationMs: secondaryWindow.durationMs,
-				usedFraction: args.secondary.usedFraction,
-				resetInMs: args.secondary.resetInMs,
-			}),
-		],
-		metadata: { accountId: args.accountId, ...args.metadata },
-	};
-}
 function addSparkUsage(
 	report: UsageReport,
 	primaryUsedFraction: number,
@@ -195,16 +112,6 @@ function addSparkUsage(
 				spark: meterState,
 			},
 		},
-	};
-}
-
-function createCredential(accountId: string, email: string): OAuthCredentials {
-	return {
-		access: `access-${accountId}`,
-		refresh: `refresh-${accountId}`,
-		expires: Date.now() + WEEK_MS,
-		accountId,
-		email,
 	};
 }
 
@@ -275,26 +182,6 @@ async function fetchCodexPlanExhaustedReport(
 
 const CODEX_CREDIT_BALANCE = { has_credits: true, overage_limit_reached: false, balance: "489.25" };
 const CODEX_NO_BALANCE = { has_credits: false, balance: "0" };
-
-async function countApiKeySelections(
-	authStorage: AuthStorage,
-	provider: string,
-	sessionPrefix: string,
-	samples = 150,
-	modelId?: string,
-): Promise<Map<string, number>> {
-	const counts = new Map<string, number>();
-	for (let index = 0; index < samples; index += 1) {
-		const apiKey = await authStorage.keys.get(
-			provider,
-			`${sessionPrefix}-${index}`,
-			modelId === undefined ? undefined : { modelId },
-		);
-		if (!apiKey) continue;
-		counts.set(apiKey, (counts.get(apiKey) ?? 0) + 1);
-	}
-	return counts;
-}
 
 function countFor(counts: Map<string, number>, apiKey: string): number {
 	return counts.get(apiKey) ?? 0;
@@ -463,13 +350,13 @@ describe("AuthStorage codex oauth ranking", () => {
 					provider: "openai-codex",
 					account: { email: "protected@example.com" },
 					priority: 100,
-					reservePct: 50,
+					capPct: 50,
 				},
 				{
 					provider: "openai-codex",
 					account: { email: "drain@example.com" },
 					priority: 10,
-					reservePct: 10,
+					capPct: 90,
 				},
 			],
 		});
@@ -500,17 +387,17 @@ describe("AuthStorage codex oauth ranking", () => {
 	});
 
 	test.each([
-		{ reservePct: 30, usedFraction: 0.7, inReserve: true },
-		{ reservePct: 30, usedFraction: 0.69, inReserve: false },
+		{ capPct: 70, usedFraction: 0.7, inReserve: true },
+		{ capPct: 70, usedFraction: 0.69, inReserve: false },
 	])(
-		"treats $usedFraction used against a $reservePct% reserve as inReserve=$inReserve",
-		async ({ reservePct, usedFraction, inReserve }) => {
+		"treats $usedFraction used against a $capPct% cap as inReserve=$inReserve",
+		async ({ capPct, usedFraction, inReserve }) => {
 			if (!store) throw new Error("test setup failed");
 			authStorage = new AuthStorage(store, {
 				usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 				accountPolicies: [
-					{ provider: "openai-codex", account: { email: "protected@example.com" }, priority: 100, reservePct },
-					{ provider: "openai-codex", account: { email: "drain@example.com" }, priority: 10, reservePct: 0 },
+					{ provider: "openai-codex", account: { email: "protected@example.com" }, priority: 100, capPct },
+					{ provider: "openai-codex", account: { email: "drain@example.com" }, priority: 10 },
 				],
 			});
 			await authStorage.credentials.set("openai-codex", [
@@ -534,7 +421,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				}),
 			);
 
-			const counts = await countApiKeySelections(authStorage, "openai-codex", `reserve-boundary-${reservePct}`);
+			const counts = await countApiKeySelections(authStorage, "openai-codex", `reserve-boundary-${capPct}`);
 			const health = await authStorage.health.model("openai-codex", { reserveFraction: 0 });
 
 			if (inReserve) expectExclusivePreference(counts, "api-acct-drain", "api-acct-protected");
@@ -553,7 +440,7 @@ describe("AuthStorage codex oauth ranking", () => {
 					provider: "openai-codex",
 					account: { accountId: "acct-protected" },
 					priority: 100,
-					reservePct: 50,
+					capPct: 50,
 				},
 			],
 		});
@@ -591,7 +478,7 @@ describe("AuthStorage codex oauth ranking", () => {
 					provider: "openai-codex",
 					account: { email: "shared@example.com", accountId: "acct-team", orgId: "org-team" },
 					priority: 42,
-					reservePct: 25,
+					capPct: 75,
 				},
 				{
 					provider: "openai-codex",
@@ -623,7 +510,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			provider: "openai-codex",
 			account: { email: "shared@example.com", accountId: "acct-team", orgId: "org-team" },
 			priority: 42,
-			reservePct: 25,
+			capPct: 75,
 		});
 		expect(
 			authStorage.oauth.policy("openai-codex", {
@@ -811,7 +698,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				{
 					provider,
 					account: { accountId: "acct-runtime" },
-					reservePct: 20,
+					capPct: 80,
 				},
 			],
 		});
@@ -820,7 +707,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		]);
 
 		await expect(authStorage.keys.get(provider, "before-runtime-usage")).rejects.toThrow(
-			"reservePct requires a usage provider",
+			"capPct requires a usage provider",
 		);
 
 		authStorage.usage.setProvider(provider, { ...usageProvider, id: provider });
@@ -1053,7 +940,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				{
 					provider: "openai-codex",
 					account: { accountId: "acct-protected" },
-					reservePct: 50,
+					capPct: 50,
 				},
 			],
 		});
@@ -1205,7 +1092,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				{
 					provider: "openai-codex",
 					account: { accountId: "acct-only" },
-					reservePct: 90,
+					capPct: 10,
 				},
 			],
 		});

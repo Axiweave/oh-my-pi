@@ -459,6 +459,8 @@ export interface SessionMaintenanceHost {
 		source: string;
 		delayMs?: number;
 		generation?: number;
+		/** A retry or re-sample: the next request starts a new turn. */
+		newTurn?: boolean;
 		shouldContinue?: () => boolean;
 		onSkip?: (
 			reason:
@@ -1888,6 +1890,7 @@ export class SessionMaintenance {
 					source: "experimental-context-rollover-retry",
 					delayMs: 100,
 					generation,
+					newTurn: true,
 				});
 				return COMPACTION_CHECK_CONTINUATION;
 			}
@@ -2982,6 +2985,7 @@ export class SessionMaintenance {
 					source: "context-promotion-overflow",
 					delayMs: 100,
 					generation,
+					newTurn: true,
 				});
 				return COMPACTION_CHECK_CONTINUATION;
 			}
@@ -3118,6 +3122,7 @@ export class SessionMaintenance {
 					source: "promoted-model-overflow",
 					delayMs: 100,
 					generation,
+					newTurn: true,
 				});
 				return COMPACTION_CHECK_CONTINUATION;
 			}
@@ -3169,6 +3174,7 @@ export class SessionMaintenance {
 					source: "context-promotion-incomplete",
 					delayMs: 100,
 					generation,
+					newTurn: true,
 				});
 				return COMPACTION_CHECK_CONTINUATION;
 			}
@@ -3235,7 +3241,12 @@ export class SessionMaintenance {
 						contextTokens: incompleteContextTokens,
 						attempt: this.#incompleteRecoveryAttempts,
 					});
-					this.#host.scheduleAgentContinue({ source: "incomplete-retry", delayMs: 100, generation });
+					this.#host.scheduleAgentContinue({
+						source: "incomplete-retry",
+						delayMs: 100,
+						generation,
+						newTurn: true,
+					});
 					return COMPACTION_CHECK_CONTINUATION;
 				}
 				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
@@ -3424,7 +3435,10 @@ export class SessionMaintenance {
 		// outside the installed allowlist leaves the session where it is, without
 		// spending a credential lookup on it.
 		if (!cyberAllowsModel(this.#host.settings, candidate)) return undefined;
-		const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), { signal });
+		const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), {
+			signal,
+			skipMissing: true,
+		});
 		if (!apiKey) return undefined;
 		return candidate;
 	}
@@ -3515,7 +3529,9 @@ export class SessionMaintenance {
 
 		for (const candidate of candidates) {
 			if (!cyberAllowsModel(this.#host.settings, candidate)) continue;
-			const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
+			const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), {
+				skipMissing: true,
+			});
 			if (!apiKey) continue;
 			if (
 				nativeCompactionFailure &&
@@ -5094,7 +5110,9 @@ export class SessionMaintenance {
 					const candidate = candidates[candidateIndex];
 					if (!cyberAllowsModel(this.#host.settings, candidate)) continue;
 					const hasMoreCandidates = candidateIndex < candidates.length - 1;
-					const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
+					const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), {
+						skipMissing: true,
+					});
 					if (!apiKey) continue;
 					if (
 						nativeCompactionFailure &&
@@ -5536,6 +5554,7 @@ export class SessionMaintenance {
 				source: "compaction-retry",
 				delayMs: 100,
 				generation: args.generation,
+				newTurn: true,
 			});
 			continuationScheduled = true;
 		} else {
@@ -5678,6 +5697,7 @@ export class SessionMaintenance {
 					source: "shake-retry",
 					delayMs: 100,
 					generation,
+					newTurn: true,
 				});
 				continuationScheduled = true;
 			} else {

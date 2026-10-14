@@ -545,6 +545,8 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		});
 		expect(markedByMissingId.switched).toBe(false);
 		expect(await authStorage.keys.get(PROVIDER, sessionId)).toBe(sticky);
+		// The checks above pinned the session, so a fallback to that pin had something to hit.
+		expect(authStorage.sessions.release(PROVIDER, sessionId)).toBe(true);
 	});
 
 	test("credentialId rotation targets the failed row after bearer changes without clearing stale sticky", async () => {
@@ -574,6 +576,8 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 			credentialId: targetRow.id,
 		});
 		expect(rotated.switched).toBe(true);
+		// The session's pin is another row, so the rotation leaves it.
+		expect(authStorage.sessions.release(PROVIDER, sessionId)).toBe(true);
 		expect(await authStorage.keys.get(PROVIDER, sessionId)).toBe(sticky);
 
 		const laterSelections = new Set<string>();

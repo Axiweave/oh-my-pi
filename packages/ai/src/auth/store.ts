@@ -91,6 +91,8 @@ export interface CredentialCacheStore {
 	setCache(key: string, value: string, expiresAtSec: number): void;
 	/** Drop all cache rows whose keys start with the supplied prefix. */
 	deleteCachePrefix?(prefix: string): void;
+	/** Keys of the cache rows that start with the supplied prefix. */
+	cacheKeys?(prefix: string): string[];
 	cleanExpiredCache(): void;
 }
 

@@ -7,7 +7,7 @@ import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oaut
 import { setCodexAttestationProvider } from "@oh-my-pi/pi-ai/providers/openai-codex-attestation";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
-import { OAuthRefreshUnavailableError } from "@oh-my-pi/pi-ai/error";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-ai/stream";
 import type {
 	Api,
@@ -3256,11 +3256,18 @@ export class ModelRegistry {
 		);
 	}
 
-	/** Resolve a model's request credential or the no-auth sentinel. */
+	/**
+	 * Resolve a model's credential or the no-auth sentinel. A key check: it pins the
+	 * session's account but does not move routing state (rotate turn, weight share,
+	 * sink); requests use {@link resolver}. A session that may use no key of the
+	 * provider (a strict session whose account was signed out, a restricted pool with
+	 * nothing left) rejects with a `MissingApiKeyError` that says why; `skipMissing`
+	 * resolves `undefined` instead, for callers that just move on to another model.
+	 */
 	async getApiKey(
 		model: Model<Api>,
 		sessionId?: string,
-		options?: { signal?: AbortSignal },
+		options?: { signal?: AbortSignal; skipMissing?: boolean },
 	): Promise<string | undefined> {
 		// A disabled provider gets no credential, so no request reaches it however
 		// its model was obtained.
@@ -3268,18 +3275,28 @@ export class ModelRegistry {
 		if (this.#isKeylessProvider(model.provider)) {
 			return kNoAuth;
 		}
-		return this.authStorage.keys.get(model.provider, sessionId, {
-			baseUrl: model.baseUrl,
-			modelId: model.id,
-			accountIds: model.accountAccess && Object.keys(model.accountAccess),
-			signal: options?.signal,
-		});
+		try {
+			return await this.authStorage.keys.get(model.provider, sessionId, {
+				baseUrl: model.baseUrl,
+				modelId: model.id,
+				accountIds: model.accountAccess && Object.keys(model.accountAccess),
+				signal: options?.signal,
+			});
+		} catch (error) {
+			if (options?.skipMissing && error instanceof AIError.MissingApiKeyError) return undefined;
+			throw error;
+		}
 	}
 
-	/** Resolve request authentication through the historical Pi extension facade. */
+	/** Resolve request authentication through the historical Pi extension facade (the request path). */
 	async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
 		try {
-			const apiKey = await this.getApiKey(model);
+			const apiKey = (
+				await this.getApiKeyWithCredentialForProvider(model.provider, undefined, {
+					baseUrl: model.baseUrl,
+					modelId: model.id,
+				})
+			)?.apiKey;
 			if (apiKey === undefined) {
 				return { ok: false, error: `No API key found for "${model.provider}"` };
 			}
@@ -3292,9 +3309,12 @@ export class ModelRegistry {
 
 	/**
 	 * Resolve a provider's credential or the no-auth sentinel, for availability
-	 * checks. A transient OAuth refresh failure resolves `undefined` (like
-	 * `authStorage.keys.get`); request paths use
-	 * {@link getApiKeyWithCredentialForProvider}, which surfaces it.
+	 * checks. Like {@link getApiKey} it pins the session's account but leaves routing
+	 * state (rotate turn, weight share, sink) alone, and rejects for a session that
+	 * may use no key of the provider unless `skipMissing` is set. A transient OAuth
+	 * refresh failure resolves `undefined`; request paths use
+	 * {@link getApiKeyWithCredentialForProvider}, which advances routing and surfaces
+	 * those failures.
 	 *
 	 * `options.forceRefresh` re-mints the session-sticky OAuth token even when
 	 * the cached copy still looks valid. `options.signal` is threaded into any
@@ -3303,12 +3323,15 @@ export class ModelRegistry {
 	async getApiKeyForProvider(
 		provider: string,
 		sessionId?: string,
-		options?: AuthApiKeyOptions,
+		options?: AuthApiKeyOptions & { skipMissing?: boolean },
 	): Promise<string | undefined> {
+		if (this.#isProviderDisabled(provider)) return undefined;
+		if (options?.forceRefresh) this.#invalidateProviderCommandConfigs(provider);
+		if (this.#isKeylessProvider(provider)) return kNoAuth;
 		try {
-			return (await this.getApiKeyWithCredentialForProvider(provider, sessionId, options))?.apiKey;
+			return await this.authStorage.keys.get(provider, sessionId, this.#keyOptions(provider, options));
 		} catch (error) {
-			if (error instanceof OAuthRefreshUnavailableError) return undefined;
+			if (options?.skipMissing && error instanceof AIError.MissingApiKeyError) return undefined;
 			throw error;
 		}
 	}
@@ -3330,26 +3353,31 @@ export class ModelRegistry {
 		if (this.#isKeylessProvider(provider)) {
 			return { apiKey: kNoAuth };
 		}
+		return this.authStorage.keys.getWithCredential(provider, sessionId, this.#keyOptions(provider, options));
+	}
+
+	#keyOptions(provider: string, options: AuthApiKeyOptions | undefined): AuthApiKeyOptions {
 		const accountAccess = options?.modelId ? this.find(provider, options.modelId)?.accountAccess : undefined;
-		return this.authStorage.keys.getWithCredential(provider, sessionId, {
+		return {
 			baseUrl: options?.baseUrl,
 			modelId: options?.modelId,
 			accountIds: accountAccess && Object.keys(accountAccess),
 			forceRefresh: options?.forceRefresh,
 			refreshReason: options?.refreshReason,
 			signal: options?.signal,
-		});
+			withinTurn: options?.withinTurn,
+		};
 	}
 
 	/**
 	 * Build an {@link ApiKeyResolver} implementing the central a/b/c auth-retry
 	 * policy. Accepts a provider id with options, or a model with an optional
-	 * session id (`resolver(model, sessionId)`) which derives `baseUrl`/`modelId`
+	 * session id or options (`resolver(model, sessionIdOrOptions)`) which derives `baseUrl`/`modelId`
 	 * from the model. Callers that need the initial key for a guard can call
 	 * `resolveApiKeyOnce(resolver)`.
 	 */
 	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
-	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
+	resolver(model: ApiKeyResolverModel, sessionIdOrOptions?: string | ApiKeyResolverOptions): ApiKeyResolver;
 	resolver(target: string | ApiKeyResolverModel, optionsOrSessionId?: ApiKeyResolverOptions | string): ApiKeyResolver {
 		const options = typeof optionsOrSessionId === "string" ? { sessionId: optionsOrSessionId } : optionsOrSessionId;
 		if (typeof target === "string") {

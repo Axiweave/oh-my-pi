@@ -2497,7 +2497,7 @@ describe("AgentSession retry fallback", () => {
 		expect(getApiKey).toHaveBeenCalledWith(
 			expect.objectContaining({ provider: advisorPrimary.provider, id: advisorPrimary.id }),
 			expect.any(String),
-			{ signal: expect.any(AbortSignal) },
+			expect.objectContaining({ signal: expect.any(AbortSignal) }),
 		);
 
 		expect(requestedAdvisorModels).toEqual([advisorPrimarySelector, advisorFallbackSelector, advisorPrimarySelector]);

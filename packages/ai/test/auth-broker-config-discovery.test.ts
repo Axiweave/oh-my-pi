@@ -68,25 +68,32 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 			{
 				provider: "anthropic",
 				account: { email: "policy@example.com" },
-				reservePct: 25,
+				capPct: 75,
 			},
 		] satisfies AuthAccountPolicies;
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
-			["auth:", `  accountPolicies: ${JSON.stringify(accountPolicies)}`, "retry:", "  usageReservePct: 17", ""].join(
-				"\n",
-			),
+			[
+				"auth:",
+				`  accountPolicies: ${JSON.stringify(accountPolicies)}`,
+				"  routing: { anthropic: { mode: order, stays: turn } }",
+				"retry:",
+				"  usageReservePct: 17",
+				"",
+			].join("\n"),
 		);
 
 		await expect(loadAuthAccountPolicyConfig({ agentDir })).resolves.toEqual({
 			accountPolicies,
 			defaultReservePct: 17,
+			routing: { anthropic: { mode: "order", stays: "turn" } },
 		});
 
 		await Bun.write(path.join(agentDir, "config.yml"), "auth: {}\n");
 		await expect(loadAuthAccountPolicyConfig({ agentDir })).resolves.toEqual({
 			accountPolicies: [],
 			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+			routing: {},
 		});
 	});
 
@@ -98,6 +105,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 				await expect(loadAuthAccountPolicyConfig({ agentDir })).resolves.toEqual({
 					accountPolicies: [],
 					defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+					routing: {},
 				});
 			});
 		}
@@ -236,18 +244,6 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 				yaml: [
 					"auth:",
 					"  accountPolicies:",
-					"    - provider: openai-codex",
-					"      account:",
-					"        email: preferred@example.com",
-					"      reservePct: 101",
-					"",
-				].join("\n"),
-				error: "auth.accountPolicies[0].reservePct must be between 0 and 100",
-			},
-			{
-				yaml: [
-					"auth:",
-					"  accountPolicies:",
 					'    - provider: " openai-codex"',
 					"      account:",
 					"        email: preferred@example.com",
@@ -265,6 +261,85 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 			for (const { yaml, error } of invalidConfigs) {
 				await Bun.write(path.join(agentDir, "config.yml"), yaml);
 				await expect(loadAuthAccountPolicyConfig({ agentDir })).rejects.toThrow(error);
+			}
+		});
+	});
+
+	test("rejects each malformed routing or account-cap setting with its setting path", async () => {
+		const policy = (fields: string[], account = ["        email: preferred@example.com"]) =>
+			[
+				"auth:",
+				"  accountPolicies:",
+				"    - provider: openai-codex",
+				"      account:",
+				...account,
+				...fields,
+				"",
+			].join("\n");
+		const rows = [
+			{
+				yaml: "auth:\n  routing:\n    anthropic:\n      mode: fastest\n",
+				error: "auth.routing.anthropic.mode must be one of smart, order, rotate, weight, usage, pace",
+			},
+			{
+				yaml: "auth:\n  routing:\n    anthropic:\n      stays: forever\n",
+				error: "auth.routing.anthropic.stays must be one of auto, session, turn, off, strict",
+			},
+			{
+				yaml: "auth:\n  routing:\n    anthropic:\n      speed: 1\n",
+				error: "auth.routing.anthropic has unknown fields: speed",
+			},
+			{
+				yaml: policy(["      weight: 0"]),
+				error: "auth.accountPolicies[0].weight must be an integer between 1 and 1000",
+			},
+			{
+				yaml: policy(["      capPct: 0"]),
+				error: "auth.accountPolicies[0].capPct must be a number between 1 and 100",
+			},
+			{
+				yaml: policy(["      windowCapPct: { 5h: 120 }"]),
+				error: "auth.accountPolicies[0].windowCapPct.5h must be a number between 1 and 100",
+			},
+			{ yaml: policy(["      reservePct: 10"]), error: "auth.accountPolicies[0] has unknown fields: reservePct" },
+			{
+				yaml: policy([], ['        keySuffix: "ab"']),
+				error: "auth.accountPolicies[0].account.keySuffix must have at least 4 characters",
+			},
+		] as const;
+
+		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
+			for (const { yaml, error } of rows) {
+				await Bun.write(path.join(agentDir, "config.yml"), yaml);
+				await expect(loadAuthAccountPolicyConfig({ agentDir })).rejects.toThrow(error);
+			}
+		});
+	});
+
+	test("rejects capPct on a provider without usage reports at selection", async () => {
+		const provider = "no-usage-provider";
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			[
+				"auth:",
+				"  accountPolicies:",
+				`    - provider: ${provider}`,
+				"      account: { accountId: acct }",
+				"      capPct: 90",
+				"",
+			].join("\n"),
+		);
+		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
+			const storage = await discoverAuthStorage({ agentDir });
+			try {
+				await storage.credentials.set(provider, [
+					{ type: "oauth", access: "a", refresh: "r", expires: Date.now() + 60 * 60_000, accountId: "acct" },
+				]);
+				await expect(storage.keys.get(provider, "session")).rejects.toThrow(
+					`auth.accountPolicies[0].capPct requires a usage provider for ${provider}`,
+				);
+			} finally {
+				storage.close();
 			}
 		});
 	});

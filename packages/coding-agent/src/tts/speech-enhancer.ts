@@ -94,7 +94,7 @@ export class SpeechEnhancer {
 				this.#deps.reportCyberRoleWithoutModel?.("tiny", formatModelString(model));
 				return null;
 			}
-			const apiKey = await registry.getApiKey(model, sessionId);
+			const apiKey = await registry.getApiKey(model, sessionId, { skipMissing: true });
 			if (!apiKey) return null;
 			// Resolve metadata after getApiKey so the session-sticky credential is recorded first.
 			const metadata = this.#deps.metadataResolver?.(model.provider);

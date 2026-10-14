@@ -11,10 +11,14 @@ const RESPONSES_URL = "https://api.perplexity.ai/v1/responses";
 const apiKeyAuthStorage = {
 	oauth: { access: async () => undefined },
 	keys: {
-		get: async (provider: string) => {
-			if (provider === "perplexity") return process.env.PERPLEXITY_API_KEY;
-			if (provider === "openrouter") return process.env.OPENROUTER_API_KEY;
-			return undefined;
+		getWithCredential: async (provider: string) => {
+			const apiKey =
+				provider === "perplexity"
+					? process.env.PERPLEXITY_API_KEY
+					: provider === "openrouter"
+						? process.env.OPENROUTER_API_KEY
+						: undefined;
+			return apiKey ? { apiKey } : undefined;
 		},
 		source: (provider: string) => {
 			// Env-backed key (not OAuth) — the direct api-key config must still be emitted.
@@ -289,7 +293,7 @@ const oauthAuthStorage = {
 const anonymousAuthStorage = {
 	oauth: { access: async () => undefined },
 	keys: {
-		get: async () => undefined,
+		getWithCredential: async () => undefined,
 		source: () => undefined,
 	},
 } as unknown as AuthStorage;

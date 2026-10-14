@@ -9,6 +9,8 @@ import { resolveCredentialIdentityKey } from "./sqlite-credential-store";
 
 /** Prefix for persisted session-to-credential affinity. */
 export const SESSION_STICKY_CACHE_PREFIX = "session:sticky:";
+/** Prefix for the persisted account a strict session stays on. A provider reset keeps these rows. */
+const SESSION_STRICT_CACHE_PREFIX = "session:strict:";
 /** Persisted sticky rows live this long past their last use. */
 const SESSION_STICKY_TTL_SEC = 30 * 24 * 60 * 60;
 /**
@@ -30,6 +32,39 @@ type PersistedSticky = {
 	lastUsedAtMs: number;
 };
 
+/** Account fields shared by `OAuthAccountIdentity`, `OAuthAccountSummary`, and `OAuthCredential`. */
+interface CredentialPinIdentity {
+	accountId?: string;
+	email?: string;
+	projectId?: string;
+	orgId?: string;
+}
+
+/**
+ * Stable identifier for a provider account within its billing scope. The
+ * digest covers the full scope tuple — the same account in two orgs (Anthropic
+ * multi-subscription) or projects (Gemini) is two distinct cache domains and
+ * must produce two distinct pins. The digest input is a persisted contract
+ * (session files' `credential_pin` entries); changing it orphans every recorded pin.
+ *
+ * Hashing avoids embedding raw emails/uuids in session files, but an unsalted
+ * digest of a guessable email is still linkable — treat exported sessions
+ * accordingly.
+ *
+ * Returns `undefined` when the identity carries no account key at all.
+ */
+export function credentialPinHash(provider: string, identity: CredentialPinIdentity): string | undefined {
+	if (!identity.accountId && !identity.email) return undefined;
+	const key = [
+		provider,
+		identity.accountId ?? "",
+		identity.email ?? "",
+		identity.orgId ?? "",
+		identity.projectId ?? "",
+	].join("\0");
+	return new Bun.CryptoHasher("sha256").update(key).digest("hex");
+}
+
 /** A session's pinned credential (resolved index + durable row id). */
 export type SessionCredential = {
 	type: AuthCredential["type"];
@@ -38,6 +73,22 @@ export type SessionCredential = {
 	lastUsedAtMs?: number;
 	/** Set only by the public user-facing pin API; automatic warm affinity leaves it absent. */
 	explicit?: true;
+	/** Set while only key checks have used this pin: the first request counts as a new selection. */
+	unserved?: true;
+};
+
+/** The account a strict session stays on. No tokens. */
+export type StrictAccount = {
+	credentialId: number;
+	/** The account's identity key (see `sessions.restrict`), so it matches when it signs in again. */
+	identityKey?: string;
+	label: string;
+	/** The provider's credential ids when the account was found gone. */
+	goneFrom?: string;
+	/** {@link credentialPinHash} of the account, for a hold restored from a session file. */
+	pinHash?: string;
+	/** When the row expires: with the session pin's row. Set by `holdStrict`. */
+	expiresAtSec?: number;
 };
 
 /** One installed restriction: the allowed OAuth identity keys and the lease that lifts it. */
@@ -56,6 +107,8 @@ export class SessionAffinity implements SessionsApi {
 	#sessionLastCredential: Map<string, LRUCache<string, SessionCredential>> = new Map();
 	/** Persisted sticky rows per provider, keyed by session id, so unchanged re-records skip the write. */
 	#persistedSticky: Map<string, LRUCache<string, PersistedSticky>> = new Map();
+	/** The account each strict session stays on, kept when its pin is dropped; `null` once read and absent. */
+	#strictAccounts: Map<string, LRUCache<string, StrictAccount | null>> = new Map();
 	#store: AuthCredentialStore;
 	#pool: CredentialPool;
 	#overrides: KeyOverrides;
@@ -76,10 +129,36 @@ export class SessionAffinity implements SessionsApi {
 	restrict(provider: string, sessionId: string, identityKeys: readonly string[]): SessionRestrictionLease {
 		if (!provider || !sessionId) throw new Error("sessions.restrict requires a provider and a session id");
 		const lease = Symbol("sessions.restrict");
+		const allowed = new Set(identityKeys);
 		const sessions = this.#restrictions.get(provider) ?? new Map<string, SessionRestriction>();
-		sessions.set(sessionId, { allowed: new Set(identityKeys), lease });
+		sessions.set(sessionId, { allowed, lease });
 		this.#restrictions.set(provider, sessions);
+		// A strict session does not fail for an account outside its pool.
+		const held = this.strictAccount(provider, sessionId);
+		if (held && !this.#holdInPool(provider, sessionId, held)) this.holdStrict(provider, sessionId, undefined);
 		return lease;
+	}
+
+	/**
+	 * Whether a strict hold's account is in `sessionId`'s pool (always, for an unrestricted
+	 * session). A hold restored from a session file knows its account only by `pinHash`, so it is
+	 * in the pool only while an allowed row has that hash; one whose account is gone is not.
+	 */
+	#holdInPool(provider: string, sessionId: string, held: StrictAccount): boolean {
+		const allowed = this.#restrictions.get(provider)?.get(sessionId)?.allowed;
+		if (allowed === undefined) return true;
+		if (held.identityKey !== undefined) return allowed.has(held.identityKey);
+		return (
+			held.pinHash !== undefined &&
+			this.#pool
+				.credentials(provider)
+				.some(
+					credential =>
+						credential.type === "oauth" &&
+						this.allows(provider, sessionId, credential) &&
+						credentialPinHash(provider, credential) === held.pinHash,
+				)
+		);
 	}
 
 	unrestrict(provider: string, sessionId: string, lease: SessionRestrictionLease): void {
@@ -146,11 +225,104 @@ export class SessionAffinity implements SessionsApi {
 		this.#sessionLastCredential.get(provider)?.delete(sessionId);
 	}
 
+	/** The account a strict session stays on, from memory or its persisted row. */
+	strictAccount(provider: string, sessionId: string): StrictAccount | undefined {
+		const sessions = SessionAffinity.#sessionsFor(this.#strictAccounts, provider);
+		const known = sessions.get(sessionId);
+		if (known !== undefined) return known ?? undefined;
+		let held: StrictAccount | null = null;
+		try {
+			const raw = this.#store.getCache(`${SESSION_STRICT_CACHE_PREFIX}${provider}:${sessionId}`);
+			if (raw) held = JSON.parse(raw) as StrictAccount;
+		} catch (err) {
+			logger.debug("Failed to read strict session account from persistent store cache", { err });
+		}
+		sessions.set(sessionId, held);
+		return held ?? undefined;
+	}
+
+	/**
+	 * Keep the account a strict session stays on, or drop it with `undefined`. The row expires
+	 * with the session's pin row, or keeps its own expiry once that pin is gone.
+	 */
+	holdStrict(provider: string, sessionId: string, account: StrictAccount | undefined): void {
+		const pin = this.#persistedSticky.get(provider)?.get(sessionId);
+		const held = account && {
+			...account,
+			expiresAtSec: pin
+				? Math.floor(pin.lastUsedAtMs / 1000) + SESSION_STICKY_TTL_SEC
+				: (account.expiresAtSec ?? Math.floor(Date.now() / 1000) + SESSION_STICKY_TTL_SEC),
+		};
+		SessionAffinity.#sessionsFor(this.#strictAccounts, provider).set(sessionId, held ?? null);
+		try {
+			this.#store.setCache(
+				`${SESSION_STRICT_CACHE_PREFIX}${provider}:${sessionId}`,
+				held ? JSON.stringify(held) : "",
+				held?.expiresAtSec ?? 0,
+			);
+		} catch (err) {
+			logger.debug("Failed to write strict session account to persistent store cache", { err });
+		}
+	}
+
+	holdGone(provider: string, sessionId: string, pin: { hash: string; lastUsedAt: number }): void {
+		const expiresAtSec = Math.floor(pin.lastUsedAt / 1000) + SESSION_STICKY_TTL_SEC;
+		if (expiresAtSec <= Date.now() / 1000) return;
+		// A pooled session does not fail for an account it cannot name, as in `restrict`. A broker
+		// account pool is not skipped: its client cannot tell a hidden account from a removed one,
+		// so it fails closed.
+		if (this.isRestricted(provider, sessionId) || this.strictAccount(provider, sessionId)) return;
+		this.holdStrict(provider, sessionId, {
+			// No stored row has this id: the account comes back by `pinHash`, and any other change
+			// in the provider's accounts ends the hold.
+			credentialId: -1,
+			pinHash: pin.hash,
+			label: "the account this session used",
+			goneFrom: this.credentialIds(provider),
+			expiresAtSec,
+		});
+	}
+
+	/** The provider's stored credential ids, sorted: a strict hold ends when they change. */
+	credentialIds(provider: string): string {
+		return this.#pool
+			.entries(provider)
+			.map(entry => entry.id)
+			.sort((left, right) => left - right)
+			.join();
+	}
+
+	/** Drop every strict session's account for a provider whose stays mode is no longer `strict`. */
+	dropStrict(provider: string): void {
+		this.#strictAccounts.delete(provider);
+		try {
+			this.#store.deleteCachePrefix?.(`${SESSION_STRICT_CACHE_PREFIX}${provider}:`);
+		} catch (err) {
+			logger.debug("Failed to clear strict session accounts from persistent store cache", { err });
+		}
+	}
+
+	/**
+	 * At startup, drop the persisted strict accounts of every provider not in `strictProviders`,
+	 * including one whose `auth.routing` entry is gone, so no setting has to name it.
+	 */
+	dropStrictExcept(strictProviders: readonly string[]): void {
+		try {
+			for (const key of this.#store.cacheKeys?.(SESSION_STRICT_CACHE_PREFIX) ?? []) {
+				const kept = strictProviders.some(provider => key.startsWith(`${SESSION_STRICT_CACHE_PREFIX}${provider}:`));
+				if (!kept) this.#store.setCache(key, "", 0);
+			}
+		} catch (err) {
+			logger.debug("Failed to clear strict session accounts from persistent store cache", { err });
+		}
+	}
+
 	/**
 	 * Records which credential was used for a session (for rate-limit switching).
 	 * `lastUsedAtMs` backdates the sticky (session-file pin restores on resume);
 	 * it defaults to now for live selections. Automatic re-recording of the same
-	 * durable row preserves an explicit user pin.
+	 * durable row preserves an explicit user pin. `served: false` (a key check)
+	 * marks a new pin unserved; a check that re-records the same row keeps its mark.
 	 *
 	 * The in-memory sticky is always exact. The persisted row is rewritten only
 	 * when the credential, its type, or explicitness changes, or when the stored
@@ -164,6 +336,7 @@ export class SessionAffinity implements SessionsApi {
 		index: number,
 		lastUsedAtMs?: number,
 		explicit = false,
+		served = true,
 	): void {
 		if (!sessionId || !this.#permits(provider, sessionId, index)) return;
 		const nowMs = lastUsedAtMs ?? Date.now();
@@ -174,12 +347,14 @@ export class SessionAffinity implements SessionsApi {
 			previous?.type === type &&
 			(credentialId !== undefined ? previous.credentialId === credentialId : previous.index === index);
 		const isExplicit = explicit || (sameCredential && previous?.explicit === true);
+		const unserved = !served && (!sameCredential || previous?.unserved === true);
 		const sessionCredential: SessionCredential = {
 			type,
 			index,
 			credentialId,
 			lastUsedAtMs: nowMs,
 			...(isExplicit ? { explicit: true as const } : {}),
+			...(unserved ? { unserved: true as const } : {}),
 		};
 		sessionMap.set(sessionId, sessionCredential);
 
@@ -205,6 +380,9 @@ export class SessionAffinity implements SessionsApi {
 				explicit: isExplicit,
 				lastUsedAtMs: nowMs,
 			});
+			// A strict session's account is rewritten with its pin, so both rows expire together.
+			const held = this.strictAccount(provider, sessionId);
+			if (held) this.holdStrict(provider, sessionId, held);
 		} catch (err) {
 			persistedSessions.delete(sessionId);
 			logger.debug("Failed to write session sticky credential to persistent store cache", { err });
@@ -372,7 +550,10 @@ export class SessionAffinity implements SessionsApi {
 	 * blocking, credential rotation, metadata, and persisted pins all continue
 	 * through the target session id without retaining a live dependency on the
 	 * source session. `include` limits the copy to the providers it accepts,
-	 * given whether the source's affinity is an explicit user pin.
+	 * given whether the source's affinity is an explicit user pin. The account a
+	 * strict source stays on goes too (as an automatic affinity), so the target
+	 * fails the same way once that account is gone; a restricted target gets it
+	 * only while that account is in its pool (see `#holdInPool`).
 	 */
 	inherit(
 		sourceSessionId: string,
@@ -381,7 +562,12 @@ export class SessionAffinity implements SessionsApi {
 	): number {
 		if (!sourceSessionId || !targetSessionId || sourceSessionId === targetSessionId) return 0;
 		let inherited = 0;
-		for (const provider of this.#pool.providers()) {
+		// A provider whose last account is gone may only have strict accounts left.
+		for (const provider of new Set([...this.#pool.providers(), ...this.#strictAccounts.keys()])) {
+			const held = this.strictAccount(provider, sourceSessionId);
+			if (held && this.#holdInPool(provider, targetSessionId, held) && (!include || include(provider, false))) {
+				this.holdStrict(provider, targetSessionId, held);
+			}
 			const credential = this.get(provider, sourceSessionId);
 			if (!credential || !this.#permits(provider, targetSessionId, credential.index)) continue;
 			if (include && !include(provider, credential.explicit === true)) continue;

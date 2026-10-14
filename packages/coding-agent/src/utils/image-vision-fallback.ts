@@ -195,7 +195,9 @@ export async function describeAttachedImagesForTextModel(
 ): Promise<TextContent[]> {
 	const localRoot = resolveLocalRoot(deps.localProtocolOptions);
 	const visionModel = resolveVisionModel(deps);
-	const apiKey = visionModel ? await deps.modelRegistry.getApiKey(visionModel, deps.sessionId) : undefined;
+	const apiKey = visionModel
+		? await deps.modelRegistry.getApiKey(visionModel, deps.sessionId, { skipMissing: true })
+		: undefined;
 	const canDescribe = Boolean(visionModel && apiKey);
 	const telemetry = resolveTelemetry(deps.telemetryConfig, deps.sessionId);
 

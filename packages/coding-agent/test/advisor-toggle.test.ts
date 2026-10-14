@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import { DEFAULT_USAGE_RESERVE_PCT } from "@oh-my-pi/pi-ai/auth-storage";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -1108,6 +1109,112 @@ describe("AgentSession advisor toggle", () => {
 		} finally {
 			await quotaSession.dispose();
 			vi.restoreAllMocks();
+		}
+	});
+	it("keeps an advisor on its strict account after a usage limit, unless the user pinned it", async () => {
+		// Contract (FR-013, FR-014): under `stays: strict` an automatic pin ends the advisor's
+		// usage-limited turn on its account, with no retry; an explicit user pin keeps the usual
+		// recovery and retries on a sibling. Seeded: mode, 2-4 accounts, pinned account, pin kind.
+		const advisorModel = getBundledModel("openai-codex", "gpt-6-sol");
+		if (!advisorModel) throw new Error("Expected bundled Codex model to exist");
+		const SEED = Number(process.env.ROUTING_SEED ?? 20_260_511);
+		let state = SEED >>> 0;
+		const next = (n: number) => {
+			state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+			// The low bits of this generator cycle quickly; draw from the high ones.
+			return (state >>> 16) % n;
+		};
+		for (let run = 0; run < 8; run++) {
+			const mode = (["order", "rotate", "weight"] as const)[next(3)];
+			const count = 2 + next(3);
+			const pinnedIndex = next(count);
+			const pinned = `account-${pinnedIndex}`;
+			const explicit = next(2) === 1;
+			const storage = createInMemoryAuthStorage();
+			storage.keys.setRuntime(model.provider, "test-key");
+			await storage.credentials.set(
+				advisorModel.provider,
+				Array.from({ length: count }, (_, i) => ({
+					type: "oauth" as const,
+					access: `access-${i}`,
+					refresh: `refresh-${i}`,
+					expires: Date.now() + 3_600_000,
+					accountId: `account-${i}`,
+				})),
+			);
+			storage.usage.setProvider(advisorModel.provider, { id: advisorModel.provider, fetchUsage: async () => null });
+			storage.setAccountPolicies({
+				accountPolicies: [],
+				defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+				routing: { [advisorModel.provider]: { mode, stays: "strict" } },
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.enabled": true,
+				"retry.baseDelayMs": 0,
+				"retry.maxDelayMs": 100,
+				"retry.maxRetries": 1,
+				"retry.modelFallback": false,
+			});
+			settings.setModelRole("advisor", `${advisorModel.provider}/${advisorModel.id}`);
+			const strictSession = new AgentSession({
+				agent: new Agent({
+					initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: createMockModel({ responses: [{ content: ["primary complete"] }] }).stream,
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry: new ModelRegistry(storage),
+				advisorTools: [],
+			});
+
+			try {
+				expect(strictSession.setAdvisorEnabled(true)).toBe(true);
+				const advisorAgent = strictSession.getAdvisorAgent();
+				const advisorSessionId = advisorAgent?.sessionId;
+				if (!advisorAgent || !advisorSessionId) throw new Error("Expected an advisor with a provider session");
+				const credentialId = storage.oauth
+					.accounts(advisorModel.provider, advisorSessionId)
+					.find(account => account.accountId === pinned)?.credentialId;
+				if (credentialId === undefined) throw new Error(`Expected ${pinned}`);
+				// A pin with `restoredAtMs` is automatic; without it, an explicit user pin.
+				storage.sessions.pin(
+					advisorModel.provider,
+					advisorSessionId,
+					credentialId,
+					explicit ? undefined : { restoredAtMs: Date.now() },
+				);
+				const prompt = vi
+					.spyOn(advisorAgent, "prompt")
+					.mockRejectedValueOnce(
+						new AIError.ProviderHttpError("Generic provider failure", 429, { code: "insufficient_quota" }),
+					)
+					.mockResolvedValue(undefined);
+				const advisorYielded = Promise.withResolvers<void>();
+				const unsubscribe = strictSession.subscribe(event => {
+					if (event.type === "advisor_yielded") advisorYielded.resolve();
+				});
+
+				await strictSession.prompt("Trigger advisor");
+				await strictSession.waitForIdle();
+				await advisorYielded.promise;
+				unsubscribe();
+
+				// The key the advisor's next request would get: the pinned account's, or a sibling's.
+				const nextKey = await storage.keys.get(advisorModel.provider, advisorSessionId).catch(String);
+				const actual = { attempts: prompt.mock.calls.length, onPinned: nextKey === `access-${pinnedIndex}` };
+				const expected = { attempts: explicit ? 2 : 1, onPinned: !explicit };
+				if (!Bun.deepEquals(actual, expected)) {
+					throw new Error(
+						`ROUTING_SEED=${SEED} run=${run} mode=${mode} accounts=${count} pinned=${pinned} explicit=${explicit}: ` +
+							`got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`,
+					);
+				}
+			} finally {
+				await strictSession.dispose();
+				vi.restoreAllMocks();
+				storage.close();
+			}
 		}
 	});
 	it("marks structurally classified advisor usage limits", async () => {

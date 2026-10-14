@@ -524,7 +524,7 @@ async function openrouterKeyResolver(
 	baseUrl: string | undefined,
 ): Promise<ApiKeyResolver | undefined> {
 	if (baseUrl !== undefined && !hostMatchesUrl(baseUrl, "openrouter")) return undefined;
-	const key = await modelRegistry.getApiKeyForProvider("openrouter", sessionId);
+	const key = await modelRegistry.getApiKeyForProvider("openrouter", sessionId, { skipMissing: true });
 	if (key === undefined || key === "") return undefined;
 	return modelRegistry.resolver("openrouter", { sessionId });
 }
@@ -622,7 +622,7 @@ async function resolveMnemopiProviderOptions(
 						continue;
 					}
 
-					const hasApiKey = await modelRegistry.getApiKey(model, sessionId);
+					const hasApiKey = await modelRegistry.getApiKey(model, sessionId, { skipMissing: true });
 					if (!hasApiKey) {
 						logger.warn("Mnemopi: memory completion model has no current API key; trying the next fallback.", {
 							provider: model.provider,

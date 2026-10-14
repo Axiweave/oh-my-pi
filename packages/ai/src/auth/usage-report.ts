@@ -1,5 +1,5 @@
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
-import { resolveUsedFraction } from "../usage";
+import { isWithinUsageReserve, resolveUsedFraction } from "../usage";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
@@ -7,6 +7,7 @@ import type {
 	UsageLogger,
 	UsageReport,
 } from "../usage";
+import type { OAuthCredential } from "./types";
 
 /** Read a string identity field from report metadata. */
 export function usageReportMetadataValue(report: UsageReport, key: string): string | undefined {
@@ -25,6 +26,28 @@ export function usageReportScopeAccountId(report: UsageReport): string | undefin
 	}
 	if (ids.size === 1) return [...ids][0];
 	return undefined;
+}
+
+/** Whether `report` is `credential`'s: orgs agree when both carry one, and so does each identity on both sides. */
+export function usageReportMatchesCredential(report: UsageReport, credential: OAuthCredential): boolean {
+	const email = usageReportMetadataValue(report, "email")?.toLowerCase();
+	const orgId = usageReportMetadataValue(report, "orgId");
+	const accountId = (
+		usageReportMetadataValue(report, "accountId") ?? usageReportScopeAccountId(report)
+	)?.toLowerCase();
+	const credentialEmail = credential.email?.trim().toLowerCase();
+	const credentialAccountId = credential.accountId?.trim().toLowerCase();
+	if (orgId && credential.orgId && orgId !== credential.orgId.trim()) return false;
+	// Every identity dimension present on BOTH sides must agree — the
+	// account id is shared workspace-wide and one email can span
+	// workspaces, so a single-dimension match can cross-link siblings.
+	const emailComparable = Boolean(email && credentialEmail);
+	const accountComparable = Boolean(accountId && credentialAccountId);
+	return (
+		(emailComparable || accountComparable) &&
+		(!emailComparable || credentialEmail === email) &&
+		(!accountComparable || credentialAccountId === accountId)
+	);
 }
 
 function usageReportScopeProjectId(report: UsageReport): string | undefined {
@@ -227,6 +250,19 @@ export function reserveUsageLimits(
 	});
 }
 
+/** Reserve-scoped limits whose window has not reset since `report` was fetched. */
+export function currentReserveLimits(
+	strategy: CredentialRankingStrategy | undefined,
+	report: UsageReport,
+	rankingContext: CredentialRankingContext,
+	nowMs: number,
+): UsageLimit[] {
+	return reserveUsageLimits(strategy, report, rankingContext).filter(limit => {
+		const resetsAt = limit.window?.resetsAt;
+		return resetsAt === undefined || resetsAt > nowMs || report.fetchedAt >= resetsAt;
+	});
+}
+
 /** Measure currently available quota outside expired windows. */
 export function remainingUsageFraction(
 	strategy: CredentialRankingStrategy | undefined,
@@ -235,14 +271,22 @@ export function remainingUsageFraction(
 	nowMs: number,
 ): number | undefined {
 	if (!report) return undefined;
-	const usedFractions = reserveUsageLimits(strategy, report, rankingContext)
-		.filter(limit => {
-			const resetsAt = limit.window?.resetsAt;
-			return resetsAt === undefined || resetsAt > nowMs || report.fetchedAt >= resetsAt;
-		})
+	const usedFractions = currentReserveLimits(strategy, report, rankingContext, nowMs)
 		.map(resolveUsedFraction)
 		.filter((fraction): fraction is number => fraction !== undefined);
 	return usedFractions.length === 0 ? undefined : Math.max(0, 1 - Math.max(...usedFractions));
+}
+
+/** Whether any of `limits` reached its window cap (percent used; `undefined` = no cap). */
+export function isOverCaps(
+	limits: readonly UsageLimit[],
+	capFor: (windowId: string | undefined) => number | undefined,
+): boolean {
+	return limits.some(limit => {
+		const cap = capFor(limit.window?.id ?? limit.scope.windowId);
+		const used = resolveUsedFraction(limit);
+		return cap !== undefined && used !== undefined && isWithinUsageReserve(Math.max(0, 1 - used), (100 - cap) / 100);
+	});
 }
 
 /**

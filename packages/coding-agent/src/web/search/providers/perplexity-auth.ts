@@ -41,14 +41,15 @@ async function getApiConfig(
 	options?: PerplexityAuthOptions,
 ): Promise<ApiConfig | undefined> {
 	// A Perplexity OAuth session and a real API key are mutually exclusive here:
-	// when the active credential origin is OAuth, `getApiKey("perplexity")`
-	// returns the OAuth session JWT (OAuth wins in AuthStorage.keys.get), not an
+	// when the active credential origin is OAuth, the key lookup below returns
+	// the OAuth session JWT (OAuth wins in AuthStorage.keys), not an
 	// api.perplexity.ai key. Emitting it as a direct api-key config makes the
 	// search loop send the session token as a Bearer to the direct API endpoint,
 	// which rejects it with 401 and masks the real (transport) failure — see #5315.
 	// Skip the direct config in that case; the OAuth ask-endpoint method covers it.
 	if (authStorage.keys.source("perplexity")?.kind === "oauth") return undefined;
-	const apiKey = await authStorage.keys.get("perplexity", sessionId, options);
+	// The key serves a search request, so take it through the request path (it moves routing state).
+	const apiKey = (await authStorage.keys.getWithCredential("perplexity", sessionId, options))?.apiKey;
 	return apiKey ? { type: "api_key", apiKey, useResponses: $env.PI_PERPLEXITY_RESPONSES === "1" } : undefined;
 }
 

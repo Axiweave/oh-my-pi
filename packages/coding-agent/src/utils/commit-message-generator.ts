@@ -108,7 +108,7 @@ export async function generateCommitMessage(
 	const userMessage = `<diff>\n${truncatedDiff}\n</diff>`;
 
 	for (const candidate of candidates) {
-		const apiKey = await registry.getApiKey(candidate.model, sessionId);
+		const apiKey = await registry.getApiKey(candidate.model, sessionId, { skipMissing: true });
 		if (!apiKey) continue;
 
 		try {

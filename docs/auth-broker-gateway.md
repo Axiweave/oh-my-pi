@@ -302,22 +302,68 @@ The gateway uses the same broker URL/token resolution and account-pool environme
 | ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `auth.broker.url`   | unset   | Same as `OMP_AUTH_BROKER_URL`; env wins. Hidden from the settings UI. Values are resolved as a literal, an environment variable name, or `!<shell command>` to use trimmed stdout. |
 | `auth.broker.token` | unset   | Same as `OMP_AUTH_BROKER_TOKEN`; env wins. Values are resolved the same way.                                                                                                       |
-| `auth.accountPolicies` | `[]` | Per-account OAuth routing rules: `provider`, identity selector `account` (`email`, `accountId`, `projectId`, optional `orgId`), optional `priority` and `reservePct` (0–100). |
-| `retry.usageReservePct` | `10` | Default protected remaining-quota percentage when an account has no `reservePct` override. |
+| `auth.routing` | `{}` | Per-provider routing: `auth.routing.<provider>.mode` (`smart`, `order`, `rotate`, `weight`, `usage`, `pace`; default `smart`), `.stays` (`auto`, `session`, `turn`, `off`, `strict`; default `auto`), and `.sink` (default `false`). Unknown fields or values are an error that names the setting. |
+| `auth.accountPolicies` | `[]` | Per-account routing rules: `provider`, identity selector `account` (`email`, `accountId`, `projectId`, optional `orgId` for OAuth accounts, or `keySuffix` of at least 4 characters for an API key), optional `priority`, `weight` (1–1000, default 1), `capPct` (1–100, cap on every window), and `windowCapPct` (window id → 1–100, overrides `capPct` for that window). |
+| `retry.usageReservePct` | `10` | Global cap fallback: an account without its own cap is capped at `100 − usageReservePct`% of each window. Applies to selection only when the provider has at least one account policy. The usage-aware fallback health check always applies it. `order` mode ignores it. |
 
-Broker connection values come from the agent's main config file, not project settings. Account policies/reserve use effective settings (including project/explicit config layers). Long-lived SDK sessions follow policy changes and can replace the credential store in place when effective broker settings change; failed changes leave the current store active.
+Broker connection values come from the agent's main config file, not project settings. Account policies, routing, and the reserve use effective settings (including project/explicit config layers). Long-lived SDK sessions follow policy and routing changes on the next selection (an edit to `config.yml` needs `/reload-config`, or `config.hotReload: true`) and can replace the credential store in place when effective broker settings change; failed changes leave the current store active. `omp auth-gateway serve` reads `auth.routing` and `auth.accountPolicies` only at start, so restart the gateway to apply a change.
+
+Example:
+
+```yaml
+auth:
+  routing:
+    anthropic:
+      mode: order        # smart | order | rotate | weight | usage | pace
+      stays: turn        # auto | session | turn | off | strict
+      sink: false
+  accountPolicies:
+    - provider: anthropic
+      account: { email: first@example.com }
+      priority: 100
+    - provider: anthropic
+      account: { email: second@example.com }
+      priority: 50
+      capPct: 90
+      windowCapPct: { 5h: 50, 7d: 40 }
+    - provider: openrouter
+      account: { keySuffix: "x9Kq" }
+      weight: 3
+retry:
+  usageReservePct: 10    # global reserve; `order` ignores it
+```
 
 #### How sessions choose and keep an account
 
-When a provider has account policies, OMP ranks its accounts whenever it selects or reconsiders one (not on every request: a warm explicit pin, or a sole account, skips ranking). In order, an account loses when it is blocked (hit a limit), outside a required plan, past its renewable allowance, or inside its reserve; then Codex accounts with an untouched 5-hour window are preferred, accounts whose 5-hour window is at least 85% used fall back, accounts with a usage report beat accounts whose report could not be fetched, and only then does higher `priority` win. Ties go to the account whose quota would otherwise expire unused soonest. So `priority` orders healthy, measured accounts; it does not override reserve or the safety checks before it.
+Each provider has a routing mode (`auth.routing.<provider>.mode`) that orders its accounts or keys. Every mode first skips an account that is blocked (hit a limit), disabled, outside a required plan, past its renewable allowance, or past its cap. OAuth accounts still go before API keys; the mode orders accounts inside each kind.
 
-That ranking picks the account for a **new** session. A running session remembers the account it used last (its pin) and keeps it while the pin is warm, so the provider's prompt cache and signed reasoning stay valid:
+- `smart` (default): when the provider has account policies, Codex accounts with an untouched 5-hour window go first, accounts whose 5-hour window is at least 85% used fall back, accounts with a usage report beat accounts whose report could not be fetched, and only then does higher `priority` win. Ties go to the account whose quota would otherwise expire unused soonest.
+- `order`: accounts go by `priority` (highest first), then sign-in order. An account is used until it is blocked, refused for usage or auth, fails a plan check, reaches 100% of a window, or passes its own `capPct`/`windowCapPct`. `order` skips the global reserve (`retry.usageReservePct`), the 85% 5-hour guard, and the drain-urgency ranking.
+- `rotate`: each new selection starts one account further along the order.
+- `weight`: a smooth weighted round robin by `weight`. Weights 3 and 1 give a, a, b, a, a, a, b, a. A request that the stays mode keeps on an account counts against that account.
+- `usage`: the lowest share of allowance used goes first, then the fewest recent tokens (recent tokens lose half their weight each hour).
+- `pace`: accounts below 90% used go first, ordered by weekly quota left per hour until the weekly reset (paces within 10% are equal, then recent tokens decide). Accounts at 90% to 98% follow, then accounts at 98% or more, each by share used.
 
-- Anthropic pins go cold after an hour without a request; other providers' pins stay warm indefinitely. A cold or blocked pin re-ranks.
-- A warm pin moves only away from a bad account: when the pinned account enters its reserve and another account is measured outside its own reserve, or when its allowance is spent and an unblocked sibling still has allowance.
-- A warm pin does not move back when a higher-priority account recovers. New sessions use the recovered account; running ones stay where they are until one of the cases above applies.
-- An account the user chose explicitly for a session is never moved by ranking or reserve. It is still skipped while blocked, after a failed token refresh, or when it fails a required plan check; the session then falls through to a sibling.
-- Pins are saved with the session. A resumed session restores its pin with its original last-use time, and subagents start on their parent's pins. When a parked subagent is revived in the same session, its saved pin wins over the parent's automatic affinity; an explicit parent pin still wins, subject to the child's account pool.
+**Learn once.** In `usage` and `pace`, an OAuth account whose usage is unknown goes first for one request so that OMP learns its usage from the response headers (providers such as Anthropic and Codex). After that request, or at once for other providers, an account with unknown usage counts as 0% used with a full week left.
+
+**Caps.** `capPct` caps every window, and `windowCapPct` overrides it for one window. Past its cap, an account counts as used up for that window until the window resets. A cap of X% is the same as a reserve of (100 − X)%. Without its own cap, an account uses `100 − retry.usageReservePct`% when the provider has at least one account policy, except in `order`. A cap requires a provider with usage reports.
+
+**Sink.** With `sink: true`, an account that gets a rate-limit refusal while it still has quota goes behind every account without a rate limit since. When every usable account is sunk, the list clears. Restart and credential changes also clear it. Sink has no effect in `rotate` and `weight`.
+
+The routing mode picks the account for a **new** conversation. A running session remembers the account it used last (its pin). The stays mode (`auth.routing.<provider>.stays`) decides when the pin wins:
+
+- `auto` (default): the pin wins while it is warm. Anthropic pins go cold after an hour without a request; other providers' pins stay warm indefinitely. A cold or blocked pin selects again. A warm pin moves only away from a bad account: when the pinned account enters its reserve and another account is measured outside its own reserve, or when its allowance is spent and an unblocked sibling still has allowance. A warm pin does not move back when a higher-priority account recovers.
+- `session`: the pin wins for the whole session while the account is usable.
+- `turn`: the pin wins only for a request whose last message is a tool result. Every other request (a new user message, a retry after an error, a steering or follow-up message, or a re-sample) starts a new turn and selects again by the routing mode. The agent and the gateway apply the same rule. A steering message after a tool batch can therefore move the conversation and lose its prompt cache.
+- `off`: every request selects again by the routing mode.
+- `strict`: the conversation never moves. When its account is blocked or used up, or its token refresh fails, the error goes to the user at once. No other account, env key, or API key serves the session. Turn recovery does not wait for a reset (even with `retry.waitForUsageReset`), retry, or switch the model after a usage-limit refusal. In the gateway, an auth or usage-limit error returns the upstream error without a switch to another account. If the provider rejects the sign-in for good (for example `invalid_grant`), OMP removes the account. That request and every later request of the session fail until the account signs in again (the session then goes back to it) or the provider's set of accounts changes. The same applies when a suspect check or a sign-out removes the account. The agent's error names the account. The gateway answers 401 without account or session details. New sessions select as usual. OMP stores this state with the session pin (the account id and label, no tokens). It lasts as long as the pin (30 days from last use). The session keeps failing after a restart. With a remote broker store, a resumed session gets the state back from its session file, which keeps only a hash of the account. The error then says "the account this session used" instead of the account name, and the session still goes back to that account when it signs in again. A broker client with an account pool cannot tell an account that its pool hides from a removed one, so its strict session also fails until the pool shows the account again or the provider's set of accounts changes. It ends when the account signs in again, when the provider's set of accounts changes, or when the provider's stays mode is no longer `strict`. A subagent started from such a session gets the same state and fails the same way, unless `sessions.restrict` limits the subagent to a pool without that account. A state restored from a session file stays under a pool only while an allowed account has its pin hash. A session that is already restricted gets no restored state. A session with an explicit pin keeps the rule below.
+
+Other rules:
+
+- API keys have no pin. Outside `smart`, the routing mode decides each API-key request, as with `stays: off`. `strict` still stops rotation to another key.
+- An account the user chose explicitly for a session is never moved by routing, caps, or the reserve, in any stays mode. It is still skipped while blocked, after a failed token refresh, or when it fails a required plan check; the session then falls through to a sibling.
+- Pins are saved with the session. A resumed session restores its pin with its original last-use time, and subagents start on their parent's pins, then follow the stays mode. When a parked subagent is revived in the same session, its saved pin wins over the parent's automatic affinity; an explicit parent pin still wins, subject to the child's account pool.
+- `omp usage` shows a routing line for each provider with 2 or more accounts or keys, for example `routing: order · stays turn · sink off · next: first@example.com (first in order)`, and each account's caps in its policy line.
 
 ### Token files
 

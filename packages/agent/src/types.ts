@@ -256,7 +256,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Returning an ApiKeyResolver lets the stream retry policy refresh or rotate
 	 * the model-scoped credential after auth/usage-limit errors.
 	 */
-	getApiKey?: (model: Model) => Promise<ApiKey | undefined> | ApiKey | undefined;
+	getApiKey?: (model: Model, context?: { withinTurn: boolean }) => Promise<ApiKey | undefined> | ApiKey | undefined;
 
 	/**
 	 * Returns steering messages to inject into the conversation mid-run.

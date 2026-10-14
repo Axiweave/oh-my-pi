@@ -1020,7 +1020,7 @@ export {
  * back into the broker through the {@link AuthStorageOptions.refreshOAuthCredential}
  * override to re-mint access tokens when needed.
  *
- * Account routing (`auth.accountPolicies`, `retry.usageReservePct`) comes from
+ * Account routing (`auth.accountPolicies`, `auth.routing`, `retry.usageReservePct`) comes from
  * effective settings: `options.settings` when given, else the matching global
  * instance, else a read-only load for `options.cwd`; explicit option values win.
  *
@@ -1040,6 +1040,7 @@ export async function discoverAuthStorage(
 		authStorageOptions: {
 			...discoveryOptions.authStorageOptions,
 			defaultReservePct: discoveryOptions.authStorageOptions?.defaultReservePct ?? policy.defaultReservePct,
+			routing: discoveryOptions.authStorageOptions?.routing ?? policy.routing,
 		},
 	});
 }
@@ -1634,7 +1635,7 @@ export function createAutoLearnCaptureRunner(
 			sessionId: captureSessionId,
 			promptCacheKey: captureSessionId,
 			providerSessionState: captureProviderSessionState,
-			getApiKey: requestModel => options.sourceAgent.getApiKey?.(requestModel),
+			getApiKey: (requestModel, context) => options.sourceAgent.getApiKey?.(requestModel, context),
 			onPayload: options.onPayload,
 			onResponse: options.onResponse,
 		});
@@ -2233,8 +2234,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	let contextFiles = initialContextFiles;
 
 	let agent: Agent;
-	const effectiveGetApiKey =
-		options.getApiKey ?? (requestModel => modelRegistry.resolver(requestModel, agent.sessionId));
+	const effectiveGetApiKey: NonNullable<AgentOptions["getApiKey"]> =
+		options.getApiKey ??
+		((requestModel, context) =>
+			modelRegistry.resolver(requestModel, { sessionId: agent.sessionId, withinTurn: context?.withinTurn }));
 	let session!: AgentSession;
 	let hasSession = false;
 	let hasRegistered = false;

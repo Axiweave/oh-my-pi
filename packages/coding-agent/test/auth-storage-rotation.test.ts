@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type OAuthCredential, type UsageProvider, resolvedApiKeyBearer, withAuth } from "@oh-my-pi/pi-ai";
+import {
+	type Api,
+	type Model,
+	type OAuthCredential,
+	type UsageProvider,
+	resolvedApiKeyBearer,
+	withAuth,
+} from "@oh-my-pi/pi-ai";
+import { DEFAULT_USAGE_RESERVE_PCT } from "@oh-my-pi/pi-ai/auth-storage";
 import * as oauth from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials, OAuthProviderId } from "@oh-my-pi/pi-ai/oauth/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -134,7 +142,7 @@ describe("AuthStorage account rotation", () => {
 		]);
 
 		const sessionId = "issue-55-session";
-		const firstKey = await authStorage.keys.get("openai-codex", sessionId);
+		const firstKey = (await authStorage.keys.getWithCredential("openai-codex", sessionId))?.apiKey;
 		expect(firstKey).toMatch(/^access-/);
 
 		usageExhausted = true;
@@ -472,5 +480,144 @@ describe("AuthStorage account rotation", () => {
 		expect(reloadedTargetKey).toBe(freshKey);
 		expect(reloadedTargetKey).not.toBe(stickyKey);
 		expect(await authStorage.keys.get(unrelatedProvider, unrelatedSessionId)).toBe(unrelatedStickyKey);
+	});
+
+	test("key checks never change which key the next request gets, and every request path advances alike", async () => {
+		// Contract (FR-005): an availability check (getApiKeyForProvider, getApiKey)
+		// picks a key but moves no routing state; a request (the credential path or the
+		// extension facade getApiKeyAndHeaders) advances it. So requests interleaved
+		// with any checks, through either request API, get the same keys as plain
+		// requests alone. Seeded: 1-4 keys, 0-12 requests, 0-3 checks before each.
+		const SEED = Number(process.env.ROUTING_SEED ?? 20_260_511);
+		let state = SEED >>> 0;
+		const next = (n: number) => {
+			state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+			// The low bits of this generator cycle quickly; draw from the high ones.
+			return (state >>> 16) % n;
+		};
+		const provider = "key-check-provider";
+		for (let run = 0; run < 24; run++) {
+			const mode = (["rotate", "weight", "order"] as const)[next(3)];
+			const keys = Array.from({ length: 1 + next(4) }, (_, i) => ({ type: "api_key" as const, key: `key-${i}` }));
+			const checksBefore = Array.from({ length: next(13) }, () => next(4));
+			// Per request: which request API serves it, and per check which check API runs.
+			const viaFacade = checksBefore.map(() => next(2) === 1);
+			const checkViaModel = checksBefore.map(() => next(2) === 1);
+			const model = { provider, id: "key-check-model", baseUrl: "" } as Model<Api>;
+			const requested: Array<Array<string | undefined>> = [];
+			for (const withChecks of [false, true]) {
+				const storage = await AuthStorage.create(":memory:", { usageProviderResolver: () => undefined });
+				try {
+					await storage.credentials.set(provider, keys);
+					storage.setAccountPolicies({
+						accountPolicies: [],
+						defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+						routing: { [provider]: { mode } },
+					});
+					const registry = new ModelRegistry(storage, undefined, { ignoreLocalModelConfig: true });
+					const served: Array<string | undefined> = [];
+					for (const [op, checks] of checksBefore.entries()) {
+						for (let i = 0; withChecks && i < checks; i++) {
+							const checked = checkViaModel[op]
+								? await registry.getApiKey(model)
+								: await registry.getApiKeyForProvider(provider);
+							expect(keys.some(key => key.key === checked)).toBe(true);
+						}
+						if (withChecks && viaFacade[op]) {
+							const auth = await registry.getApiKeyAndHeaders(model);
+							served.push(auth.ok ? auth.apiKey : undefined);
+						} else {
+							served.push((await registry.getApiKeyWithCredentialForProvider(provider))?.apiKey);
+						}
+					}
+					requested.push(served);
+				} finally {
+					storage.close();
+				}
+			}
+			if (!Bun.deepEquals(requested[1], requested[0])) {
+				throw new Error(
+					`ROUTING_SEED=${SEED} run=${run} mode=${mode} keys=${keys.length} checks=${checksBefore} facade=${viaFacade}: ` +
+						`with checks ${requested[1]}, without ${requested[0]}`,
+				);
+			}
+		}
+	});
+
+	test("the API key resolver moves an explicit pin off a usage-limited account under strict, but never an automatic one", async () => {
+		// Contract (FR-013, FR-014): `stays: strict` holds only automatic pins, so a usage
+		// limit on one surfaces to the caller; a user's explicit pin keeps the usual
+		// recovery and the request moves to a sibling. Seeded: mode, 2-4 accounts, which
+		// account is pinned, and whether the pin is explicit.
+		const SEED = Number(process.env.ROUTING_SEED ?? 20_260_511);
+		let state = SEED >>> 0;
+		const next = (n: number) => {
+			state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+			// The low bits of this generator cycle quickly; draw from the high ones.
+			return (state >>> 16) % n;
+		};
+		const provider = "openai-codex";
+		for (let run = 0; run < 16; run++) {
+			const mode = (["order", "rotate", "weight"] as const)[next(3)];
+			const count = 2 + next(3);
+			const pinned = next(count);
+			const explicit = next(2) === 1;
+			const storage = await AuthStorage.create(":memory:", { usageProviderResolver: () => undefined });
+			try {
+				await storage.credentials.set(
+					provider,
+					Array.from({ length: count }, (_, i) => ({
+						type: "oauth" as const,
+						access: `access-${i}`,
+						refresh: `refresh-${i}`,
+						expires: Date.now() + 3_600_000,
+						accountId: `acct-${i}`,
+					})),
+				);
+				storage.setAccountPolicies({
+					accountPolicies: [],
+					defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+					routing: { [provider]: { mode, stays: "strict" } },
+				});
+				const sessionId = `strict-resolver-${run}`;
+				const credentialId = storage.oauth
+					.accounts(provider, sessionId)
+					.find(account => account.accountId === `acct-${pinned}`)?.credentialId;
+				if (credentialId === undefined) throw new Error(`Expected acct-${pinned}`);
+				// A pin with `restoredAtMs` is automatic; without it, an explicit user pin.
+				storage.sessions.pin(
+					provider,
+					sessionId,
+					credentialId,
+					explicit ? undefined : { restoredAtMs: Date.now() },
+				);
+				const registry = new ModelRegistry(storage, undefined, { ignoreLocalModelConfig: true });
+				const attempted: string[] = [];
+				const outcome = await withAuth(registry.resolver(provider, { sessionId }), async key => {
+					attempted.push(key);
+					if (key === `access-${pinned}`) {
+						throw Object.assign(new Error("You have hit your ChatGPT usage limit (pro plan). Try again later."), {
+							status: 429,
+						});
+					}
+					return "served";
+				}).catch(() => "refused");
+				const servedBy = attempted.at(-1);
+				const actual = {
+					outcome,
+					startedOnPin: attempted[0] === `access-${pinned}`,
+					movedOff: servedBy !== `access-${pinned}`,
+				};
+				const expected = { outcome: explicit ? "served" : "refused", startedOnPin: true, movedOff: explicit };
+				if (!Bun.deepEquals(actual, expected)) {
+					throw new Error(
+						`ROUTING_SEED=${SEED} run=${run} mode=${mode} accounts=${count} pinned=${pinned} explicit=${explicit}: ` +
+							`got ${JSON.stringify(actual)} (attempted ${attempted}), want ${JSON.stringify(expected)}`,
+					);
+				}
+			} finally {
+				storage.close();
+			}
+		}
 	});
 });

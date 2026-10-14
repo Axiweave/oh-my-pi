@@ -23,13 +23,17 @@ import {
 	AuthStorage,
 	type AuthStorageOptions,
 	DEFAULT_USAGE_RESERVE_PCT,
+	type ProviderRouting,
 	SqliteAuthCredentialStore,
 } from "../auth-storage";
+import { parseAuthRouting, validateAccountPolicies } from "../auth/policy";
 import * as AIError from "../error";
 import { AuthBrokerClient, AuthBrokerError } from "./client";
 import { type AuthBrokerAccountPool, RemoteAuthCredentialStore } from "./remote-store";
 import { readAuthBrokerSnapshotCache, scheduleAuthBrokerSnapshotCacheWrite } from "./snapshot-cache";
 import { DEFAULT_SNAPSHOT_CACHE_TTL_MS, type SnapshotResponse } from "./types";
+
+export { parseAuthRouting };
 
 export interface AuthBrokerClientConfig {
 	url: string;
@@ -84,6 +88,7 @@ interface ConfigSnapshot {
 	url?: string;
 	token?: string;
 	accountPolicies?: unknown;
+	routing?: unknown;
 	usageReservePct?: unknown;
 }
 
@@ -115,15 +120,14 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 		throw new AIError.ConfigurationError("auth.accountPolicies must be an array");
 	}
 
-	return value.map((entry, index) => {
+	const policies = value.map((entry, index) => {
 		const path = `auth.accountPolicies[${index}]`;
 		if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
 			throw new AIError.ConfigurationError(`${path} must be an object`);
 		}
 		const policy = entry as Record<string, unknown>;
-		const unknownPolicyFields = Object.keys(policy).filter(
-			key => key !== "provider" && key !== "account" && key !== "priority" && key !== "reservePct",
-		);
+		const policyFields = ["provider", "account", "priority", "weight", "capPct", "windowCapPct"];
+		const unknownPolicyFields = Object.keys(policy).filter(key => !policyFields.includes(key));
 		if (unknownPolicyFields.length > 0) {
 			throw new AIError.ConfigurationError(`${path} has unknown fields: ${unknownPolicyFields.join(", ")}`);
 		}
@@ -143,7 +147,7 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 		const selectorFields = ["email", "accountId", "projectId", "orgId"] as const;
 		const baseIdentityFields = ["email", "accountId", "projectId"] as const;
 		const unknownAccountFields = Object.keys(rawAccount).filter(
-			key => !selectorFields.includes(key as (typeof selectorFields)[number]),
+			key => key !== "keySuffix" && !selectorFields.includes(key as (typeof selectorFields)[number]),
 		);
 		if (unknownAccountFields.length > 0) {
 			throw new AIError.ConfigurationError(`${accountPath} has unknown fields: ${unknownAccountFields.join(", ")}`);
@@ -154,22 +158,13 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 				throw new AIError.ConfigurationError(`${accountPath}.${field} must be a non-empty string`);
 			}
 		}
-		if (!baseIdentityFields.some(field => rawAccount[field] !== undefined)) {
+		if (rawAccount.keySuffix === undefined && !baseIdentityFields.some(field => rawAccount[field] !== undefined)) {
 			throw new AIError.ConfigurationError(
 				`${accountPath} must include at least one of email, accountId, or projectId`,
 			);
 		}
 		if (policy.priority !== undefined && (typeof policy.priority !== "number" || !Number.isFinite(policy.priority))) {
 			throw new AIError.ConfigurationError(`${path}.priority must be a finite number`);
-		}
-		if (
-			policy.reservePct !== undefined &&
-			(typeof policy.reservePct !== "number" ||
-				!Number.isFinite(policy.reservePct) ||
-				policy.reservePct < 0 ||
-				policy.reservePct > 100)
-		) {
-			throw new AIError.ConfigurationError(`${path}.reservePct must be between 0 and 100`);
 		}
 
 		return {
@@ -179,11 +174,19 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 				...(typeof rawAccount.accountId === "string" ? { accountId: rawAccount.accountId } : {}),
 				...(typeof rawAccount.projectId === "string" ? { projectId: rawAccount.projectId } : {}),
 				...(typeof rawAccount.orgId === "string" ? { orgId: rawAccount.orgId } : {}),
+				...(rawAccount.keySuffix !== undefined ? { keySuffix: rawAccount.keySuffix as string } : {}),
 			},
 			...(typeof policy.priority === "number" ? { priority: policy.priority } : {}),
-			...(typeof policy.reservePct === "number" ? { reservePct: policy.reservePct } : {}),
+			// `validateAccountPolicies` below checks these values.
+			...(policy.weight !== undefined ? { weight: policy.weight as number } : {}),
+			...(policy.capPct !== undefined ? { capPct: policy.capPct as number } : {}),
+			...(policy.windowCapPct !== undefined
+				? { windowCapPct: policy.windowCapPct as Readonly<Record<string, number>> }
+				: {}),
 		};
 	});
+	validateAccountPolicies(policies);
+	return policies;
 }
 
 function parseUsageReservePct(value: unknown): number {
@@ -221,6 +224,7 @@ async function readConfigYaml(agentDir: string): Promise<ConfigSnapshot> {
 			url: readDottedString(record, "auth.broker.url"),
 			token: readDottedString(record, "auth.broker.token"),
 			accountPolicies: readDottedValue(record, "auth.accountPolicies"),
+			routing: readDottedValue(record, "auth.routing"),
 			usageReservePct: readDottedValue(record, "retry.usageReservePct"),
 		};
 	}
@@ -230,11 +234,13 @@ async function readConfigYaml(agentDir: string): Promise<ConfigSnapshot> {
 export interface AuthAccountPolicyConfig {
 	accountPolicies: AuthAccountPolicies;
 	defaultReservePct: number;
+	routing: Readonly<Record<string, ProviderRouting>>;
 }
 
 export interface LoadAuthAccountPolicyConfigOptions {
 	agentDir?: string;
 	accountPolicies?: unknown;
+	routing?: unknown;
 	usageReservePct?: unknown;
 }
 
@@ -243,7 +249,8 @@ export async function loadAuthAccountPolicyConfig(
 	options: LoadAuthAccountPolicyConfigOptions = {},
 ): Promise<AuthAccountPolicyConfig> {
 	const agentDir = options.agentDir ?? getAgentDir();
-	const needsMainConfigFallback = options.accountPolicies === undefined || options.usageReservePct === undefined;
+	const needsMainConfigFallback =
+		options.accountPolicies === undefined || options.routing === undefined || options.usageReservePct === undefined;
 	const snapshot = needsMainConfigFallback ? await readConfigYaml(agentDir) : undefined;
 	return {
 		accountPolicies: parseAuthAccountPolicies(
@@ -252,6 +259,7 @@ export async function loadAuthAccountPolicyConfig(
 		defaultReservePct: parseUsageReservePct(
 			options.usageReservePct === undefined ? snapshot?.usageReservePct : options.usageReservePct,
 		),
+		routing: parseAuthRouting(options.routing === undefined ? snapshot?.routing : options.routing),
 	};
 }
 
@@ -468,9 +476,10 @@ export async function discoverAuthStorage(options: DiscoverAuthStorageOptions = 
 		agentDir,
 		configValueResolver: options.configValueResolver,
 	});
-	const { accountPolicies, defaultReservePct } = await loadAuthAccountPolicyConfig({
+	const { accountPolicies, defaultReservePct, routing } = await loadAuthAccountPolicyConfig({
 		agentDir,
 		accountPolicies: options.accountPolicies,
+		routing: options.authStorageOptions?.routing,
 		usageReservePct: options.authStorageOptions?.defaultReservePct,
 	});
 	const { store, sourceLabel } = await openAuthCredentialStore({
@@ -486,6 +495,7 @@ export async function discoverAuthStorage(options: DiscoverAuthStorageOptions = 
 		sourceLabel,
 		accountPolicies,
 		defaultReservePct,
+		routing,
 	});
 	await storage.credentials.reload();
 	return storage;

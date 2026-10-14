@@ -4,9 +4,9 @@ import { getOAuthApiKey, getOAuthProvider } from "../registry/oauth";
 import type { OAuthCredentials, OAuthProvider } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type { CredentialRankingContext, CredentialRankingStrategy, PlanGate, UsageReport } from "../usage";
-import { isWithinUsageReserve } from "../usage";
+import { resolveUsedFraction } from "../usage";
 import type { RankingStrategyResolver } from "../usage/registry";
-import type { SessionAffinity } from "./affinity";
+import { credentialPinHash, type SessionAffinity, type StrictAccount } from "./affinity";
 import {
 	AUTH_BLOCK_SCOPE,
 	credentialBlockScopesForRequest,
@@ -14,20 +14,23 @@ import {
 	providerTypeKey,
 	type CredentialBlocks,
 } from "./blocks";
-import type { AccountPolicies } from "./policy";
+import { type AccountPolicies, capFor } from "./policy";
 import { authCredentialEquals, type CredentialPool } from "./pool";
 import {
-	orderUsageRankedCandidates,
 	planPriority,
-	type ApiKeyCandidate,
 	type ApiKeySelection,
+	type CredentialSelection,
 	type OAuthCandidate,
 	type OAuthSelection,
 	type RankedApiKeyCandidate,
 	type RankedOAuthCandidate,
+	type UsageCandidate,
+	type UsageRankedCandidate,
 	type UsageRankingResult,
 } from "./rank";
 import { mergeRefreshedCredential, OAUTH_REFRESH_SKEW_MS, type OAuthRefresher } from "./refresh";
+import { applySink, chargeKept, isRoutable, orderRankedCandidates, type WeightRound } from "./routing";
+import { resolveCredentialIdentityKey } from "./sqlite-credential-store";
 import type { AuthCredentialStore } from "./store";
 import {
 	type ApiKeyCredential,
@@ -35,20 +38,59 @@ import {
 	type AuthCredential,
 	type OAuthCredential,
 	oauthAccountKey,
+	type RoutingMode,
+	type RoutingPreview,
 	type StoredAuthCredential,
 } from "./types";
 import type { UsageService } from "./usage";
 import {
+	currentReserveLimits,
+	isOverCaps,
 	isUsageLimitReached,
 	normalizeUsageFraction,
 	remainingUsageFraction,
 	scopedUsageLimits,
+	usageReportMatchesCredential,
 	usageResetAtMs,
 	windowRequiredDrain,
 } from "./usage-report";
 
+/** Pace of an account whose weekly window is unknown: a full week of quota left. */
+const UNKNOWN_PACE = 1 / 168;
+
+/** Inputs every ranked candidate of one selection shares. */
+type RankBasis = {
+	provider: string;
+	providerKey: string;
+	mode: RoutingMode;
+	/** Pool row ids by pool index, captured when the selection started. */
+	credentialIds: readonly number[];
+	strategy?: CredentialRankingStrategy;
+	planGate?: PlanGate;
+	defaultReservePct?: number;
+	rankingContext: CredentialRankingContext;
+	blockScope?: string;
+	/** Scopes a block may live under for this request; reads honour all of them. */
+	blockScopes?: readonly string[];
+};
+
+/** A ranking pass over `credentials` in `order`. */
+type RankArgs<T extends AuthCredential> = RankBasis & {
+	order: number[];
+	credentials: CredentialSelection<T>[];
+	options?: AuthApiKeyOptions;
+};
+
 /** Temporary block after a transient OAuth refresh failure. */
 export const OAUTH_REFRESH_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
+
+/** A strict session's account was removed, for example after its sign-in failed (FR-013). */
+function signedOutError(provider: string, sessionId: string, account: StrictAccount): Error {
+	return new AIError.MissingApiKeyError(
+		provider,
+		`No API key for provider: ${provider} (session ${sessionId} stays on ${account.label} under \`stays: strict\`, and that account was signed out. Sign in to it again, start a new session, or pin an account to this session.)`,
+	);
+}
 
 /** OAuth bearer and credential chosen for a request, with its durable row id when available. */
 export type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential; credentialId?: number };
@@ -69,6 +111,8 @@ export type TryOAuthOptions = {
 	allowFallback?: boolean;
 	/** Receives a non-definitive refresh failure that left this credential unusable; the caller filters for retryable ones. */
 	onTransientRefreshFailure?: (error: unknown) => void;
+	/** False for a key check: the session pin is recorded as unserved, and the fallback `resolveOAuth` gets it too (see its `advance`). */
+	advance?: boolean;
 };
 
 /** Services consulted by CredentialSelector for policy, usage, blocks, refresh, and session affinity. */
@@ -87,19 +131,111 @@ export interface CredentialSelectorDeps {
 export class CredentialSelector {
 	/** Tracks next credential index per provider:type key for round-robin distribution (non-session use). */
 	#providerRoundRobinIndex: Map<string, number> = new Map();
+	/** `weight` routing rounds per provider:type key. */
+	#weightRounds: Map<string, WeightRound> = new Map();
+	/** OAuth credential ids that already served their learn-once request, per provider. */
+	#learnTried: Map<string, Set<number>> = new Map();
+	/** Sunk credential ids per provider, in refusal order. */
+	#sinkLists: Map<string, number[]> = new Map();
 	#deps: CredentialSelectorDeps;
 
 	constructor(deps: CredentialSelectorDeps) {
 		this.#deps = deps;
 	}
 
-	/** Restart round-robin assignments after a provider's credential set changes. */
+	/** Restart round-robin, weight, learn-once, and sink state after a provider's credential set changes. */
 	resetRoundRobin(provider: string): void {
-		for (const key of this.#providerRoundRobinIndex.keys()) {
-			if (key.startsWith(`${provider}:`)) {
-				this.#providerRoundRobinIndex.delete(key);
+		for (const state of [this.#providerRoundRobinIndex, this.#weightRounds]) {
+			for (const key of state.keys()) {
+				if (key.startsWith(`${provider}:`)) state.delete(key);
 			}
 		}
+		this.#learnTried.delete(provider);
+		this.#sinkLists.delete(provider);
+	}
+
+	/** Sink `credentialId` behind every credential not refused since; no-op unless `sink` routing is on. */
+	noteRateLimited(provider: string, credentialId: number): void {
+		if (!this.#deps.policies.routingFor(provider).sink) return;
+		const sunk = (this.#sinkLists.get(provider) ?? []).filter(id => id !== credentialId);
+		this.#sinkLists.set(provider, [...sunk, credentialId]);
+	}
+
+	/** See {@link RoutingApi.strict}. */
+	strict(provider: string, sessionId: string | undefined): boolean {
+		return (
+			this.#deps.policies.routingFor(provider).stays === "strict" &&
+			this.#deps.affinity.get(provider, sessionId)?.explicit !== true
+		);
+	}
+
+	/** Remember the account a strict session stays on; forget it once the session is not strict. */
+	#holdStrict(
+		provider: string,
+		sessionId: string,
+		credentialId: number | undefined,
+		credential: OAuthCredential,
+	): void {
+		const affinity = this.#deps.affinity;
+		const held = affinity.strictAccount(provider, sessionId);
+		if (credentialId === undefined || !this.strict(provider, sessionId)) {
+			if (held) affinity.holdStrict(provider, sessionId, undefined);
+			return;
+		}
+		const identityKey = resolveCredentialIdentityKey(provider, credential) ?? undefined;
+		const label = credential.email ?? oauthAccountKey(credential) ?? "its account";
+		if (
+			held?.credentialId === credentialId &&
+			held.identityKey === identityKey &&
+			held.label === label &&
+			held.goneFrom === undefined
+		) {
+			return;
+		}
+		affinity.holdStrict(provider, sessionId, { credentialId, identityKey, label });
+	}
+
+	/**
+	 * `strict`: pin a session whose pin was dropped back to its account. While that account is
+	 * gone, throw, until it signs in again or the provider's credential ids change. A session
+	 * that is no longer strict drops its account.
+	 */
+	#backToStrictAccount(
+		provider: string,
+		sessionId: string,
+		credentials: readonly { credential: OAuthCredential; index: number }[],
+		recordAffinity: boolean,
+		advance: boolean,
+	): void {
+		const affinity = this.#deps.affinity;
+		if (affinity.get(provider, sessionId)?.type === "oauth") return;
+		const held = affinity.strictAccount(provider, sessionId);
+		if (!held) return;
+		if (!this.strict(provider, sessionId)) {
+			affinity.holdStrict(provider, sessionId, undefined);
+			return;
+		}
+		const entries = this.#deps.pool.entries(provider);
+		const again = credentials.find(
+			({ credential, index }) =>
+				entries[index]?.id === held.credentialId ||
+				(held.identityKey !== undefined &&
+					resolveCredentialIdentityKey(provider, credential) === held.identityKey) ||
+				(held.pinHash !== undefined && credentialPinHash(provider, credential) === held.pinHash),
+		);
+		if (again) {
+			if (held.goneFrom !== undefined) affinity.holdStrict(provider, sessionId, { ...held, goneFrom: undefined });
+			// A key check keeps the pin unserved, as its own pin would be.
+			if (recordAffinity) affinity.record(provider, sessionId, "oauth", again.index, undefined, false, advance);
+			return;
+		}
+		const ids = affinity.credentialIds(provider);
+		if (held.goneFrom !== undefined && held.goneFrom !== ids) {
+			affinity.holdStrict(provider, sessionId, undefined);
+			return;
+		}
+		if (held.goneFrom === undefined) affinity.holdStrict(provider, sessionId, { ...held, goneFrom: ids });
+		throw signedOutError(provider, sessionId, held);
 	}
 
 	/**
@@ -112,6 +248,20 @@ export class CredentialSelector {
 		const next = (current + 1) % total;
 		this.#providerRoundRobinIndex.set(providerKey, next);
 		return next;
+	}
+
+	/**
+	 * The strategy's plan gate for `context`. `order` moves on only after a failed plan check,
+	 * so there an account whose plan is unknown counts as eligible.
+	 */
+	#planGate(
+		provider: string,
+		strategy: CredentialRankingStrategy | undefined,
+		context: CredentialRankingContext,
+	): PlanGate | undefined {
+		const gate = strategy?.planGate?.(context);
+		if (gate === undefined || this.#deps.policies.routingFor(provider).mode !== "order") return gate;
+		return report => gate(report) !== false;
 	}
 
 	/**
@@ -171,7 +321,11 @@ export class CredentialSelector {
 		if (credentials.length === 1) return credentials[0];
 
 		const providerKey = providerTypeKey(provider, type);
-		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
+		// Outside `smart` the cursor is the `rotate` turn, which a peek must not spend.
+		const order =
+			this.#deps.policies.routingFor(provider).mode === "smart"
+				? this.#getCredentialOrder(providerKey, sessionId, credentials.length)
+				: credentials.map((_credential, index) => index);
 		const fallback = credentials[order[0]];
 
 		for (const idx of order) {
@@ -184,20 +338,8 @@ export class CredentialSelector {
 		return fallback;
 	}
 
-	async #rankApiKeySelections(args: {
-		providerKey: string;
-		provider: string;
-		order: number[];
-		credentials: ApiKeySelection[];
-		options?: AuthApiKeyOptions;
-		strategy: CredentialRankingStrategy;
-		rankingContext: CredentialRankingContext;
-		blockScope?: string;
-		/** Scopes a block may live under for this request; reads honour all of them. */
-		blockScopes?: readonly string[];
-	}): Promise<ApiKeyCandidate[]> {
+	async #rankApiKeySelections(args: RankArgs<ApiKeyCredential>): Promise<RankedApiKeyCandidate[]> {
 		const nowMs = Date.now();
-		const { strategy } = args;
 		const ranked: RankedApiKeyCandidate[] = [];
 		const usageTimeout = Math.max(5000, this.#deps.usage.requestTimeoutMs * 1.5);
 		const usagePromise: Promise<Array<UsageRankingResult<ApiKeyCredential> | null>> = Promise.all(
@@ -246,56 +388,18 @@ export class CredentialSelector {
 
 		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
 			const result = usageResults[orderPos];
-			if (!result) continue;
-			const { selection, usage, usageChecked } = result;
-			let { blockedUntil } = result;
-			let blocked = blockedUntil !== undefined;
-			const scopedLimits = usage ? scopedUsageLimits(strategy, usage, args.rankingContext) : undefined;
-			if (!blocked && scopedLimits && isUsageLimitReached(scopedLimits)) {
-				const resetAtMs = usageResetAtMs(scopedLimits, nowMs);
-				blockedUntil = resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS;
-				this.#deps.blocks.mark(
-					args.provider,
-					args.providerKey,
-					selection.index,
-					blockedUntil,
-					args.blockScope,
-					resetAtMs !== undefined,
-				);
-				blocked = true;
-			}
-			const windows = usage ? strategy.findWindowLimits(usage, args.rankingContext) : undefined;
-			const primary = windows?.primary;
-			const secondary = windows?.secondary;
-			const usageMeasured = primary !== undefined || secondary !== undefined;
-			const primaryUncapped = primary === undefined && secondary !== undefined;
-			ranked.push({
-				selection,
-				usage,
-				usageChecked,
-				blocked,
-				blockedUntil,
-				inReserve: false,
-				accountPriority: 0,
-				allowanceSpent: remainingUsageFraction(strategy, usage, args.rankingContext, nowMs) === 0,
-				usageMeasured,
-				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
-				planPriority: 0,
-				secondaryUsed: normalizeUsageFraction(secondary),
-				secondaryRequiredDrain: windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
-				primaryUsed: normalizeUsageFraction(primary),
-				primaryRequiredDrain: windowRequiredDrain(primary, nowMs, strategy.windowDefaults.primaryMs),
-				orderPos,
-			});
+			if (result) ranked.push(this.#rankedCandidate(args, result, orderPos, nowMs));
 		}
-		return orderUsageRankedCandidates(ranked, false);
+		return ranked;
 	}
 
+	/** `advance: false` (a key check, not a request) picks the same key but leaves rotate, weight, and sink state alone. */
 	async selectApiKey(
 		provider: string,
 		sessionId: string | undefined,
 		options: AuthApiKeyOptions | undefined,
 		filter?: (credential: ApiKeyCredential) => boolean,
+		advance = true,
 	): Promise<ApiKeySelection | undefined> {
 		const credentials = this.#deps.pool
 			.credentials(provider)
@@ -306,57 +410,67 @@ export class CredentialSelector {
 			});
 
 		if (credentials.length === 0) return undefined;
+		this.#deps.policies.validateUsageCapability(provider, this.#deps.usage.canFetchOAuthUsage(provider));
 		if (credentials.length === 1) return credentials[0];
 
 		const providerKey = providerTypeKey(provider, "api_key");
-		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
+		const { mode } = this.#deps.policies.routingFor(provider);
+		// Every mode but smart ranks the whole pool from sign-in order, with or without a usage strategy.
+		const order =
+			mode === "smart"
+				? this.#getCredentialOrder(providerKey, sessionId, credentials.length)
+				: credentials.map((_credential, index) => index);
 		const fallback = credentials[order[0]];
 		const strategy = this.#deps.strategies(provider);
-		if (!strategy) {
-			for (const idx of order) {
-				const candidate = credentials[idx];
-				if (!this.#deps.blocks.isBlocked(provider, providerKey, candidate.index)) {
-					return candidate;
-				}
-			}
-			return fallback;
+		if (!strategy && mode === "smart") {
+			// `sink` still moves refused keys behind the rest.
+			const credentialIds = this.#deps.pool.entries(provider).map(entry => entry.id);
+			const unblocked = order
+				.map(idx => credentials[idx]!)
+				.filter(candidate => !this.#deps.blocks.isBlocked(provider, providerKey, candidate.index))
+				.map(selection => ({ selection, credentialId: credentialIds[selection.index] }));
+			const sunk = this.#sunk(
+				provider,
+				unblocked.map(candidate => candidate.credentialId),
+				!advance,
+			);
+			return applySink(unblocked, sunk)[0]?.selection ?? fallback;
 		}
 
 		const rankingContext: CredentialRankingContext = {
 			modelId: options?.modelId,
 		};
-		const blockScope = strategy.blockScope?.(rankingContext);
+		const blockScope = strategy?.blockScope?.(rankingContext);
 		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
-		const candidates = await this.#rankApiKeySelections({
+		const hasKeyPolicy = credentials.some(
+			({ credential }) => this.#deps.policies.forCredential(provider, credential) !== undefined,
+		);
+		const ranked = await this.#rankApiKeySelections({
 			providerKey,
 			provider,
+			mode,
+			credentialIds: this.#deps.pool.entries(provider).map(entry => entry.id),
 			order,
 			credentials,
 			options,
 			strategy,
+			defaultReservePct:
+				hasKeyPolicy && (strategy !== undefined || this.#deps.usage.canFetchOAuthUsage(provider))
+					? this.#deps.policies.defaultReservePct
+					: undefined,
 			rankingContext,
 			blockScope,
 			blockScopes,
 		});
+		// No await between ordering and the advance, so concurrent selections each get their own turn.
+		const candidates = this.#orderRanked(provider, providerKey, ranked, false, !advance);
+		// API keys carry no session pin, so `rotate` advances on every selection.
+		if (advance && mode === "rotate") this.#getNextRoundRobinIndex(providerKey, credentials.length);
 		return candidates[0]?.selection ?? fallback;
 	}
 
-	async #rankOAuthSelections(args: {
-		providerKey: string;
-		provider: string;
-		order: number[];
-		planGate: PlanGate | undefined;
-		credentials: OAuthSelection[];
-		options?: AuthApiKeyOptions;
-		strategy?: CredentialRankingStrategy;
-		defaultReservePct?: number;
-		rankingContext: CredentialRankingContext;
-		blockScope?: string;
-		/** Scopes a block may live under for this request; reads honour all of them. */
-		blockScopes?: readonly string[];
-	}): Promise<OAuthCandidate[]> {
+	async #rankOAuthSelections(args: RankArgs<OAuthCredential>): Promise<RankedOAuthCandidate[]> {
 		const nowMs = Date.now();
-		const { strategy } = args;
 		const ranked: RankedOAuthCandidate[] = [];
 		// Pre-fetch usage reports in parallel for non-blocked credentials.
 		// Wrap with a timeout so slow/429'd fetches don't indefinitely block
@@ -439,63 +553,237 @@ export class CredentialSelector {
 
 		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
 			const result = usageResults[orderPos];
-			if (!result) continue;
-			const { selection, usage, usageChecked } = result;
-			let { blockedUntil } = result;
-			let blocked = blockedUntil !== undefined;
-			const scopedLimits = usage && strategy ? scopedUsageLimits(strategy, usage, args.rankingContext) : undefined;
-			if (!blocked && scopedLimits && isUsageLimitReached(scopedLimits)) {
-				const resetAtMs = usageResetAtMs(scopedLimits, nowMs);
-				blockedUntil = resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS;
+			if (result) ranked.push(this.#rankedCandidate(args, result, orderPos, nowMs));
+		}
+		return ranked;
+	}
+
+	/** Ranking metrics for one fetched candidate. A reached usage limit blocks it, persisted unless `preview`. */
+	#rankedCandidate<T extends AuthCredential>(
+		basis: RankBasis,
+		result: UsageRankingResult<T>,
+		orderPos: number,
+		nowMs: number,
+		preview = false,
+	): UsageRankedCandidate<T> {
+		const { selection, usage, usageChecked } = result;
+		const { provider, strategy, rankingContext } = basis;
+		let { blockedUntil } = result;
+		const scopedLimits = usage && strategy ? scopedUsageLimits(strategy, usage, rankingContext) : undefined;
+		if (blockedUntil === undefined && scopedLimits && isUsageLimitReached(scopedLimits)) {
+			const resetAtMs = usageResetAtMs(scopedLimits, nowMs);
+			blockedUntil = resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS;
+			if (!preview) {
 				this.#deps.blocks.mark(
-					args.provider,
-					args.providerKey,
+					provider,
+					basis.providerKey,
 					selection.index,
 					blockedUntil,
-					args.blockScope,
+					basis.blockScope,
 					resetAtMs !== undefined,
 				);
-				blocked = true;
 			}
-			const windows = usage && strategy ? strategy.findWindowLimits(usage, args.rankingContext) : undefined;
-			const primary = windows?.primary;
-			const secondary = windows?.secondary;
-			const remainingFraction = remainingUsageFraction(strategy, usage, args.rankingContext, nowMs);
-			const usageMeasured =
-				strategy === undefined ? remainingFraction !== undefined : primary !== undefined || secondary !== undefined;
-			const primaryUncapped = primary === undefined && secondary !== undefined;
-			const policy = this.#deps.policies.forCredential(args.provider, selection.credential);
-			const reservePct = policy?.reservePct ?? args.defaultReservePct;
-			const reserveFraction =
-				reservePct === undefined || !Number.isFinite(reservePct)
-					? undefined
-					: Math.max(0, Math.min(1, reservePct / 100));
-			ranked.push({
-				selection,
-				usage,
-				usageChecked,
-				blocked,
-				blockedUntil,
-				inReserve:
-					reserveFraction !== undefined &&
-					remainingFraction !== undefined &&
-					isWithinUsageReserve(remainingFraction, reserveFraction),
-				reserveMeasured: reserveFraction !== undefined && remainingFraction !== undefined,
-				accountPriority: policy?.priority === undefined || !Number.isFinite(policy.priority) ? 0 : policy.priority,
-				allowanceSpent: remainingFraction === 0,
-				usageMeasured,
-				hasPriorityBoost: strategy?.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
-				planPriority: planPriority(args.planGate, usage),
-				secondaryUsed: strategy ? normalizeUsageFraction(secondary) : 0,
-				secondaryRequiredDrain:
-					strategy === undefined ? 0 : windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
-				primaryUsed: strategy ? normalizeUsageFraction(primary) : 0,
-				primaryRequiredDrain:
-					strategy === undefined ? 0 : windowRequiredDrain(primary, nowMs, strategy.windowDefaults.primaryMs),
-				orderPos,
-			});
 		}
-		return orderUsageRankedCandidates(ranked, args.planGate !== undefined);
+		const windows = usage && strategy ? strategy.findWindowLimits(usage, rankingContext) : undefined;
+		const primary = windows?.primary;
+		const secondary = windows?.secondary;
+		const limits = usage ? currentReserveLimits(strategy, usage, rankingContext, nowMs) : [];
+		const usedFractions = limits
+			.map(resolveUsedFraction)
+			.filter((fraction): fraction is number => fraction !== undefined);
+		const shareUsed = usedFractions.length === 0 ? undefined : Math.max(...usedFractions);
+		const remainingFraction = shareUsed === undefined ? undefined : Math.max(0, 1 - shareUsed);
+		const policy = this.#deps.policies.forCredential(provider, selection.credential);
+		const cap = capFor(policy, basis.mode, basis.defaultReservePct);
+		const secondaryRequiredDrain =
+			strategy === undefined ? 0 : windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs);
+		return {
+			selection,
+			usage,
+			usageChecked,
+			credentialId: basis.credentialIds[selection.index],
+			blocked: blockedUntil !== undefined,
+			blockedUntil,
+			inReserve: isOverCaps(limits, cap),
+			reserveMeasured:
+				remainingFraction !== undefined &&
+				limits.some(limit => cap(limit.window?.id ?? limit.scope.windowId) !== undefined),
+			accountPriority: policy?.priority === undefined || !Number.isFinite(policy.priority) ? 0 : policy.priority,
+			allowanceSpent: remainingFraction === 0,
+			usageMeasured:
+				strategy === undefined ? remainingFraction !== undefined : primary !== undefined || secondary !== undefined,
+			hasPriorityBoost:
+				strategy?.hasPriorityBoost?.(primary, primary === undefined && secondary !== undefined, rankingContext) ??
+				false,
+			planPriority: planPriority(basis.planGate, usage),
+			secondaryUsed: strategy ? normalizeUsageFraction(secondary) : 0,
+			secondaryRequiredDrain,
+			primaryUsed: strategy ? normalizeUsageFraction(primary) : 0,
+			primaryRequiredDrain:
+				strategy === undefined ? 0 : windowRequiredDrain(primary, nowMs, strategy.windowDefaults.primaryMs),
+			shareUsed: shareUsed ?? 0,
+			pace: secondary === undefined ? UNKNOWN_PACE : secondaryRequiredDrain,
+			orderPos,
+		};
+	}
+
+	/** Learn once: OAuth credentials in `candidates` with no usage report that `usage`/`pace` has not served yet. */
+	#learnable(provider: string, candidates: readonly UsageCandidate<AuthCredential>[]): Set<number> {
+		const { mode } = this.#deps.policies.routingFor(provider);
+		const learnable = new Set<number>();
+		if ((mode !== "usage" && mode !== "pace") || !this.#deps.usage.canLearnFromHeaders(provider)) return learnable;
+		const tried = this.#learnTried.get(provider);
+		for (const { selection, usage, credentialId } of candidates) {
+			// API keys never get a usage report, so learning one would only delay recent-token order.
+			if (selection.credential.type !== "oauth" || usage !== null || credentialId === undefined) continue;
+			if (!tried?.has(credentialId)) learnable.add(credentialId);
+		}
+		return learnable;
+	}
+
+	/** Learn once: the credential that served `resolved` has had its one learning request. */
+	#noteServed(
+		provider: string,
+		candidates: readonly OAuthCandidate[],
+		resolved: OAuthResolutionResult,
+	): OAuthResolutionResult {
+		const id = resolved.credentialId;
+		const served = id === undefined ? undefined : candidates.find(candidate => candidate.credentialId === id);
+		if (id !== undefined && served && this.#learnable(provider, [served]).has(id)) {
+			const tried = this.#learnTried.get(provider);
+			if (tried) tried.add(id);
+			else this.#learnTried.set(provider, new Set([id]));
+		}
+		return resolved;
+	}
+
+	/**
+	 * The `sink` list for `provider` (empty when sink is off). Once every routable credential
+	 * (`routableIds`) is sunk, the list has no order left to give, so it is cleared.
+	 */
+	#sunk(provider: string, routableIds: readonly (number | undefined)[], preview: boolean): number[] {
+		const sunk = (this.#deps.policies.routingFor(provider).sink && this.#sinkLists.get(provider)) || [];
+		if (
+			sunk.length === 0 ||
+			routableIds.length === 0 ||
+			routableIds.some(id => id === undefined || !sunk.includes(id))
+		) {
+			return sunk;
+		}
+		if (!preview) this.#sinkLists.delete(provider);
+		return [];
+	}
+
+	/** Order `ranked` by `provider`'s routing mode. `preview` reads routing state without advancing it. */
+	#orderRanked<C extends UsageRankedCandidate<AuthCredential>>(
+		provider: string,
+		providerKey: string,
+		ranked: C[],
+		planGated: boolean,
+		preview = false,
+	): C[] {
+		const { mode } = this.#deps.policies.routingFor(provider);
+		const learnable = this.#learnable(provider, ranked);
+		const sunk = this.#sunk(
+			provider,
+			ranked.filter(candidate => isRoutable(candidate, planGated)).map(candidate => candidate.credentialId),
+			preview,
+		);
+		const stored = this.#weightRounds.get(providerKey);
+		const weightRound = stored && !preview ? stored : { cur: new Map(stored?.cur), total: stored?.total ?? 0 };
+		// `last` names this ordering's pick only, so a kept pin never moves an older request's charge.
+		weightRound.last = undefined;
+		if (mode === "weight" && !preview) this.#weightRounds.set(providerKey, weightRound);
+		const nowMs = Date.now();
+		return orderRankedCandidates(mode, ranked, {
+			planGated,
+			rotateStart: ((this.#providerRoundRobinIndex.get(providerKey) ?? -1) + 1) % ranked.length,
+			weightRound,
+			weightOf: candidate =>
+				this.#deps.policies.forCredential(provider, candidate.selection.credential)?.weight ?? 1,
+			recentTokens: candidate =>
+				candidate.credentialId === undefined
+					? 0
+					: this.#deps.usage.recentTokens(provider, candidate.credentialId, nowMs),
+			learnable,
+			sink: sunk,
+		});
+	}
+
+	/** See {@link RoutingApi.preview}: ranks the OAuth pool (else the API keys) from `reports`. */
+	preview(provider: string, reports: readonly UsageReport[]): RoutingPreview {
+		const routing = this.#deps.policies.routingFor(provider);
+		const pool = this.#deps.pool.credentials(provider).map((credential, index) => ({ credential, index }));
+		const oauth = pool.filter(({ credential }) => credential.type === "oauth");
+		const credentials = oauth.length > 0 ? oauth : pool.filter(({ credential }) => credential.type === "api_key");
+		// One OAuth account beside API keys still serves first, so it is the next pick.
+		if (pool.length < 2) return routing;
+		const providerKey = providerTypeKey(provider, credentials[0]!.credential.type);
+		const strategy = this.#deps.strategies(provider);
+		const rankingContext: CredentialRankingContext = {};
+		const blockScope = strategy?.blockScope?.(rankingContext);
+		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
+		const hasPolicy = credentials.some(
+			({ credential }) => this.#deps.policies.forCredential(provider, credential) !== undefined,
+		);
+		const basis: RankBasis = {
+			provider,
+			providerKey,
+			mode: routing.mode,
+			credentialIds: this.#deps.pool.entries(provider).map(entry => entry.id),
+			strategy,
+			planGate: this.#planGate(provider, strategy, rankingContext),
+			defaultReservePct:
+				hasPolicy && (strategy !== undefined || this.#deps.usage.canFetchOAuthUsage(provider))
+					? this.#deps.policies.defaultReservePct
+					: undefined,
+			rankingContext,
+			blockScope,
+		};
+		const nowMs = Date.now();
+		const ranked = credentials.map((selection, orderPos) => {
+			const { credential } = selection;
+			// ponytail: API keys get no report here, so a key pool previews as unknown usage.
+			const usage =
+				credential.type === "oauth"
+					? (reports.find(
+							report => report.provider === provider && usageReportMatchesCredential(report, credential),
+						) ?? null)
+					: null;
+			const blockedUntil = this.#deps.blocks.blockedUntil(provider, providerKey, selection.index, blockScopes);
+			return this.#rankedCandidate(
+				basis,
+				{ selection, usage, usageChecked: usage !== null, blockedUntil },
+				orderPos,
+				nowMs,
+				true,
+			);
+		});
+		const next = this.#orderRanked(provider, providerKey, ranked, basis.planGate !== undefined, true)[0];
+		// Without usage reports, `smart` picks by session hash or round robin, which a preview can't know.
+		if (
+			!next ||
+			(routing.mode === "smart" && credentials.length > 1 && ranked.every(({ usage }) => usage === null))
+		) {
+			return routing;
+		}
+		const { credential } = next.selection;
+		const label =
+			credential.type === "oauth"
+				? (credential.email ?? credential.accountId ?? credential.projectId ?? `cred ${next.credentialId}`)
+				: `key …${credential.key.slice(-4)}`;
+		const reason =
+			credentials.length === 1
+				? "only account"
+				: {
+						smart: "soonest reset",
+						order: "first in order",
+						rotate: "its turn",
+						weight: "its share",
+						usage: `least used: ${Math.round(next.shareUsed * 100)}%`,
+						pace: `most to lose: ${(next.pace * 100).toFixed(1)}%/h`,
+					}[routing.mode];
+		return { ...routing, next: { label, reason } };
 	}
 
 	/**
@@ -515,11 +803,20 @@ export class CredentialSelector {
 	 * Returns both the API key bytes for outbound requests AND the refreshed
 	 * {@link OAuthCredential} so callers needing identity metadata (account id,
 	 * project id, etc.) do not have to dereference the snapshot themselves.
+	 *
+	 * `advance: false` (a key check, not a request) picks the same account but leaves
+	 * the rotate turn, weight round, sink list, and learn-once set alone. It records the
+	 * session pin as unserved: the session's first request then counts as a new selection.
+	 *
+	 * Under `strict`, a session whose pin was dropped goes back to its account. While
+	 * that account is gone, every request throws {@link AIError.MissingApiKeyError}, until
+	 * the account signs in again or the provider's accounts change.
 	 */
 	async resolveOAuth(
 		provider: string,
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
+		advance = true,
 	): Promise<OAuthResolutionResult | undefined> {
 		await this.#deps.pool.adoptExternalChanges();
 		const stored = this.#deps.pool
@@ -533,6 +830,8 @@ export class CredentialSelector {
 		// A session restriction drops every other account before ranking, pins,
 		// and the fallback passes below, so none of them can route back to it.
 		const credentials = stored.filter(entry => this.#deps.affinity.allows(provider, sessionId, entry.credential));
+		// Every OAuth row, so a restriction that leaves the account out is not read as a sign-out.
+		if (sessionId) this.#backToStrictAccount(provider, sessionId, stored, options?.recordAffinity !== false, advance);
 
 		if (credentials.length === 0) return undefined;
 		// Ranking and preflight both await provider work; preserve the row each
@@ -541,7 +840,12 @@ export class CredentialSelector {
 		this.#deps.policies.validateUsageCapability(provider, this.#deps.usage.canFetchOAuthUsage(provider));
 
 		const providerKey = providerTypeKey(provider, "oauth");
-		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
+		const { mode, stays } = this.#deps.policies.routingFor(provider);
+		// Every mode but smart ranks the whole pool on every request, from sign-in order.
+		const rankAll = mode !== "smart" && credentials.length > 1;
+		const order = rankAll
+			? credentials.map((_credential, index) => index)
+			: this.#getCredentialOrder(providerKey, sessionId, credentials.length);
 		const strategy = this.#deps.strategies(provider);
 		const rankingContext: CredentialRankingContext = {
 			modelId: options?.modelId,
@@ -549,7 +853,7 @@ export class CredentialSelector {
 		const blockScope = strategy?.blockScope?.(rankingContext);
 		// Reads honour every scope that applies; the scalar above is for args that persist.
 		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
-		const planGate = strategy?.planGate?.(rankingContext);
+		const planGate = this.#planGate(provider, strategy, rankingContext);
 		const hasPlanRequirement = planGate !== undefined;
 		const accountIds = options?.accountIds?.length ? new Set(options.accountIds) : undefined;
 		const enforceAccounts =
@@ -594,6 +898,7 @@ export class CredentialSelector {
 			sessionPreferredCanRefreshOrUse &&
 			!this.#deps.blocks.isBlocked(provider, providerKey, sessionPreferredIndex, blockScopes);
 		const sessionPinIsExplicit = sessionCredential?.type === "oauth" && sessionCredential.explicit === true;
+		const sessionPinUnserved = sessionCredential?.unserved === true;
 		const rankDespitePin =
 			!sessionPreferredIsAvailable ||
 			!sessionPreferredIsWarm ||
@@ -604,17 +909,25 @@ export class CredentialSelector {
 		// sibling with renewable allowance left must take over (#13889). tryOAuth
 		// reads this same report for the pin, so it is handed on below.
 		const sessionPreferredUsage =
-			checkUsage && !rankDespitePin && !sessionPinIsExplicit && sessionPreferredCredential
+			stays === "auto" &&
+			!rankAll &&
+			checkUsage &&
+			!rankDespitePin &&
+			!sessionPinIsExplicit &&
+			sessionPreferredCredential
 				? await this.#deps.usage.report(provider, sessionPreferredCredential, {
 						...options,
 						timeoutMs: this.#deps.usage.requestTimeoutMs,
 					})
 				: undefined;
+		// Stays other than `auto` judge the pin on ranked usage, so they always rank.
 		const shouldRank =
-			checkUsage &&
-			(rankDespitePin ||
-				(sessionPreferredUsage !== undefined &&
-					remainingUsageFraction(strategy, sessionPreferredUsage, rankingContext, Date.now()) === 0));
+			rankAll ||
+			(checkUsage &&
+				(stays !== "auto" ||
+					rankDespitePin ||
+					(sessionPreferredUsage !== undefined &&
+						remainingUsageFraction(strategy, sessionPreferredUsage, rankingContext, Date.now()) === 0)));
 		// When ranking, seed the pinned credential first in the evaluation order so it wins genuine
 		// ties (the ranked comparator falls back to `orderPos`) without overriding a strictly-better
 		// sibling — this respects the residual value of a same-account shared static prefix that other
@@ -629,9 +942,14 @@ export class CredentialSelector {
 					return rightPriority - leftPriority || leftIndex - rightIndex;
 				})
 			: order;
-		let rankingOrder = shouldRank && sessionId ? baseRankingOrder : policyOrder;
+		let rankingOrder = shouldRank && (sessionId || rankAll) ? baseRankingOrder : policyOrder;
 		const sessionPreferredRankingPos =
-			shouldRank && sessionId && sessionPreferredIndex !== undefined && !hasPlanRequirement
+			shouldRank &&
+			sessionId &&
+			stays === "auto" &&
+			!rankAll &&
+			sessionPreferredIndex !== undefined &&
+			!hasPlanRequirement
 				? credentials.findIndex(entry => entry.index === sessionPreferredIndex)
 				: -1;
 		if (sessionPreferredRankingPos > 0) {
@@ -640,10 +958,12 @@ export class CredentialSelector {
 				...baseRankingOrder.filter(index => index !== sessionPreferredRankingPos),
 			];
 		}
-		const candidates: OAuthCandidate[] = shouldRank
+		const ranked = shouldRank
 			? await this.#rankOAuthSelections({
 					providerKey,
 					provider,
+					mode,
+					credentialIds,
 					planGate,
 					order: rankingOrder,
 					credentials,
@@ -654,19 +974,43 @@ export class CredentialSelector {
 					blockScope,
 					blockScopes,
 				})
-			: policyOrder
-					.map(idx => credentials[idx])
-					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
-					.map(selection =>
-						selection.index === sessionPreferredIndex && sessionPreferredUsage !== undefined
-							? { selection, usage: sessionPreferredUsage, usageChecked: true }
-							: { selection, usage: null, usageChecked: false },
-					);
+			: undefined;
+		// No await from ordering to the routing-state update below, so concurrent selections
+		// (gateway, parallel subagents) never read the same `rotate` turn or `weight` round.
+		const candidates: OAuthCandidate[] = ranked
+			? this.#orderRanked(provider, providerKey, ranked, hasPlanRequirement, !advance)
+			: applySink(
+					policyOrder
+						.map(idx => credentials[idx])
+						.filter((selection): selection is { credential: OAuthCredential; index: number } =>
+							Boolean(selection),
+						)
+						.map(selection => ({
+							selection,
+							credentialId: credentialIds[selection.index],
+							...(selection.index === sessionPreferredIndex && sessionPreferredUsage !== undefined
+								? { usage: sessionPreferredUsage, usageChecked: true }
+								: { usage: null, usageChecked: false }),
+						})),
+					// `sink` applies here too; a warm `auto` pin is still moved to the front below.
+					this.#sunk(
+						provider,
+						credentials
+							.filter(({ index }) => !this.#deps.blocks.isBlocked(provider, providerKey, index, blockScopes))
+							.map(({ index }) => credentialIds[index]),
+						!advance,
+					),
+				);
 		// Keep the candidate object: preflight may rebind its positional index
 		// after a peer changes the credential pool.
 		const explicitPin = sessionPinIsExplicit
 			? candidates.find(candidate => candidate.selection.index === sessionPreferredIndex)
 			: undefined;
+		// `strict`: an automatic pin serves even while blocked, and a failed pin is not replaced.
+		const strictPin =
+			stays === "strict" && !sessionPinIsExplicit
+				? candidates.find(candidate => candidate.selection.index === sessionPreferredIndex)
+				: undefined;
 		const preflightFailures = new Set<OAuthCandidate>();
 		// The last retryable refresh error (network, timeout, 5xx) that removed a candidate.
 		// When no candidate resolves, it is rethrown so callers retry instead of reporting
@@ -706,15 +1050,76 @@ export class CredentialSelector {
 					!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes)
 				);
 			});
+		// `stays`: whether an automatic pin keeps serving over the mode's pick.
+		const keepAutomaticPin = (evicted: boolean): boolean => {
+			if (preferredCandidate === undefined) return false;
+			const usable =
+				preferredCandidate.inReserve !== true &&
+				preferredCandidate.allowanceSpent !== true &&
+				planGate?.(preferredCandidate.usage) !== false;
+			switch (stays) {
+				case "auto":
+					return sessionPreferredIsWarm && !evicted;
+				case "session":
+					return usable;
+				case "turn":
+					return options?.withinTurn === true && usable;
+				case "strict":
+					return true;
+				case "off":
+					return false;
+			}
+		};
 		const pinEvictedBeforePreflight = automaticPinWouldBeEvicted(false);
 		if (
 			!hasPlanRequirement &&
 			sessionPreferredCandidate > 0 &&
-			(!shouldRank || sessionPinIsExplicit || (sessionPreferredIsWarm && !pinEvictedBeforePreflight))
+			(sessionPinIsExplicit || (stays === "auto" && !shouldRank) || keepAutomaticPin(pinEvictedBeforePreflight))
 		) {
 			const [preferred] = candidates.splice(sessionPreferredCandidate, 1);
 			candidates.unshift(preferred);
 		}
+		// Enforce a tier only when at least one account is confirmed eligible. If
+		// every report is unknown or ineligible, preserve trial/grandfathered access
+		// by allowing the normal candidate fallback to attempt the request.
+		const enforcePlanRequirement =
+			hasPlanRequirement && candidates.some(candidate => planGate?.(candidate.usage) === true);
+		const planKeepsPin = (pin: OAuthCandidate): boolean => {
+			const planEligibility = planGate?.(pin.usage);
+			return planEligibility === true || (!enforcePlanRequirement && planEligibility !== false);
+		};
+		// A kept pin does not count as the mode's pick: `rotate` keeps its turn and `weight`
+		// charges the pin instead. A pin only key checks have used still takes its `rotate` turn.
+		// The state follows this pre-preflight verdict; if preflight then drops the pick and a
+		// sibling serves, nothing is re-charged (the dropped account loses that turn), so every
+		// concurrent selection still sees one consistent round.
+		const keptPin =
+			strictPin ??
+			(preferredCandidate !== undefined &&
+			(sessionPinIsExplicit || keepAutomaticPin(pinEvictedBeforePreflight)) &&
+			(candidates[0] === preferredCandidate || (hasPlanRequirement && planKeepsPin(preferredCandidate)))
+				? preferredCandidate
+				: undefined);
+		if (advance && rankAll && mode === "rotate" && (keptPin === undefined || sessionPinUnserved)) {
+			this.#getNextRoundRobinIndex(providerKey, credentials.length);
+		}
+		const weightRound = advance && rankAll && mode === "weight" ? this.#weightRounds.get(providerKey) : undefined;
+		// Captured now: concurrent selections overwrite `last` while preflight awaits.
+		const weightPick = weightRound?.last;
+		if (weightRound && keptPin?.credentialId !== undefined) {
+			chargeKept(weightRound, weightPick, keptPin.credentialId);
+		}
+		// Preflight dropped the sibling that evicted the pin, so the pin serves after all:
+		// give back the `rotate` turn and move the `weight` pick's charge onto the pin.
+		// A pin only key checks have used counts as a new pick, so its turn and charge stay.
+		const restorePin = (pin: OAuthCandidate): void => {
+			if (!advance || !rankAll || keptPin !== undefined || sessionPinUnserved) return;
+			const turn = this.#providerRoundRobinIndex.get(providerKey);
+			if (mode === "rotate" && turn !== undefined) {
+				this.#providerRoundRobinIndex.set(providerKey, (turn - 1 + credentials.length) % credentials.length);
+			}
+			if (weightRound && pin.credentialId !== undefined) chargeKept(weightRound, weightPick, pin.credentialId);
+		};
 		// Step (b) of the auth-retry policy: when `forceRefresh` is set, re-mint
 		// the session-preferred credential (or the first candidate when no
 		// session preference exists yet) even if its cached token still looks
@@ -726,7 +1131,8 @@ export class CredentialSelector {
 		// share one provider re-list; resyncs after refresh await re-read the store.
 		let preflightRows: StoredAuthCredential[] | undefined;
 		await Promise.all(
-			candidates.map(async candidate => {
+			// `strict` serves only its pin, so only the pin needs a fresh token.
+			(strictPin ? [strictPin] : candidates).map(async candidate => {
 				const force = forceRefreshIndex !== undefined && candidate.selection.index === forceRefreshIndex;
 				const initialCredentialId = credentialIds[candidate.selection.index];
 				if (initialCredentialId === undefined) {
@@ -852,22 +1258,16 @@ export class CredentialSelector {
 			!hasPlanRequirement &&
 			preferredCandidate !== undefined &&
 			!preflightFailures.has(preferredCandidate) &&
-			sessionPreferredIsWarm &&
 			!sessionPinIsExplicit &&
-			!pinEvictedAfterPreflight
+			keepAutomaticPin(pinEvictedAfterPreflight)
 		) {
 			const preferredIndex = candidates.indexOf(preferredCandidate);
 			if (preferredIndex > 0) {
 				candidates.splice(preferredIndex, 1);
 				candidates.unshift(preferredCandidate);
+				restorePin(preferredCandidate);
 			}
 		}
-
-		// Enforce a tier only when at least one account is confirmed eligible. If
-		// every report is unknown or ineligible, preserve trial/grandfathered access
-		// by allowing the normal candidate fallback to attempt the request.
-		const enforcePlanRequirement =
-			hasPlanRequirement && candidates.some(candidate => planGate?.(candidate.usage) === true);
 
 		// Plan-gated models rank on every resolve to re-verify account tiers,
 		// so the drain-urgency order can flip between two eligible accounts as their
@@ -876,13 +1276,52 @@ export class CredentialSelector {
 		// unenforced and the pin is not known-ineligible) so an active session never
 		// silently migrates accounts mid-conversation; blocked, exhausted, or
 		// known-ineligible pins still fall through to the ranked sibling.
-		if (hasPlanRequirement && sessionPreferredCandidate > 0 && !pinEvictedAfterPreflight) {
+		if (
+			hasPlanRequirement &&
+			sessionPreferredCandidate > 0 &&
+			(stays === "auto" || sessionPinIsExplicit
+				? !pinEvictedAfterPreflight
+				: keepAutomaticPin(pinEvictedAfterPreflight))
+		) {
 			const preferred = candidates[sessionPreferredCandidate]!;
-			const planEligibility = planGate?.(preferred.usage);
-			if (planEligibility === true || (!enforcePlanRequirement && planEligibility !== false)) {
+			if (planKeepsPin(preferred)) {
 				candidates.splice(sessionPreferredCandidate, 1);
 				candidates.unshift(preferred);
+				if (!preflightFailures.has(preferred)) restorePin(preferred);
 			}
+		}
+
+		if (strictPin) {
+			// No fallback: a dead grant is disabled without moving the session, and every
+			// failure surfaces as this request's error.
+			const resolved = preflightFailures.has(strictPin)
+				? undefined
+				: await this.tryOAuth(provider, strictPin.selection, providerKey, sessionId, options, {
+						checkUsage: false,
+						allowBlocked: true,
+						prefetchedUsage: strictPin.usage,
+						usagePrechecked: strictPin.usageChecked,
+						planGate,
+						enforcePlanRequirement: false,
+						strategy,
+						rankingContext,
+						blockScope,
+						blockScopes,
+						allowFallback: false,
+						onTransientRefreshFailure: recordTransientRefreshFailure,
+						advance,
+					});
+			if (resolved) return advance ? this.#noteServed(provider, candidates, resolved) : resolved;
+			if (transientRefreshFailure !== undefined) {
+				throw new AIError.OAuthRefreshUnavailableError(provider, transientRefreshFailure);
+			}
+			// The pin's row is gone, so its sign-in failed for good: this request and the
+			// session's later ones throw (no account can match a gone row).
+			if (sessionId && !this.#deps.pool.entries(provider).some(entry => entry.id === strictPin.credentialId)) {
+				this.#holdStrict(provider, sessionId, strictPin.credentialId, strictPin.selection.credential);
+				this.#backToStrictAccount(provider, sessionId, [], false, advance);
+			}
+			return undefined;
 		}
 
 		const passes: Array<{
@@ -920,8 +1359,9 @@ export class CredentialSelector {
 					blockScope,
 					blockScopes,
 					onTransientRefreshFailure: recordTransientRefreshFailure,
+					advance,
 				});
-				if (resolved) return resolved;
+				if (resolved) return advance ? this.#noteServed(provider, candidates, resolved) : resolved;
 			}
 		}
 
@@ -1001,6 +1441,7 @@ export class CredentialSelector {
 			blockScope,
 			blockScopes,
 			allowFallback = true,
+			advance = true,
 		} = usageOptions;
 		if (
 			!allowBlocked &&
@@ -1018,7 +1459,8 @@ export class CredentialSelector {
 		// refresh / persist / CAS-disable addresses the row by this stable id.
 		const credentialId = this.#deps.pool.entries(provider)[selection.index]?.id;
 
-		const planGate = providedPlanGate ?? this.#deps.strategies(provider)?.planGate?.({ modelId: options?.modelId });
+		const planGate =
+			providedPlanGate ?? this.#planGate(provider, this.#deps.strategies(provider), { modelId: options?.modelId });
 		const hasPlanRequirement = planGate !== undefined;
 		const applyPlanFilter = enforcePlanRequirement ?? hasPlanRequirement;
 		let usage: UsageReport | null = null;
@@ -1125,7 +1567,8 @@ export class CredentialSelector {
 			}
 			this.#deps.pool.noteBearer(provider, result.apiKey, credentialId);
 			if (options?.recordAffinity !== false) {
-				this.#deps.affinity.record(provider, sessionId, "oauth", selection.index);
+				this.#deps.affinity.record(provider, sessionId, "oauth", selection.index, undefined, false, advance);
+				if (sessionId) this.#holdStrict(provider, sessionId, credentialId, updated);
 			}
 			return { apiKey: result.apiKey, credential: updated, credentialId };
 		} catch (error) {
@@ -1150,12 +1593,12 @@ export class CredentialSelector {
 					errorMsg,
 				);
 				if (outcome === "peer-rotated") {
-					if (allowFallback) return this.resolveOAuth(provider, sessionId, options);
+					if (allowFallback) return this.resolveOAuth(provider, sessionId, options, advance);
 					return undefined;
 				}
 				if (outcome === "cas-lost") return undefined;
 				if (this.#deps.pool.credentials(provider).some(credential => credential.type === "oauth")) {
-					if (allowFallback) return this.resolveOAuth(provider, sessionId, options);
+					if (allowFallback) return this.resolveOAuth(provider, sessionId, options, advance);
 				}
 			} else {
 				usageOptions.onTransientRefreshFailure?.(error);

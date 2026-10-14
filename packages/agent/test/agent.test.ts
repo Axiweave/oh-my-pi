@@ -1788,3 +1788,94 @@ describe("Agent — F3 in-place state mutation", () => {
 		expect(agent.state.pendingToolCalls).not.toBe(pendingToolCalls);
 	});
 });
+
+describe("Agent request turn context", () => {
+	const SEED = Number(process.env.TURN_SEED ?? 20_260_511);
+	const seededDraw = () => {
+		let state = SEED >>> 0;
+		return (n: number) => {
+			state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+			// The low bits of this generator cycle quickly; draw from the high ones.
+			return (state >>> 16) % n;
+		};
+	};
+	const toolSchema = type({ "note?": "string" });
+	const tool: AgentTool<typeof toolSchema> = {
+		name: "noop",
+		label: "No-op",
+		description: "Does nothing",
+		parameters: toolSchema,
+		async execute() {
+			return { content: [{ type: "text", text: "done" }] };
+		},
+	};
+	const toolCall = (id: string) => ({ content: [{ type: "toolCall" as const, id, name: "noop", arguments: {} }] });
+
+	it("reports withinTurn only for requests that continue a tool-use turn", async () => {
+		// Contract (FR-012): a prompt's first request opens a turn; each request
+		// answering tool results continues it. Seeded prompts with 0-3 tool rounds.
+		const next = seededDraw();
+		for (let run = 0; run < 20; run++) {
+			const rounds = Array.from({ length: 3 }, () => next(4));
+			const mock = createMockModel({
+				responses: rounds.flatMap((count, prompt) => [
+					...Array.from({ length: count }, (_, call) => toolCall(`p${prompt}-c${call}`)),
+					{ content: ["done"] },
+				]),
+			});
+			const seen: boolean[] = [];
+			const agent = new Agent({
+				initialState: { model: mock.model, systemPrompt: ["Test"], tools: [tool], messages: [] },
+				streamFn: mock.stream,
+				getApiKey: (_model, context) => {
+					seen.push(context?.withinTurn === true);
+					return "key";
+				},
+			});
+			for (const prompt of rounds.keys()) await agent.prompt(`prompt ${prompt}`);
+			const expected = rounds.flatMap(count => [false, ...Array.from({ length: count }, () => true)]);
+			if (JSON.stringify(seen) !== JSON.stringify(expected)) {
+				throw new Error(`TURN_SEED=${SEED} run=${run}: rounds ${rounds} gave ${seen}, want ${expected}`);
+			}
+		}
+	});
+
+	it("startNewTurn makes only the next request a new turn", async () => {
+		// A retry after an error resumes on tool results but must select its account
+		// again. Seeded: 0-3 startNewTurn calls (repeats change nothing), 0-3 tool
+		// rounds after the resumed request, which must all stay within the turn.
+		const next = seededDraw();
+		for (let run = 0; run < 20; run++) {
+			const calls = next(4);
+			const rounds = next(4);
+			const mock = createMockModel({
+				responses: [...Array.from({ length: rounds }, (_, i) => toolCall(`call_${i + 2}`)), { content: ["done"] }],
+			});
+			const seen: boolean[] = [];
+			const agent = new Agent({
+				initialState: {
+					model: mock.model,
+					systemPrompt: ["Test"],
+					tools: [tool],
+					messages: [
+						createUserMessage("run the tool"),
+						createAssistantMessage([{ type: "toolCall", id: "call_1", name: "noop", arguments: {} }], "toolUse"),
+					],
+				},
+				streamFn: mock.stream,
+				getApiKey: (_model, context) => {
+					seen.push(context?.withinTurn === true);
+					return "key";
+				},
+			});
+			for (let i = 0; i < calls; i++) agent.startNewTurn();
+			await agent.continue();
+			const expected = [calls === 0, ...Array.from({ length: rounds }, () => true)];
+			if (!Bun.deepEquals(seen, expected)) {
+				throw new Error(
+					`TURN_SEED=${SEED} run=${run} calls=${calls} rounds=${rounds}: gave ${seen}, want ${expected}`,
+				);
+			}
+		}
+	});
+});

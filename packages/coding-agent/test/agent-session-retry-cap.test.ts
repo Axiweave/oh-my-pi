@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	ApiKey,
 	AssistantMessage,
@@ -12,6 +14,7 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { DEFAULT_USAGE_RESERVE_PCT, type ProviderRouting } from "@oh-my-pi/pi-ai/auth-storage";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createMockModel, type MockResponse, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import * as envApiKey from "@oh-my-pi/pi-ai/env-api-key";
@@ -22,13 +25,15 @@ import { SqliteAuthCredentialStore } from "@oh-my-pi/pi-coding-agent/session/aut
 import { opencodeGoUsageProvider } from "@oh-my-pi/pi-ai/usage/opencode-go";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
+import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { TtsrManager } from "@oh-my-pi/pi-coding-agent/export/ttsr";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
@@ -269,6 +274,638 @@ describe("AgentSession retry delay cap", () => {
 		expect(lastAssistant(session).stopReason).toBe("stop");
 		expect(session.isRetrying).toBe(false);
 	});
+
+	it("ends the turn at once on a usage limit when auth.routing stays is strict", async () => {
+		// Contract (FR-013): a strict session never leaves its account, so a
+		// usage limit surfaces at once: no reset wait (even with
+		// retry.waitForUsageReset), no second request, and no model fallback.
+		const model = getBundledModel("zai", "glm-5.3");
+		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model || !fallbackModel) {
+			throw new Error("Expected bundled Z.AI and Anthropic test models to exist");
+		}
+		authStorage.keys.setRuntime("zai", "zai-test-key");
+		authStorage.setAccountPolicies({
+			accountPolicies: [],
+			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+			routing: { zai: { stays: "strict" } },
+		});
+		try {
+			const resetStamp = new Date(Date.now() + 7_200_000 + 8 * 3_600_000)
+				.toISOString()
+				.slice(0, 19)
+				.replace("T", " ");
+			const usageLimitError = `429 code 1308, Usage limit reached for 5 hour. Your limit will reset at ${resetStamp} retry-after-ms=5000`;
+			const mock = createMockModel({
+				responses: [{ throw: usageLimitError }, { content: ["must not run"], stopReason: "stop" }],
+			});
+			const requestedModels: string[] = [];
+			const agent = new Agent({
+				getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+				streamFn: (requestedModel, context, options) => {
+					requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+					return mock.stream(requestedModel, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.maxDelayMs": 100,
+				"retry.maxRetries": 2,
+				"retry.modelFallback": true,
+				"retry.fallbackChains": { default: [`${fallbackModel.provider}/${fallbackModel.id}`] },
+				"retry.waitForUsageReset": true,
+			});
+			settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+
+			const waitSpy = mockSchedulerWaitWithClock();
+			const retryStartEvents: AutoRetryStartEvent[] = [];
+			const retryEndEvents: AutoRetryEndEvent[] = [];
+			const fallbackEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+			session.subscribe(event => {
+				if (event.type === "auto_retry_start") retryStartEvents.push(event);
+				if (event.type === "auto_retry_end") retryEndEvents.push(event);
+				if (event.type === "retry_fallback_applied") fallbackEvents.push(event);
+			});
+
+			await session.prompt("Trigger a usage limit on a strict account");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual([`${model.provider}/${model.id}`]);
+			expect(retryStartEvents).toHaveLength(0);
+			expect(fallbackEvents).toEqual([]);
+			for (const call of waitSpy.mock.calls) {
+				expect(call[0]).toBeLessThanOrEqual(100);
+			}
+			expect(retryEndEvents).toHaveLength(1);
+			expect(retryEndEvents[0]).toMatchObject({ success: false });
+			expect(session.model?.provider).toBe(model.provider);
+			expect(lastAssistant(session).stopReason).toBe("error");
+			expect(session.isRetrying).toBe(false);
+		} finally {
+			authStorage.setAccountPolicies({
+				accountPolicies: [],
+				defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+				routing: {},
+			});
+		}
+	});
+
+	/** `count` Codex OAuth accounts (`account-a` first) under `routing`, with no usage reports. */
+	async function withCodexPool(routing: ProviderRouting, run: () => Promise<void>, count = 2): Promise<void> {
+		await authStorage.credentials.set(
+			"openai-codex",
+			[..."abcd"].slice(0, count).map(suffix => ({
+				type: "oauth" as const,
+				access: `access-${suffix}`,
+				refresh: `refresh-${suffix}`,
+				expires: Date.now() + 60 * 60_000,
+				accountId: `account-${suffix}`,
+			})),
+		);
+		authStorage.usage.setProvider("openai-codex", { id: "openai-codex", fetchUsage: async () => null });
+		authStorage.setAccountPolicies({
+			accountPolicies: [],
+			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+			routing: { "openai-codex": routing },
+		});
+		try {
+			await run();
+		} finally {
+			authStorage.usage.removeProvider("openai-codex");
+			authStorage.setAccountPolicies({
+				accountPolicies: [],
+				defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+				routing: {},
+			});
+		}
+	}
+	const codexCredentialId = (sessionId: string, accountId: string): number => {
+		const account = authStorage.oauth
+			.accounts("openai-codex", sessionId)
+			.find(candidate => candidate.accountId === accountId);
+		if (!account) throw new Error(`Expected Codex ${accountId}`);
+		return account.credentialId;
+	};
+	const activeCodexAccount = (sessionId: string): string | undefined =>
+		authStorage.oauth.accounts("openai-codex", sessionId).find(account => account.active)?.accountId;
+	const CODEX_MAX_RETRIES = 2;
+	const codexRetrySettings = (model: Model, overrides: Readonly<Record<string, unknown>> = {}) => {
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxDelayMs": 60_000,
+			"retry.maxRetries": CODEX_MAX_RETRIES,
+			"retry.modelFallback": false,
+			...overrides,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		return settings;
+	};
+	/** Seeded draws for the routing properties; a failure names `ROUTING_SEED`. */
+	const ROUTING_SEED = Number(process.env.ROUTING_SEED ?? 20_260_511);
+	const seededDraw = () => {
+		let state = ROUTING_SEED >>> 0;
+		return (n: number) => {
+			state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+			// The low bits of this generator cycle quickly; draw from the high ones.
+			return (state >>> 16) % n;
+		};
+	};
+	const noopTool: AgentTool = {
+		name: "noop",
+		label: "No-op",
+		description: "Does nothing",
+		parameters: type({ "note?": "string" }),
+		execute: async () => ({ content: [{ type: "text", text: "done" }] }),
+	};
+	const noopCall = (id: string): MockResponse => ({
+		content: [{ type: "toolCall", id, name: "noop", arguments: {} }],
+	});
+
+	it("keeps normal usage-limit recovery under strict when the session pin is explicit", async () => {
+		// Contract (FR-014): `stays: strict` holds only automatic pins. A user's
+		// explicit pin keeps the usual recovery: the blocked account hands off
+		// to its sibling and the turn retries.
+		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!model) throw new Error("Expected bundled Codex test model to exist");
+		await withCodexPool({ stays: "strict" }, async () => {
+			const mock = createMockModel({
+				responses: [
+					{ throw: "429 usage_limit_reached retry-after-ms=5000" },
+					{ content: ["recovered on the sibling account"], stopReason: "stop" },
+				],
+			});
+			const requestedModels: string[] = [];
+			const agent = new Agent({
+				getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (requestedModel, context, options) => {
+					requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+					return mock.stream(requestedModel, context, options);
+				},
+			});
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: codexRetrySettings(model),
+				modelRegistry,
+			});
+			const accountA = codexCredentialId(session.sessionId, "account-a");
+			expect(authStorage.sessions.pin("openai-codex", session.sessionId, accountA)).toBe(true);
+
+			mockSchedulerWaitWithClock();
+			await session.prompt("Trigger a usage limit on an explicitly pinned account");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual([`${model.provider}/${model.id}`, `${model.provider}/${model.id}`]);
+			expect(lastAssistant(session).stopReason).toBe("stop");
+		});
+	});
+
+	it("moves a reserve-bound pin before a request unless stays is strict", async () => {
+		// Contract (FR-013): the usage-aware preflight lets a pin in reserve go when a
+		// sibling is healthy, so the request selects again (`order` picks account-a).
+		// A strict automatic pin never moves, so account-b keeps serving.
+		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!model) throw new Error("Expected bundled Codex test model to exist");
+		for (const stays of ["strict", "auto", "session", "turn", "off"] as const) {
+			await withCodexPool({ mode: "order", stays }, async () => {
+				const mock = createMockModel({ responses: [{ content: ["served"], stopReason: "stop" }] });
+				let sessionId = "";
+				const served: Array<string | undefined> = [];
+				const agent = new Agent({
+					getApiKey: (requestedModel, context) =>
+						modelRegistry.resolver(requestedModel, { sessionId, withinTurn: context?.withinTurn }),
+					initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: (requestedModel, context, options) => {
+						served.push(activeCodexAccount(sessionId));
+						return mock.stream(requestedModel, context, options);
+					},
+				});
+				const current = new AgentSession({
+					agent,
+					sessionManager: SessionManager.inMemory(),
+					settings: codexRetrySettings(model, { "retry.usageAwareFallback": true }),
+					modelRegistry,
+				});
+				session = current;
+				sessionId = current.sessionId;
+				const accountA = codexCredentialId(sessionId, "account-a");
+				const accountB = codexCredentialId(sessionId, "account-b");
+				// An automatic pin, as a resumed session restores it.
+				authStorage.sessions.pin("openai-codex", sessionId, accountB, { restoredAtMs: Date.now() });
+				const health = vi.spyOn(authStorage.health, "model").mockResolvedValue({
+					state: "healthy",
+					accounts: [
+						{ credentialId: accountA, credentialType: "oauth", state: "healthy", remainingFraction: 0.8 },
+						{
+							credentialId: accountB,
+							credentialType: "oauth",
+							selected: true,
+							state: "reserve",
+							remainingFraction: 0.05,
+						},
+					],
+				});
+				try {
+					await current.prompt("Run one request");
+					await current.waitForIdle();
+					expect({ stays, served }).toEqual({
+						stays,
+						served: [stays === "strict" ? "account-b" : "account-a"],
+					});
+				} finally {
+					health.mockRestore();
+					await current.dispose();
+					session = undefined;
+				}
+			});
+		}
+	});
+
+	it("sinks each account refused with a transient rate limit, so order-mode retries walk the pool", async () => {
+		// Contract (FR-018): a rate limit with quota left moves the account behind its
+		// siblings when `sink` is on, so each retry takes the next account; without
+		// `sink` order mode stays on account-a. Seeded: 1-4 accounts, 0-3 rate limits
+		// (3 is past the retry budget, so the turn ends on the error).
+		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!model) throw new Error("Expected bundled Codex test model to exist");
+		const draw = seededDraw();
+		for (let run = 0; run < 12; run++) {
+			const count = 1 + draw(4);
+			const limits = draw(CODEX_MAX_RETRIES + 2);
+			const sink = draw(2) === 1;
+			await withCodexPool(
+				{ mode: "order", stays: "off", sink },
+				async () => {
+					registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
+					const mock = createMockModel({
+						provider: model.provider,
+						id: model.id,
+						responses: [
+							...Array.from({ length: limits }, () => ({ throw: "429 Rate limit exceeded, too many requests" })),
+							{ content: ["recovered"], stopReason: "stop" },
+						],
+					});
+					let sessionId = "";
+					const served: Array<string | undefined> = [];
+					const agent = new Agent({
+						getApiKey: (requestedModel, context) =>
+							modelRegistry.resolver(requestedModel, { sessionId, withinTurn: context?.withinTurn }),
+						initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+						// Through pi-ai's auth wrapper, which stamps the serving credential on the reply.
+						streamFn: (_requestedModel, context, options) => {
+							served.push(activeCodexAccount(sessionId));
+							return aiStream.streamSimple(mock, context, options);
+						},
+					});
+					const current = new AgentSession({
+						agent,
+						sessionManager: SessionManager.inMemory(),
+						settings: codexRetrySettings(model),
+						modelRegistry,
+					});
+					session = current;
+					sessionId = current.sessionId;
+					mockSchedulerWaitWithClock();
+					try {
+						await current.prompt("Trigger transient rate limits");
+						await current.waitForIdle();
+						const requests = Math.min(limits, CODEX_MAX_RETRIES) + 1;
+						const expected = Array.from(
+							{ length: requests },
+							(_, i) => `account-${"abcd"[sink ? i % count : 0]}`,
+						);
+						const stopReason = limits > CODEX_MAX_RETRIES ? "error" : "stop";
+						const actual = { served, stopReason: lastAssistant(current).stopReason };
+						if (!Bun.deepEquals(actual, { served: expected, stopReason })) {
+							throw new Error(
+								`ROUTING_SEED=${ROUTING_SEED} run=${run} accounts=${count} limits=${limits} sink=${sink}: ` +
+									`got ${JSON.stringify(actual)}, want ${JSON.stringify({ served: expected, stopReason })}`,
+							);
+						}
+					} finally {
+						await current.dispose();
+						session = undefined;
+						vi.restoreAllMocks();
+					}
+				},
+				count,
+			);
+		}
+	});
+
+	it("selects again on each retry after an error under stays turn, but not within the turn", async () => {
+		// Contract (FR-012): requests after tool results continue the turn and keep its
+		// account; a retry after an error is a new turn and selects again. account-a is
+		// blocked when the turn starts and usable from the second request on. Seeded:
+		// 0-3 tool rounds, then 1-3 errors (3 is past the retry budget).
+		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!model) throw new Error("Expected bundled Codex test model to exist");
+		const draw = seededDraw();
+		for (let run = 0; run < 12; run++) {
+			const rounds = draw(4);
+			const errors = 1 + draw(CODEX_MAX_RETRIES + 1);
+			await withCodexPool({ mode: "order", stays: "turn" }, async () => {
+				const startMs = Date.now();
+				await authStorage.limits.markReached("openai-codex", undefined, {
+					apiKey: "access-a",
+					retryAfterMs: 60_000,
+				});
+				const mock = createMockModel({
+					responses: [
+						...Array.from({ length: rounds }, (_, i) => noopCall(`call-${i}`)),
+						...Array.from({ length: errors }, () => ({ throw: "500 Internal server error" })),
+						{ content: ["recovered"], stopReason: "stop" },
+					],
+				});
+				let sessionId = "";
+				const served: Array<string | undefined> = [];
+				const agent = new Agent({
+					getApiKey: (requestedModel, context) =>
+						modelRegistry.resolver(requestedModel, { sessionId, withinTurn: context?.withinTurn }),
+					initialState: { model, systemPrompt: ["Test"], tools: [noopTool], messages: [] },
+					streamFn: (requestedModel, context, options) => {
+						served.push(activeCodexAccount(sessionId));
+						if (served.length === 1) setSystemTime(new Date(startMs + 120_000));
+						return mock.stream(requestedModel, context, options);
+					},
+				});
+				const current = new AgentSession({
+					agent,
+					sessionManager: SessionManager.inMemory(),
+					settings: codexRetrySettings(model),
+					modelRegistry,
+				});
+				session = current;
+				sessionId = current.sessionId;
+				mockSchedulerWaitWithClock();
+				try {
+					await current.prompt("Use the tool");
+					await current.waitForIdle();
+					const expected = {
+						served: [
+							...Array.from({ length: rounds + 1 }, () => "account-b"),
+							...Array.from({ length: Math.min(errors, CODEX_MAX_RETRIES) }, () => "account-a"),
+						],
+						stopReason: errors > CODEX_MAX_RETRIES ? "error" : "stop",
+					};
+					const actual = { served, stopReason: lastAssistant(current).stopReason };
+					if (!Bun.deepEquals(actual, expected)) {
+						throw new Error(
+							`ROUTING_SEED=${ROUTING_SEED} run=${run} rounds=${rounds} errors=${errors}: ` +
+								`got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`,
+						);
+					}
+				} finally {
+					setSystemTime();
+					await current.dispose();
+					session = undefined;
+					vi.restoreAllMocks();
+				}
+			});
+		}
+	});
+
+	it("starts a new turn for the request after a retry or re-sample", async () => {
+		// Contract (FR-012): a request answering tool results continues the turn; the
+		// request that retries or re-samples a failed one starts a new turn, even when
+		// the transcript again ends in tool results. Every source runs 3 times with a
+		// seeded 1-3 tool rounds before the failure.
+		const small = getBundledModel("openai-codex", "gpt-6-sol");
+		const large = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!small || !large) throw new Error("Expected bundled Codex test models to exist");
+		const overflow: MockResponse = { throw: "prompt is too long: 300000 tokens > 272000 maximum" };
+		const emptyLength: MockResponse = { content: [], stopReason: "length" };
+		const promotion = { "contextPromotion.enabled": true };
+		const ttsrRule: Rule = {
+			name: "no-forbidden",
+			path: "/tmp/no-forbidden.md",
+			content: "Do not write FORBIDDEN",
+			condition: ["FORBIDDEN"],
+			_source: { provider: "test", providerName: "test", path: "/tmp/no-forbidden.md", level: "project" },
+		};
+		type RetrySource = {
+			failure: MockResponse;
+			settings?: Readonly<Record<string, unknown>>;
+			/** Make `small` promote to `large` on overflow (needs `contextPromotion.enabled`). */
+			promote?: boolean;
+			ttsr?: boolean;
+			arrange?: (session: AgentSession) => void;
+			/** User action that retries after the failure settles. */
+			resume?: (session: AgentSession) => Promise<unknown>;
+		};
+		const sources: Record<string, RetrySource> = {
+			"automatic-retry": { failure: { throw: "500 Internal server error" } },
+			"incomplete-retry": { failure: emptyLength },
+			"manual-retry": {
+				failure: { throw: "500 Internal server error" },
+				settings: { "retry.enabled": false },
+				resume: current => current.retry(),
+			},
+			"context-promotion-overflow": { failure: overflow, settings: promotion, promote: true },
+			"context-promotion-incomplete": { failure: emptyLength, settings: promotion, promote: true },
+			"compaction-retry": {
+				failure: overflow,
+				settings: { "compaction.methodOrder": ["soft"], "compaction.keepRecentTokens": 1 },
+				arrange: () =>
+					vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+						summary: "compacted",
+						shortSummary: undefined,
+						firstKeptEntryId: preparation.firstKeptEntryId,
+						tokensBefore: preparation.tokensBefore,
+						details: {},
+					})),
+			},
+			"shake-retry": {
+				failure: overflow,
+				settings: { "compaction.methodOrder": ["shake"] },
+				arrange: current =>
+					vi
+						.spyOn(current, "shake")
+						.mockResolvedValue({ mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 250_000 }),
+			},
+			// The re-sample's context ends in the injected rule, not tool results.
+			"ttsr-interrupt": { failure: { content: ["FORBIDDEN"] }, ttsr: true },
+		};
+		const draw = seededDraw();
+		const runs = Object.entries(sources).flatMap(([source, scenario]) =>
+			Array.from({ length: 3 }, () => ({ source, scenario, rounds: 1 + draw(3) })),
+		);
+		for (const [run, { source, scenario, rounds }] of runs.entries()) {
+			// The source window sits under the target's default (272k) window, so promotion has room.
+			const model = scenario.promote
+				? { ...small, contextWindow: 200_000, contextPromotionTarget: `${large.provider}/${large.id}` }
+				: small;
+			await withCodexPool({}, async () => {
+				// Replies carry the session model, so length recovery treats them as its own.
+				const mock = createMockModel({
+					provider: model.provider,
+					id: model.id,
+					responses: [
+						...Array.from({ length: rounds }, (_, i) => noopCall(`call-${i}`)),
+						scenario.failure,
+						{ content: ["recovered"], stopReason: "stop" },
+					],
+				});
+				const withinTurn: boolean[] = [];
+				const agent = new Agent({
+					getApiKey: (requestedModel, context) => {
+						withinTurn.push(context?.withinTurn === true);
+						return `${requestedModel.provider}-test-key`;
+					},
+					initialState: { model, systemPrompt: ["Test"], tools: [noopTool], messages: [] },
+					streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+				});
+				let ttsrManager: TtsrManager | undefined;
+				if (scenario.ttsr) {
+					ttsrManager = new TtsrManager({
+						enabled: true,
+						contextMode: "discard",
+						interruptMode: "always",
+						repeatMode: "once",
+						repeatGap: 10,
+					});
+					ttsrManager.addRule(ttsrRule);
+				}
+				const current = new AgentSession({
+					agent,
+					sessionManager: SessionManager.inMemory(),
+					settings: codexRetrySettings(model, { "compaction.enabled": true, ...scenario.settings }),
+					modelRegistry,
+					ttsrManager,
+				});
+				session = current;
+				scenario.arrange?.(current);
+				// The scheduler logs each continuation's source; it confirms the scenario took its path.
+				const scheduled: unknown[] = [];
+				const debug = logger.debug.bind(logger);
+				vi.spyOn(logger, "debug").mockImplementation((message, context) => {
+					if (message === "agent.continue scheduled") scheduled.push(context?.source);
+					return debug(message, context);
+				});
+				// Waits stay instant on the fake clock, but yield once so a retry scheduled
+				// during compaction starts after the compaction has finished, as with real delays.
+				const realWait = scheduler.wait.bind(scheduler);
+				const wait = mockSchedulerWaitWithClock();
+				const advance = wait.getMockImplementation();
+				wait.mockImplementation(async (delayMs, options) => {
+					await advance?.(delayMs, options);
+					await realWait(0, options);
+				});
+				try {
+					await current.prompt("Use the tool");
+					await current.waitForIdle();
+					if (scenario.resume) {
+						await scenario.resume(current);
+						await current.waitForIdle();
+					}
+					// First request opens the turn, tool rounds continue it, the retry opens a new one.
+					const expected = {
+						scheduled: source,
+						withinTurn: [false, ...Array.from({ length: rounds }, () => true), false],
+					};
+					const actual = { scheduled: scheduled.find(name => name === source), withinTurn };
+					if (!Bun.deepEquals(actual, expected)) {
+						throw new Error(
+							`ROUTING_SEED=${ROUTING_SEED} run=${run} source=${source} rounds=${rounds}: ` +
+								`got ${JSON.stringify(actual)} (scheduled ${scheduled}), want ${JSON.stringify(expected)}`,
+						);
+					}
+					expect(lastAssistant(current).stopReason).toBe("stop");
+				} finally {
+					await current.dispose();
+					session = undefined;
+					vi.restoreAllMocks();
+				}
+			});
+		}
+	});
+
+	it("names a strict session's signed-out account on prompt, while key checks skip its provider", async () => {
+		// Contract (FR-013): once a strict session's account is signed out, the prompt-time
+		// key check says which account, and a check that reads a missing key as "skip"
+		// (cycling the scoped models) moves past the provider instead of throwing.
+		// Seeded: routing mode and 2-4 accounts.
+		const codex = getBundledModel("openai-codex", "gpt-6-sol");
+		const sonnet = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const haiku = getBundledModel("anthropic", "claude-haiku-4-5");
+		if (!codex || !sonnet || !haiku) throw new Error("Expected bundled test models to exist");
+		const draw = seededDraw();
+		for (let run = 0; run < 6; run++) {
+			const mode = (["order", "rotate", "weight"] as const)[draw(3)];
+			const count = 2 + draw(3);
+			await withCodexPool(
+				{ mode, stays: "strict" },
+				async () => {
+					const mock = createMockModel({ responses: [{ content: ["unused"] }] });
+					const current = new AgentSession({
+						agent: new Agent({
+							getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+							initialState: { model: codex, systemPrompt: ["Test"], tools: [], messages: [] },
+							streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+						}),
+						sessionManager: SessionManager.inMemory(),
+						settings: codexRetrySettings(codex),
+						modelRegistry,
+						scopedModels: [{ model: codex }, { model: sonnet }, { model: haiku }],
+					});
+					session = current;
+					try {
+						// The session's first request pins an account; then that account signs out.
+						await modelRegistry.getApiKeyWithCredentialForProvider(codex.provider, current.sessionId);
+						const pinned = activeCodexAccount(current.sessionId);
+						if (!pinned) throw new Error("Expected the first request to pin an account");
+						await authStorage.credentials.removeById(
+							codex.provider,
+							codexCredentialId(current.sessionId, pinned),
+						);
+
+						const prompted = await current.prompt("Hello").then(
+							() => undefined,
+							(error: unknown) => error,
+						);
+						const cycled = await current.cycleModel().then(
+							result => result?.model.provider,
+							(error: unknown) => String(error),
+						);
+						const actual = {
+							promptNamesAccount:
+								prompted instanceof AIError.MissingApiKeyError && prompted.message.includes(pinned),
+							cycled,
+						};
+						const expected = { promptNamesAccount: true, cycled: sonnet.provider };
+						if (!Bun.deepEquals(actual, expected)) {
+							throw new Error(
+								`ROUTING_SEED=${ROUTING_SEED} run=${run} mode=${mode} accounts=${count}: ` +
+									`got ${JSON.stringify(actual)} (prompt ${String(prompted)}), want ${JSON.stringify(expected)}`,
+							);
+						}
+						expect(mock.calls.length).toBe(0);
+					} finally {
+						await current.dispose();
+						session = undefined;
+					}
+				},
+				count,
+			);
+		}
+	});
+
 	it("probes after the relative hint when a naive stamp conflicts, then recovers", async () => {
 		// Contract: a naive `reset at` wall stamp conflicting with the relative
 		// hint sleeps the relative signal only; the retry after that wait is
@@ -1196,7 +1833,7 @@ describe("AgentSession retry delay cap", () => {
 			// resolution binds the credential to the sibling session, as a
 			// real prior turn would have.
 			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
-			await localRegistry.getApiKeyForProvider("opencode-go", "sibling-session");
+			await localRegistry.getApiKeyWithCredentialForProvider("opencode-go", "sibling-session");
 			await localStorage.limits.markReached("opencode-go", "sibling-session", {
 				retryAfterMs: 7_200_000,
 				providerTimed: true,
@@ -1288,7 +1925,7 @@ describe("AgentSession retry delay cap", () => {
 		);
 		try {
 			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
-			await localRegistry.getApiKeyForProvider("opencode-go", "sibling-session");
+			await localRegistry.getApiKeyWithCredentialForProvider("opencode-go", "sibling-session");
 			// The sibling's 20-minute provider-stated block is shorter than
 			// the 30-minute heuristic this session's hintless error will
 			// contribute, so the merged deadline alone cannot distinguish it.
@@ -1382,7 +2019,7 @@ describe("AgentSession retry delay cap", () => {
 		);
 		try {
 			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
-			await localRegistry.getApiKeyForProvider("opencode-go", "sibling-session");
+			await localRegistry.getApiKeyWithCredentialForProvider("opencode-go", "sibling-session");
 			// Hintless sibling error whose report was unavailable: the stored
 			// block is the 30-minute heuristic fallback, not provider timing.
 			await localStorage.limits.markReached("opencode-go", "sibling-session", {
@@ -1767,7 +2404,7 @@ describe("AgentSession retry delay cap", () => {
 			{ type: "api_key", key: "opencode-go-key-2" },
 		]);
 		authStorage.keys.setRuntime("openai", "openai-test-key");
-		await modelRegistry.getApiKeyForProvider("opencode-go", "other-session");
+		await modelRegistry.getApiKeyWithCredentialForProvider("opencode-go", "other-session");
 		const blocked = await authStorage.limits.markReached("opencode-go", "other-session", {
 			retryAfterMs: 2_000,
 		});
@@ -2456,7 +3093,7 @@ describe("AgentSession retry delay cap", () => {
 
 		// Another session holds one credential and parks it for 2s — the test
 		// session lands on the sibling.
-		await modelRegistry.getApiKeyForProvider("anthropic", "other-session");
+		await modelRegistry.getApiKeyWithCredentialForProvider("anthropic", "other-session");
 		const blocked = await authStorage.limits.markReached("anthropic", "other-session", { retryAfterMs: 2_000 });
 		expect(blocked.switched).toBe(true);
 

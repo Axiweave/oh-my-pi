@@ -16,7 +16,9 @@ import {
 import type { CredentialBlocks } from "./blocks";
 import type { KeyOverrides } from "./cascade";
 import type { SessionAffinity } from "./affinity";
+import type { AccountPolicies } from "./policy";
 import type { CredentialPool } from "./pool";
+import type { CredentialSelector } from "./select";
 import type { AuthCredentialStore } from "./store";
 import type {
 	AuthCredential,
@@ -64,6 +66,8 @@ export interface RateLimitsDeps {
 	affinity: SessionAffinity;
 	usage: UsageService;
 	strategies: RankingStrategyResolver;
+	policies: AccountPolicies;
+	selector: CredentialSelector;
 }
 
 /** Usage-limit marking, credential rotation after failures, and bearer-matched invalidation. */
@@ -283,6 +287,9 @@ export class RateLimits implements LimitsApi {
 					if (exhaustedLimits.length > 0 && futureResets.length === exhaustedLimits.length) {
 						reportResetAtMs = Math.max(...futureResets);
 					}
+				} else {
+					// Refused with quota left: `sink` routing moves it behind its siblings.
+					this.noteRateLimited(provider, targetCredentialId);
 				}
 			}
 		}
@@ -308,6 +315,11 @@ export class RateLimits implements LimitsApi {
 			...(reportResetAtMs === undefined ? {} : { reportResetAtMs }),
 		};
 	}
+
+	noteRateLimited(provider: string, credentialId: number): void {
+		this.#deps.selector.noteRateLimited(provider, credentialId);
+	}
+
 	#extractStructuredApiKeyToken(apiKey: string): string | undefined {
 		if (!apiKey.startsWith("{")) return undefined;
 		try {
@@ -347,7 +359,8 @@ export class RateLimits implements LimitsApi {
 			return false;
 		}
 
-		this.#deps.affinity.clear(provider, sessionId);
+		// `strict` keeps the automatic pin; the block and suspect mark still apply.
+		if (!this.#deps.selector.strict(provider, sessionId)) this.#deps.affinity.clear(provider, sessionId);
 		this.#deps.blocks.mark(
 			provider,
 			providerTypeKey(provider, matched.type),
@@ -390,7 +403,9 @@ export class RateLimits implements LimitsApi {
 	 *   without marking its credential suspect, then rotate through siblings.
 	 * - otherwise (hard 401 / auth failure) → mark the credential suspect (or
 	 *   reload when no broker hook is wired) and block it, then drop matching
-	 *   sticky state.
+	 *   sticky state. Under `stays: strict` (no explicit pin) the sticky state stays
+	 *   and nothing switches, so the caller surfaces the error. An invalidated token
+	 *   there also signs the account out, and that session's later requests fail.
 	 *
 	 * For usage-limit and account-policy failures with no free sibling, sleeps
 	 * until the earliest sibling unblocks when that is at most
@@ -408,6 +423,8 @@ export class RateLimits implements LimitsApi {
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 		const exactCursorModelPolicy = AIError.isCursorPlanAccountPolicyError(error, provider);
 		const accountPolicy = exactCursorModelPolicy || AIError.isAccountPolicyError(error);
+		// `strict` never moves an automatic pin: blocks are still recorded, but nothing switches or clears.
+		const strict = this.#deps.selector.strict(provider, sessionId);
 		if (!accountPolicy && (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message))) {
 			// Thread the provider-specified reset window (e.g. Devin "Your limit
 			// will reset in 13 minutes") into the block duration so the credential
@@ -421,7 +438,7 @@ export class RateLimits implements LimitsApi {
 				credentialId: options?.credentialId,
 				signal: options?.signal,
 			});
-			return awaitSiblingUnblock(mark, options?.signal);
+			return strict ? { switched: false } : awaitSiblingUnblock(mark, options?.signal);
 		}
 
 		const deniedModel = AIError.codexChatGPTAccountPolicyModel(error);
@@ -453,8 +470,9 @@ export class RateLimits implements LimitsApi {
 			routing.blockScope = modelPolicyScope ?? ACCOUNT_POLICY_BLOCK_SCOPE;
 			const sticky = this.#deps.affinity.get(provider, sessionId);
 			if (
-				!sessionCredential.explicit ||
-				(sticky?.type === sessionCredential.type && sticky.index === sessionCredential.index)
+				!strict &&
+				(!sessionCredential.explicit ||
+					(sticky?.type === sessionCredential.type && sticky.index === sessionCredential.index))
 			) {
 				this.#deps.affinity.clear(provider, sessionId);
 			}
@@ -467,7 +485,7 @@ export class RateLimits implements LimitsApi {
 				routing,
 				false,
 			);
-			return awaitSiblingUnblock(mark, options?.signal);
+			return strict ? { switched: false } : awaitSiblingUnblock(mark, options?.signal);
 		}
 
 		const providerKey = providerTypeKey(provider, sessionCredential.type);
@@ -485,8 +503,9 @@ export class RateLimits implements LimitsApi {
 		const target = this.#deps.pool.entries(provider)[sessionCredential.index];
 		const sticky = this.#deps.affinity.get(provider, sessionId);
 		if (
-			!sessionCredential.explicit ||
-			(sticky?.type === sessionCredential.type && sticky.index === sessionCredential.index)
+			!strict &&
+			(!sessionCredential.explicit ||
+				(sticky?.type === sessionCredential.type && sticky.index === sessionCredential.index))
 		) {
 			this.#deps.affinity.clear(provider, sessionId);
 		}
@@ -508,7 +527,7 @@ export class RateLimits implements LimitsApi {
 					latestRows.map(row => ({ id: row.id, credential: row.credential })),
 				);
 			}
-			return { switched: deleted && hasSibling };
+			return { switched: deleted && hasSibling && !strict };
 		}
 
 		if (target) {
@@ -525,7 +544,7 @@ export class RateLimits implements LimitsApi {
 			);
 		}
 
-		return { switched: hasSibling };
+		return { switched: hasSibling && !strict };
 	}
 }
 

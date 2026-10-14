@@ -13,9 +13,10 @@ import {
 	type AuthStorage,
 	type DisabledCredentialSummary,
 	type OAuthAccountIdentity,
+	type RoutingMode,
+	type RoutingPreview,
 	type OAuthAccountSummary,
 	type ResetCreditRedeemOutcome,
-	isWithinUsageReserve,
 	resolveCredentialIdentityKey,
 	resolveUsedFraction,
 	type UsageHistoryEntry,
@@ -24,6 +25,8 @@ import {
 	type UsageUnit,
 } from "@oh-my-pi/pi-ai";
 import { AuthBrokerClient, AuthBrokerError } from "@oh-my-pi/pi-ai/auth-broker";
+import { capFor } from "@oh-my-pi/pi-ai/auth/policy";
+import { isOverCaps } from "@oh-my-pi/pi-ai/auth/usage-report";
 import type { ClientUsageClientSummary } from "@oh-my-pi/pi-ai/usage";
 import { formatProviderName } from "@oh-my-pi/pi-tui/chrome/format";
 import { formatDuration, formatNumber, getProjectDir, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -84,10 +87,18 @@ export interface UsageCommandArgs {
 }
 
 export interface UsagePolicyDiagnosticsOptions {
-	/** Existing global fallback used when an account has no reserve override. */
+	/** Global reserve; an account without `capPct` is capped at 100 − this, except in `order` mode. */
 	globalReservePct: number;
 	/** Delegates selector matching to AuthStorage's authoritative policy matcher. */
 	getAccountPolicy: (provider: string, identity: OAuthAccountIdentity) => AuthAccountPolicy | undefined;
+	/** Provider routing mode (`AuthStorage.routing.config`); `smart` when omitted. */
+	getRoutingMode?: (provider: string) => RoutingMode;
+	/** Routing line for a provider with 2+ credentials (`AuthStorage.routing.preview` over the fetched reports). */
+	getRoutingPreview?: (provider: string, reports: readonly UsageReport[]) => RoutingPreview;
+	/** API-key weights for the line under the routing line (`AuthStorage.routing.weights`); empty hides it. */
+	getKeyWeights?: (provider: string) => readonly { label: string; weight: number }[];
+	/** Credential count of each usage-less provider with 2+ credentials; rendered as a header and routing line only. */
+	routingPools?: ReadonlyMap<string, number>;
 }
 
 export interface UsageResetExpiryOptions {
@@ -407,6 +418,9 @@ function formatLimitLine(limit: UsageLimit, labelWidth: number, nowMs: number): 
 	if (resetsAt !== undefined && resetsAt > nowMs) {
 		details.push(`${limit.window?.resetLabel ?? "resets"} in ${formatDuration(resetsAt - nowMs)}`);
 	}
+	// The id `windowCapPct` keys on, so users can copy it.
+	const windowId = limit.window?.id ?? limit.scope.windowId;
+	if (windowId) details.push(`window ${windowId}`);
 	const lines = [
 		`      ${STATUS_COLOR[status]("●")} ${padded}  ${renderBar(limit)}  ${chalk.dim(details.join(" · "))}`,
 	];
@@ -670,11 +684,21 @@ function formatPolicyLine(
 	options: UsagePolicyDiagnosticsOptions,
 ): string {
 	const policy = options.getAccountPolicy(provider, identity);
-	const priority = policy?.priority ?? 0;
-	const configuredReservePct = policy?.reservePct;
-	const inherited = configuredReservePct === undefined;
-	const reservePct = Math.max(0, Math.min(100, configuredReservePct ?? options.globalReservePct));
-	const reserveLabel = `${reservePct}% ${inherited ? "(global)" : "(override)"}`;
+	const mode = options.getRoutingMode?.(provider) ?? "smart";
+	const weight = mode === "weight" || policy?.weight !== undefined ? ` · weight ${policy?.weight ?? 1}` : "";
+	const priority = `${policy?.priority ?? 0}${weight}`;
+	const caps = capFor(policy, mode, options.globalReservePct);
+	const accountCap = caps(undefined);
+	const windowCaps = Object.entries(policy?.windowCapPct ?? {}).map(([windowId, pct]) => `${windowId} ${pct}%`);
+	const capSource =
+		windowCaps.length > 0
+			? windowCaps.join(", ")
+			: policy?.capPct !== undefined
+				? "override"
+				: accountCap === undefined
+					? "order"
+					: "global";
+	const capLabel = `${accountCap === undefined ? "none" : `${accountCap}%`} (${capSource})`;
 	// `omp usage` has no model/session context, so report the conservative
 	// account-wide state from the most-consumed visible window. Actual routing
 	// still scopes limits and selection in AuthStorage.
@@ -686,13 +710,12 @@ function formatPolicyLine(
 		.filter((fraction): fraction is number => fraction !== undefined && Number.isFinite(fraction));
 	if (usedFractions.length === 0) {
 		const unmeasured = exhausted ? "exhausted" : "reserve unknown";
-		return `policy: priority ${priority} · reserve ${reserveLabel} · ${unmeasured}`;
+		return `policy: priority ${priority} · cap ${capLabel} · ${unmeasured}`;
 	}
 	const remainingFraction = Math.max(0, 1 - Math.max(...usedFractions));
-	let state = "eligible";
-	if (exhausted || remainingFraction <= 0) state = "exhausted";
-	else if (isWithinUsageReserve(remainingFraction, reservePct / 100)) state = "inside reserve";
-	return `policy: priority ${priority} · reserve ${reserveLabel} · ${state} · ${(remainingFraction * 100).toFixed(1)}% left`;
+	const state =
+		exhausted || remainingFraction <= 0 ? " · exhausted" : isOverCaps(limits ?? [], caps) ? " · inside cap" : "";
+	return `policy: priority ${priority} · cap ${capLabel}${state} · ${(remainingFraction * 100).toFixed(1)}% left`;
 }
 
 /** `1 expires in 6h`, or `2 expire, soonest in 6h`. */
@@ -793,7 +816,12 @@ export function formatUsageBreakdown(
 	}
 
 	const providers = [
-		...new Set([...reportsByProvider.keys(), ...unreportedByProvider.keys(), ...disabledByProvider.keys()]),
+		...new Set([
+			...reportsByProvider.keys(),
+			...unreportedByProvider.keys(),
+			...disabledByProvider.keys(),
+			...(policyOptions?.routingPools?.keys() ?? []),
+		]),
 	].sort((a, b) => a.localeCompare(b));
 
 	const lines: string[] = [];
@@ -811,7 +839,8 @@ export function formatUsageBreakdown(
 	for (const provider of providers) {
 		const providerReports = reportsByProvider.get(provider) ?? [];
 		const providerUnreported = unreportedByProvider.get(provider) ?? [];
-		const accountCount = providerReports.length + providerUnreported.length;
+		const accountCount =
+			providerReports.length + providerUnreported.length || (policyOptions?.routingPools?.get(provider) ?? 0);
 		lines.push("");
 		lines.push(
 			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(`— ${accountCount} ${accountCount === 1 ? "account" : "accounts"}`)}`,
@@ -820,6 +849,25 @@ export function formatUsageBreakdown(
 		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
 		for (const note of providerNotes)
 			lines.push(`  ${chalk.dim(sanitizeText(note.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ")))}`);
+		// Routing ranks every stored credential, including API keys a report hides.
+		const credentialCount = Math.max(accountCount, accounts.filter(account => account.provider === provider).length);
+		const routing = credentialCount >= 2 ? policyOptions?.getRoutingPreview?.(provider, reports) : undefined;
+		// Weight mode names each account's share; without a policy line that is the default 1.
+		const defaultWeight = policyOptions?.getRoutingMode?.(provider) === "weight" && !policyProviders.has(provider);
+		if (routing) {
+			const next = routing.next
+				? ` · next: ${sanitizeText(redaction?.get(routing.next.label) ?? routing.next.label)} (${routing.next.reason})`
+				: "";
+			lines.push(
+				`  ${chalk.dim(`routing: ${routing.mode} · stays ${routing.stays} · sink ${routing.sink ? "on" : "off"}${next}`)}`,
+			);
+			const weights = policyOptions?.getKeyWeights?.(provider) ?? [];
+			if (weights.length > 0) {
+				lines.push(
+					`  ${chalk.dim(`weights: ${weights.map(({ label, weight }) => `${label} ${weight}`).join(" · ")}`)}`,
+				);
+			}
+		}
 
 		const limitRowKey = createLimitRowKey(providerReports);
 		const providerLimitTemplates = collectProviderLimitTemplates(providerReports, limitRowKey);
@@ -836,6 +884,8 @@ export function formatUsageBreakdown(
 				lines.push(
 					`      ${chalk.dim(formatPolicyLine(provider, usageReportIdentity(report), report.limits, policyOptions))}`,
 				);
+			} else if (defaultWeight) {
+				lines.push(`      ${chalk.dim("weight 1")}`);
 			}
 			if (report.limits.length === 0) {
 				lines.push(`      ${chalk.dim("no limits reported")}`);
@@ -859,6 +909,8 @@ export function formatUsageBreakdown(
 				lines.push(
 					`      ${chalk.dim(formatPolicyLine(provider, accountOAuthIdentity(account), undefined, policyOptions))}`,
 				);
+			} else if (defaultWeight && account.type === "oauth") {
+				lines.push(`      ${chalk.dim("weight 1")}`);
 			}
 		}
 
@@ -1586,6 +1638,9 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 		const policyOptions: UsagePolicyDiagnosticsOptions = {
 			globalReservePct: cfgRetryUsageReservePct.get(settings),
 			getAccountPolicy: (provider, identity) => authStorage.oauth.policy(provider, identity),
+			getRoutingMode: provider => authStorage.routing.config(provider).mode,
+			getRoutingPreview: (provider, reports) => authStorage.routing.preview(provider, reports),
+			getKeyWeights: provider => authStorage.routing.weights(provider),
 		};
 		const modelRegistry = await loadUsageSources(cmd, settings, authStorage);
 		const reports =
@@ -1593,11 +1648,20 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 				baseUrlResolver: provider => modelRegistry.getProviderBaseUrl(provider),
 			})) ?? [];
 		const storedAccounts = collectStoredAccounts(authStorage);
-		let accounts = selectReportableAccounts(
-			storedAccounts,
-			provider => authStorage.usage.providerFor(provider) !== undefined,
-			cmd.provider,
-		);
+		const hasUsageProvider = (provider: string) => authStorage.usage.providerFor(provider) !== undefined;
+		let accounts = selectReportableAccounts(storedAccounts, hasUsageProvider, cmd.provider);
+		// Usage-less pools get a section for their routing line only, never "no usage data" rows.
+		const routingPools = new Map<string, number>();
+		for (const account of storedAccounts) {
+			if (hasUsageProvider(account.provider)) continue;
+			routingPools.set(account.provider, (routingPools.get(account.provider) ?? 0) + 1);
+		}
+		for (const [provider, count] of routingPools) {
+			if (count < 2 || (cmd.provider && provider.toLowerCase() !== cmd.provider.toLowerCase())) {
+				routingPools.delete(provider);
+			}
+		}
+		policyOptions.routingPools = routingPools;
 		// Tombstones ride alongside the live pool so an auto-disabled account
 		// (e.g. an expired Anthropic grant) is loudly visible instead of just
 		// missing. Best-effort: a broker predating the endpoint yields [].
@@ -1663,7 +1727,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			return;
 		}
 
-		if (filteredReports.length === 0 && accounts.length === 0) {
+		if (filteredReports.length === 0 && accounts.length === 0 && routingPools.size === 0) {
 			// An explicit --provider keeps every stored account of that provider, so
 			// reaching here with one means none is stored for it. Without one,
 			// credentials may exist only for providers without a usage endpoint.

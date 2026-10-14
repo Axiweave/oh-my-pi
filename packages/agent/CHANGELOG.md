@@ -5,6 +5,8 @@
 ### Added
 
 - Added removable message-context transforms so hosts can apply session-specific provider filtering after agent construction.
+- `getApiKey(model, context)` in `AgentLoopConfig` and `AgentOptions` now gets `{ withinTurn }`. The loop sets `withinTurn: true` when the last message of the request is a tool result, so account routing can keep the turn's account.
+- Added `Agent.startNewTurn()`. The next request then gets `withinTurn: false`, so a retry after an error selects its account again under `stays: turn`.
 
 ## [18.9.2] - 2026-10-11
 
