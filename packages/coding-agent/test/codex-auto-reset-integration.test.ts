@@ -276,6 +276,53 @@ describe("Codex saved-reset consent without a prompt UI", () => {
 		expect([...coordinator.attemptedKeys]).toEqual([expect.stringContaining("openai-codex|-|1|")]);
 	});
 
+	it("never spends a disabled account's reset, and still salvages every enabled one", async () => {
+		const seed = Number(process.env.ROUTING_SEED ?? 20_260_511);
+		let state = seed >>> 0;
+		const draw = (n: number) => {
+			state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+			return (state >>> 16) % n;
+		};
+		for (let run = 0; run < 12; run++) {
+			const accounts: CodexAccount[] = Array.from({ length: 1 + draw(3) }, (_a, index) => ({
+				// Runs share the reset lock store, so each run uses its own accounts.
+				accountId: `acct-${run}-${index}`,
+				credentialId: run * 10 + index + 1,
+				weeklyUsed: 0.1,
+				limitReached: false,
+				creditExpiresInMs: 4 * MINUTE,
+			}));
+			const disabled = accounts.map(() => draw(2) === 1);
+			const { coordinator, targets } = buildSession({ accounts });
+			vi.spyOn(authStorage.oauth, "accounts").mockImplementation(() =>
+				accounts.map((account, position) => ({
+					position,
+					credentialId: account.credentialId,
+					accountId: account.accountId,
+					email: EMAIL,
+					active: position === 0,
+				})),
+			);
+			vi.spyOn(authStorage.oauth, "policy").mockImplementation((provider, identity) =>
+				disabled[accounts.findIndex(account => account.accountId === identity.accountId)]
+					? { provider, account: { accountId: identity.accountId }, disabled: true }
+					: undefined,
+			);
+
+			await sessions.at(-1)!.fetchUsageReports();
+			await coordinator.sweepPromise;
+
+			const where = `ROUTING_SEED=${seed} run=${run} disabled=${disabled}`;
+			const enabledIds = accounts.filter((_a, index) => !disabled[index]).map(account => account.credentialId);
+			expect({ where, spent: targets.map(target => target.credentialId).sort() }).toEqual({
+				where,
+				spent: enabledIds,
+			});
+			vi.restoreAllMocks();
+			vi.spyOn(envApiKey, "getEnvApiKey").mockReturnValue(undefined);
+		}
+	});
+
 	it("spends a reset about to expire for an ACP client without form elicitation", async () => {
 		const account = {
 			accountId: "acct-a",

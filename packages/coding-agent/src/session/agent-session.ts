@@ -13532,6 +13532,17 @@ export class AgentSession implements SettingsScope {
 		return this.#executeResetActions(provider, approved, coordinator);
 	}
 
+	/** Credential ids that `auth.accountPolicies` disables: no reset is ever spent on them. */
+	#disabledCredentialIds(provider: string): Set<number> {
+		const oauth = this.#modelRegistry.authStorage.oauth;
+		return new Set(
+			oauth
+				.accounts(provider)
+				.filter(account => oauth.policy(provider, account)?.disabled)
+				.map(account => account.credentialId),
+		);
+	}
+
 	#planCodexResets(
 		trigger: CodexResetTrigger,
 		reports: UsageReport[] | null,
@@ -13541,6 +13552,7 @@ export class AgentSession implements SettingsScope {
 	): CodexResetPlan {
 		const cfg = cfgCodexResets.get(this.settings);
 		const model = this.model;
+		const disabled = this.#disabledCredentialIds("openai-codex");
 		const plan = planCodexResetRedemptions({
 			nowMs: Date.now(),
 			trigger,
@@ -13550,7 +13562,11 @@ export class AgentSession implements SettingsScope {
 			identity,
 			permitsCredential: credentialId =>
 				this.#modelRegistry.authStorage.sessions.permits("openai-codex", this.sessionId, credentialId),
-			reports,
+			reports:
+				reports?.filter(report => {
+					const credentialId = report.metadata?.resetCreditCredentialId;
+					return typeof credentialId !== "number" || !disabled.has(credentialId);
+				}) ?? null,
 			attemptedKeys: coordinator.attemptedKeys,
 			deferredUntilByKey: coordinator.deferredUntilByKey,
 			lastAttemptAtByAccount: coordinator.lastAttemptAtByAccount,
@@ -13571,6 +13587,7 @@ export class AgentSession implements SettingsScope {
 	): ClaudeResetPlan {
 		const cfg = cfgClaudeResets.get(this.settings);
 		const model = this.model;
+		const disabled = this.#disabledCredentialIds("anthropic");
 		const plan = planClaudeResetRedemptions({
 			nowMs: Date.now(),
 			trigger,
@@ -13578,7 +13595,7 @@ export class AgentSession implements SettingsScope {
 			modelId: model?.provider === "anthropic" ? model.id : "",
 			settings: resetPlanSettings(cfg),
 			reports,
-			statuses,
+			statuses: statuses.filter(status => !disabled.has(status.credentialId)),
 			permitsCredential: credentialId =>
 				this.#modelRegistry.authStorage.sessions.permits("anthropic", this.sessionId, credentialId),
 			attemptedKeys: coordinator.attemptedKeys,
