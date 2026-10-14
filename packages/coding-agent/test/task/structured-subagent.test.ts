@@ -329,7 +329,7 @@ describe("structured subagent primitive", () => {
 		);
 
 		expect(policy.agent.model).toEqual(["@reviewer", "@slow"]);
-		expect(policy.effectiveAgent.tools).toEqual(["read", "grep", "glob", "web_search", "yield"]);
+		expect(policy.effectiveAgent.tools).toEqual(["read", "grep", "glob", "web_search"]);
 		expect(policy.enableIrc).toBe(false);
 		expect(policy.schema).toEqual({
 			schema: PLAN_DEBATE_REVIEW_OUTPUT_SCHEMA,

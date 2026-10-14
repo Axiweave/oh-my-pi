@@ -47,6 +47,7 @@ import {
 	TERMINAL,
 } from "./terminal-capabilities";
 import { compositeLineAt } from "./render/composite";
+import { tmuxMultiplexer } from "./multiplexers/tmux";
 import {
 	Ellipsis,
 	getWidthConfigEpoch,
@@ -57,6 +58,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "./utils";
+import { tmuxClientRendersSixel } from "./tmux";
 
 /** Full-attribute reset terminating each rendered content row. */
 export const SEGMENT_RESET = "\x1b[0m";
@@ -261,9 +263,6 @@ export interface Component {
 	 * last time.
 	 */
 	render(width: number): readonly string[];
-
-	/** Keep the composer bottom-anchored after this panel retires displaced transcript rows. */
-	readonly retireDisplacedTranscript?: boolean;
 
 	/**
 	 * Describe the component semantically for a Tern Surface Protocol
@@ -841,6 +840,10 @@ export class TUI extends Container {
 	// the first frame without the overlay repaints these rows and re-anchors,
 	// so opening a picker never scrolls history into native scrollback.
 	#overlayRestore: { top: number; rows: PreparedLine[] } | undefined;
+	// Whether native history holds rows the provider committed since the last
+	// destructive reset. Only paints write history and only a destructive reset
+	// erases it; an `append` resize replay keeps the rows it replays beneath.
+	#providerHistoryWritten = false;
 	// Viewport-relative row of the hardware cursor after the last normal paint
 	// (0 = parked at the viewport top). A resize reflows the normal buffer
 	// before the app hears about it; terminals keep the cursor attached to its
@@ -1389,6 +1392,31 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Rows of native history the last paint left on screen above a mutable
+	 * viewport that reached the bottom row, or `undefined` when that paint left
+	 * rows free below it (or none happened, or a destructive reset will repaint
+	 * from row zero). Rows above a bottom-reaching viewport may already sit in
+	 * native scrollback, which a later shrink cannot pull back down.
+	 */
+	getFilledHistoryRows(): number | undefined {
+		if (!this.#hasEverRendered || this.#clearScrollbackOnNextRender) return undefined;
+		// An overlay window parks the anchor at row 0 and stacks the covered
+		// history above the viewport itself (see #overlayRestore); padding the
+		// viewport to the full screen would push those rows off.
+		if (this.#overlayRestore !== undefined) return undefined;
+		const height = this.terminal.rows;
+		if (this.#providerWindow.length === 0 || this.#providerViewportTop + this.#providerWindow.length < height) {
+			return undefined;
+		}
+		return Math.min(this.#providerViewportTop, height);
+	}
+
+	/** Whether native history holds rows the frame provider committed since the last destructive reset. */
+	hasProviderHistory(): boolean {
+		return this.#providerHistoryWritten && !this.#clearScrollbackOnNextRender;
+	}
+
+	/**
 	 * Probe for opt-in normal-buffer click capture. The provider is read every
 	 * frame; while it returns true (and no fullscreen overlay owns the
 	 * display) the terminal reports button clicks as SGR events for inline
@@ -1529,6 +1557,9 @@ export class TUI extends Container {
 		this.terminal.onSixelSupport?.(supported => {
 			if (!supported || this.#stopped || this.#nativeLive || this.terminal.tspExpected) return;
 			if (isImageProtocolForced()) return;
+			// tmux answers DA1 for its own emulator; only its record of the
+			// attached client says whether SIXEL reaches the outer terminal.
+			if (tmuxMultiplexer.isInside() && !tmuxClientRendersSixel()) return;
 			// Keep consuming an already-requested XTSMGRAPHICS reply until it
 			// arrives or times out, even though DA1 has established support.
 			this.#enableSixelProtocol();
@@ -3565,6 +3596,7 @@ export class TUI extends Container {
 			this.#providerViewportTop = 0;
 			this.#providerWindow = [];
 			this.#providerPreparedRows = [];
+			this.#providerHistoryWritten = false;
 		}
 		// The viewport stays anchored directly below whatever history remains on
 		// screen. Appending K history rows moves the anchor down by K; the write
@@ -3801,6 +3833,7 @@ export class TUI extends Container {
 		this.#resizeBurstWidthChanged = false;
 		this.#resizeBurstResized = false;
 		this.#previousFrameLength = mutablePreparedLines.length;
+		if (preparedHistory.lines.length > 0 || replayViewportRows > 0) this.#providerHistoryWritten = true;
 		this.#clearScrollbackOnNextRender = false;
 		this.#forceViewportRepaintOnNextRender = false;
 		this.#hasEverRendered = true;

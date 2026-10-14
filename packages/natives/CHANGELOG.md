@@ -8,6 +8,29 @@
 - Fixed `glob`, `grep`, `fuzzyFind`, and `listWorkspace` ignoring the main repository's `.git/info/exclude` in a linked git worktree. The walker now follows the worktree's `.git` file to the main repository's `info/exclude`, as git does. The same fix applies to submodules. A file excluded in the main checkout is now also excluded in each of its worktrees.
 - Fixed a finished `&` background process staying a zombie inside one bash tool call. Because of the zombie, `kill -0 $!` reported it as alive, and a `while kill -0 $pid` watcher loop never ended. The shell now collects finished background processes before each command, as bash does. `wait $pid` still returns the exit status of the process.
 
+## [18.10.4] - 2026-10-13
+
+### Fixed
+
+- Fixed `pwsh` code blocks rendering without PowerShell syntax colors ([#15008](https://github.com/can1357/oh-my-pi/issues/15008)).
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added in-process `env`, `du`, `chmod`, `fold`, `rmdir`, `od`, `df`, `uptime`, `id`, and `dd` shell builtins matching GNU coreutils 9.x options, output, and exit codes (`chmod` and `id` on Unix only; `dd` is disabled with the destructive set by `PI_DISABLE_UUTILS_DESTRUCTIVE`).
+- Added an in-process `nl` shell builtin (ported from uutils coreutils 0.8.0, matching GNU `nl`), with header/body/footer numbering styles including `pBRE` regex styles, logical-page section delimiters, `-l` blank-line grouping, and `ln`/`rn`/`rz` number formats.
+
+## [18.10.0] - 2026-10-12
+
+### Added
+
+- Added `IpcServer`, `IpcConnection`, and `ipcEndpoint`: a local IPC transport over Unix sockets and Windows named pipes with owner-only access, single-instance binding, stale-endpoint takeover, and newline framing.
+
+### Changed
+
+- Optimized transport performance with task-local write coalescing and batch-based newline processing
+
 ## [18.9.2] - 2026-10-11
 
 ### Fixed

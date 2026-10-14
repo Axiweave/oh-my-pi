@@ -3,18 +3,18 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.9.2` on 2026-10-11.
+**Reviewed against:** `v18.10.4` on 2026-10-13.
 
-**Verification:** Source setup, `bun check`, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.9.2`.
-The merge had conflicts in 13 files. The resolutions preserve every fork decision and retain upstream behavior.
-Upstream moved the `auto` effort criteria into `prompts/judge/auto-thinking.json`. The fork's task effort guidance now reads that file, and the fork's `auto-thinking/criteria.ts` copy is gone.
-Upstream replaced image placement state with a live-placement registry. The fork's content-tag supersession now clears `#placementGeometry`, as upstream's `#retire` does.
-Upstream added a constant `isTranscriptBlockFinalized()` to user messages. The fork's optimistic-row version replaces it.
-The fork's overlay-restore repaint now runs after upstream's relocated image retirement and transmits.
-Upstream's empty-Enter gate (`hasInterruptibleInput`) now reads the fork's broader `queuedMessageCount`.
-315 test files ran in separate processes: every divergence check and every test file that this merge changes. Only `sixel-probe` fails, and it fails the same way at bare `v18.9.2` on this host.
-`bun run test:rs` passed all 3297 tests, with 5 skipped.
+**Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
+The launcher targets this checkout and reports `18.10.4`.
+`bun check` stops at `check:tools`, because `oxfmt` flags `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. That file has the same formatting at the pre-merge fork head, and this merge does not change it. `oxlint`, every other formatting target, all `check:types` packages, and `check:rs` pass.
+The merge had conflicts in 16 files. The resolutions preserve every fork decision and retain upstream behavior.
+Upstream removed Codex Code Mode. The fork keeps its impl-review and cyber-mode code in `agent-session.ts` without the code-mode state, and the fork's plan-mode test harness keeps its `initialModel` option.
+Upstream made plan review non-blocking with an owner. The fork's debate consensus checks run after upstream's stale-session guards.
+Upstream moved tool approval into `ApprovalDialogComponent`. The fork's IDE `needs-input` publishing works through it unchanged, and its approval test now drives that dialog.
+Upstream stopped adding `yield` to agent tool lists. The executor adds it for structured runs, so the bundled `impl-reviewer` lists only its read-only tools.
+258 test files ran in separate processes: every divergence check and every test file that this merge changes. `sixel-probe` fails at bare `v18.10.4` on this host. `sdk-tool-activation` fails its Cursor cases at the pre-merge fork head with `No API key found for cursor.`
+`bun run test:rs` passed all 3468 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -136,9 +136,11 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Preserve the pin after transcript history commits and cold startup.
 - **Decision:** Size filler from the current chrome and visible history. Let real content grow to full screen height and move older history into scrollback.
 - **Decision:** Use the current chrome height for history retirement. Save displaced command and tool rows before clipping the viewport.
+- **Decision:** Keep `RuntimeChildrenOptions.transient`. The report panel mounts as a transient root, so it clips the transcript without retiring rows.
+- **Upstream as of `v18.10.4`:** Upstream (`25d28798d9`) bills all chrome at its smallest height and removed `transient` and `pinInputToBottom`. The fork keeps current-chrome retirement and adopts upstream's `getFilledHistoryRows` top padding. That padding is off while a bottom overlay restore is active, so covered history stays on screen.
 - **Why:** A stable input position reduces visual movement in long sessions.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
-- **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/tui/test/composer-inline-shrink.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
+- **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/tui/test/composer-inline-shrink.test.ts`, `packages/tui/test/report-panel.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
 
 ### Full assistant text during streaming
 
@@ -146,9 +148,11 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Render the full mutable Markdown transcript through atomic history replacements when earlier rows change.
 - **Decision:** Preserve existing shell history on startup. Shutdown appends the unretired tail without clearing or replaying accepted history.
 - **Decision:** Use row-pressure retirement by default, with capacity based on current chrome. A live append-only head retires finished rows to native history in one batch per cycle.
+- **Decision:** An append batch keeps growing until it covers the overflow, even when its last block reaches back onto the screen.
+- **Upstream as of `v18.10.4`:** Upstream (`ddb2cfff2b`) stops a batch before any block that would reach the screen. A streamed paragraph renders as several rows, so its rows above the screen were in neither the frame nor native history.
 - **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
-- **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/modes/settings.ts`, and `packages/tui/src/tui.ts`.
-- **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts` and `packages/tui/test/history-frame-plan.test.ts`.
+- **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/tui/src/chrome/transcript-container.ts` (`#measuredAppendBatch`, `#renderedAppendBatch`), `packages/coding-agent/src/modes/settings.ts`, and `packages/tui/src/tui.ts`.
+- **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts`, `packages/tui/test/transcript-container.test.ts`, and `packages/tui/test/history-frame-plan.test.ts`.
 - **Known gap:** CLI startup still requests history clearing in `startup-composer.ts` and `main.ts`. This predates `v18.3.2`. The composer checks do not verify shell-history preservation through those callers. Keep the preservation decision.
 
 ### Collapsed command cards
@@ -355,3 +359,13 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Why:** Upstream drops the title to idle and publishes `done` at the yield, so a session that still waits on a job looks finished.
 - **Key paths:** `packages/coding-agent/src/modes/controllers/event-controller.ts` (`#handleTurnEnd`, `#handleAgentEnd`), `packages/coding-agent/src/modes/controllers/extension-ui-controller.ts`, `packages/coding-agent/src/modes/controllers/session-focus-controller.ts`, and `packages/coding-agent/src/modes/interactive-mode.ts` (`#hidePlanReview`).
 - **Checks:** `packages/coding-agent/test/modes/controllers/event-controller-abort-guard.test.ts` and `packages/coding-agent/test/modes/controllers/event-controller-ide-state.test.ts`.
+
+### Per-provider account routing
+
+- **Decision:** Keep `auth.routing.<provider>` with `mode` (`smart`, `order`, `rotate`, `weight`, `usage`, `pace`), `stays` (`auto`, `session`, `turn`, `off`, `strict`), and `sink`. `auth.accountPolicies` uses `capPct` and `windowCapPct` instead of `reservePct`, plus `weight` and `account.keySuffix`.
+- **Decision:** A `strict` session never moves to another account. After its account is removed, it fails until that account signs in again or the provider's set of accounts changes. The hold persists with the session pin, survives a restart, follows subagents, and respects session account pools.
+- **Decision:** `getApiKey(model, { withinTurn })` in the agent loop and the gateway keeps the account for a request whose last message is a tool result. Key checks do not move rotation, weight, sink, or learn-once state. `ModelRegistry.getApiKey` and `getApiKeyForProvider` throw unless the caller passes `{ skipMissing: true }`.
+- **Why:** The fork ports magpie's account pool policies. Upstream has only the `smart` selection.
+- **Key paths:** `packages/ai/src/auth/` (`routing.ts`, `select.ts`, `affinity.ts`, `rank.ts`, `rotation.ts`, `health.ts`), `packages/ai/src/auth-storage.ts`, `packages/ai/src/auth-gateway/dispatch.ts`, `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, `packages/coding-agent/src/session/credential-pin.ts`, `packages/coding-agent/src/session/turn-recovery.ts`, and `packages/coding-agent/src/config/model-registry.ts`.
+- **Checks:** `packages/ai/test/auth-storage-routing-modes.test.ts`, `packages/ai/test/auth-gateway-account-routing.test.ts`, `packages/ai/test/auth-gateway-within-turn.test.ts`, `packages/agent/test/agent.test.ts`, `packages/coding-agent/test/credential-pin.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, `packages/coding-agent/test/agent-session-retry-cap.test.ts`, and `packages/coding-agent/test/advisor-toggle.test.ts`.
+- **Retire when:** Upstream ships equivalent per-provider routing and stays modes.

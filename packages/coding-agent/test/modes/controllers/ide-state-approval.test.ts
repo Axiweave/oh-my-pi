@@ -21,6 +21,7 @@ import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controlle
 import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { Container, setKeybindings } from "@oh-my-pi/pi-tui";
+import { APPROVE_ARM_MS, ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 
 /** Fake `ide` MCP connection returned by {@link fakeIdeManager}. */
 interface FakeIdeManager {
@@ -75,9 +76,26 @@ async function flushMicrotasks(): Promise<void> {
 	for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
+function approvalDialog(ctx: InteractiveModeContext): ApprovalDialogComponent | undefined {
+	return ctx.editorContainer.children.find(child => child instanceof ApprovalDialogComponent);
+}
+
 /** The approval dialog is presented synchronously, but poll (no real timer) to stay robust. */
-async function waitForHookSelector(ctx: InteractiveModeContext): Promise<void> {
-	for (let i = 0; i < 20 && !ctx.hookSelector; i++) await Promise.resolve();
+async function waitForApprovalDialog(ctx: InteractiveModeContext): Promise<ApprovalDialogComponent> {
+	for (let i = 0; i < 20 && !approvalDialog(ctx); i++) await Promise.resolve();
+	const dialog = approvalDialog(ctx);
+	if (!dialog) throw new Error("approval dialog did not open");
+	return dialog;
+}
+
+/** Approve past the dialog's arm delay without a real wait. */
+function approve(dialog: ApprovalDialogComponent): void {
+	const now = vi.spyOn(performance, "now").mockReturnValue(performance.now() + APPROVE_ARM_MS);
+	try {
+		dialog.handleInput("\x11"); // Ctrl+Q, a default approve key
+	} finally {
+		now.mockRestore();
+	}
 }
 
 beforeAll(async () => {
@@ -236,10 +254,10 @@ describe("Approval flow IDE session-state publishing", () => {
 		const wrapper = new ExtensionToolWrapper(tool, runner) as ExtensionToolWrapper<any>;
 
 		const execution = wrapper.execute("call-1", {}, undefined, undefined, context({}));
-		await waitForHookSelector(harness.ctx);
+		const dialog = await waitForApprovalDialog(harness.ctx);
 		expect(harness.fake.sent).toEqual(["needs-input"]);
 
-		harness.ctx.hookSelector!.handleInput("\n");
+		approve(dialog);
 		await flushMicrotasks();
 		expect(harness.fake.sent).toEqual(["needs-input", "working"]);
 
@@ -273,10 +291,10 @@ describe("Approval flow IDE session-state publishing", () => {
 			},
 		});
 		const execution = wrapper.execute("call-2", {}, undefined, undefined, toolContext);
-		await waitForHookSelector(harness.ctx);
+		const dialog = await waitForApprovalDialog(harness.ctx);
 		expect(harness.fake.sent).toEqual(["needs-input"]);
 
-		harness.ctx.hookSelector!.handleInput("\n");
+		approve(dialog);
 		await flushMicrotasks();
 		expect(harness.fake.sent).toEqual(["needs-input", "working"]);
 		expect(toolContext.providerSafetyApproved).toBe(true);
@@ -304,7 +322,7 @@ describe("Approval flow IDE session-state publishing", () => {
 		bypassed.executeDeferred.resolve();
 		await bypassExecution;
 		expect(harness.fake.sent).toEqual([]);
-		expect(harness.ctx.hookSelector).toBeUndefined();
+		expect(approvalDialog(harness.ctx)).toBeUndefined();
 
 		const prompted = makeApprovalTool();
 		const promptedWrapper = new ExtensionToolWrapper(prompted.tool, runner) as ExtensionToolWrapper<any>;
@@ -315,10 +333,10 @@ describe("Approval flow IDE session-state publishing", () => {
 			undefined,
 			context({ xdevApproved: true, approval: { dangerous_tool: "prompt" } }),
 		);
-		await waitForHookSelector(harness.ctx);
+		const dialog = await waitForApprovalDialog(harness.ctx);
 		expect(harness.fake.sent).toEqual(["needs-input"]);
 
-		harness.ctx.hookSelector!.handleInput("\n");
+		approve(dialog);
 		await flushMicrotasks();
 		expect(harness.fake.sent).toEqual(["needs-input", "working"]);
 
@@ -327,7 +345,6 @@ describe("Approval flow IDE session-state publishing", () => {
 	});
 
 	it("a denied approval returns to working and rejects", async () => {
-		setKeybindings(KeybindingsManager.inMemory({ "tui.select.down": "ctrl+n" }));
 		const harness = makeHarness();
 		const ui = await harness.init();
 		const runner = createRunner();
@@ -337,11 +354,10 @@ describe("Approval flow IDE session-state publishing", () => {
 		const wrapper = new ExtensionToolWrapper(tool, runner) as ExtensionToolWrapper<any>;
 
 		const execution = wrapper.execute("call-1", {}, undefined, undefined, context({}));
-		await waitForHookSelector(harness.ctx);
+		const dialog = await waitForApprovalDialog(harness.ctx);
 		expect(harness.fake.sent).toEqual(["needs-input"]);
 
-		harness.ctx.hookSelector!.handleInput("\x0e"); // Ctrl+N: move down to "Deny"
-		harness.ctx.hookSelector!.handleInput("\n");
+		dialog.handleInput("\x1b"); // Esc denies
 		await flushMicrotasks();
 
 		await expect(execution).rejects.toThrow("Tool call denied by user");
