@@ -62,10 +62,26 @@ function selectOAuthAccount(
 	sessionId?: string,
 ): SecurityAccountRef | undefined {
 	const accounts = authStorage.oauth.accounts(provider, sessionId);
-	const selected =
-		requestedCredentialId !== undefined
-			? accounts.find(account => account.credentialId === requestedCredentialId)
-			: (accounts.find(account => account.active) ?? (accounts.length === 1 ? accounts[0] : undefined));
+	// The disable mark overrides an explicit choice too, and a scan has no session to move.
+	const isDisabled = (account: (typeof accounts)[number]) => authStorage.oauth.policy(provider, account)?.disabled;
+	const label = (account: (typeof accounts)[number]) => account.email ?? `credential ${account.credentialId}`;
+	let selected: (typeof accounts)[number] | undefined;
+	if (requestedCredentialId !== undefined) {
+		selected = accounts.find(account => account.credentialId === requestedCredentialId);
+		if (selected && isDisabled(selected)) {
+			throw new Error(
+				`Security OAuth credential ${requestedCredentialId} for ${provider} is disabled: auth.accountPolicies disables ${label(selected)}. Remove its disabled mark or pick another account.`,
+			);
+		}
+	} else {
+		const enabled = accounts.filter(account => !isDisabled(account));
+		if (accounts.length > 0 && enabled.length === 0) {
+			throw new Error(
+				`Security scans have no usable OAuth account for ${provider}: auth.accountPolicies disables ${accounts.map(label).join(", ")}. Remove a disabled mark to use this provider.`,
+			);
+		}
+		selected = enabled.find(account => account.active) ?? (enabled.length === 1 ? enabled[0] : undefined);
+	}
 	if (selected) {
 		const account: SecurityAccountRef = { provider, credentialId: selected.credentialId };
 		if (selected.accountId !== undefined) account.accountId = selected.accountId;

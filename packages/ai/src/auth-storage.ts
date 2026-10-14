@@ -19,7 +19,7 @@
  * const apiKey = await auth.keys.get("anthropic", sessionId, { modelId });
  */
 import { logger } from "@oh-my-pi/pi-utils";
-import { SessionAffinity, type SessionRestrictions } from "./auth/affinity";
+import { type AccountDisabledListeners, SessionAffinity, type SessionRestrictions } from "./auth/affinity";
 import { BlockStoreHealth, CredentialBlocks } from "./auth/blocks";
 import { KeyCascade, KeyOverrides } from "./auth/cascade";
 import { CredentialHealth } from "./auth/health";
@@ -92,6 +92,7 @@ export class AuthStorage {
 	readonly #overrides: KeyOverrides;
 	readonly #policies: AccountPolicies;
 	readonly #restrictions: SessionRestrictions = new Map();
+	readonly #accountDisabledListeners: AccountDisabledListeners = new Set();
 	#modules: AuthStorageModules;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
@@ -153,7 +154,7 @@ export class AuthStorage {
 		strict: (provider, sessionId) => this.#modules.selector.strict(provider, sessionId),
 		weights: provider => {
 			const keys = this.#modules.pool.credentials(provider).flatMap(credential =>
-				credential.type === "api_key"
+				credential.type === "api_key" && !this.#policies.isDisabled(provider, credential)
 					? [
 							{
 								label: `key …${credential.key.slice(-4)}`,
@@ -249,7 +250,14 @@ export class AuthStorage {
 		// override's `cacheVersion` separates its rows from other processes sharing the store.
 		const usageCache = new UsageCache(store, pool, provider => usage.providerFor(provider));
 		const blocks = new CredentialBlocks({ store, pool, health: blockHealth, usageCache, strategies });
-		const affinity = new SessionAffinity(store, pool, overrides, this.#restrictions);
+		const affinity = new SessionAffinity(
+			store,
+			pool,
+			overrides,
+			this.#restrictions,
+			this.#accountDisabledListeners,
+			policies,
+		);
 		const usage = new UsageService({
 			store,
 			pool,
@@ -295,6 +303,7 @@ export class AuthStorage {
 			overrides,
 			selector,
 			affinity,
+			policies,
 			rotate: (provider, sessionId, rotateOptions) => limits.rotate(provider, sessionId, rotateOptions),
 			sourceLabel,
 		});

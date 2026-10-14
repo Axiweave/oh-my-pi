@@ -114,7 +114,10 @@ export class CredentialHealth implements HealthApi {
 		const loginApiKeyPool = apiKeyPool.filter(
 			({ entry }) => entry.credential.type === "api_key" && entry.credential.source === "login",
 		);
-		const pool = origin.kind === "oauth" ? oauthPool : loginApiKeyPool;
+		// A disabled credential never serves, so it cannot make the model look healthy.
+		const pool = (origin.kind === "oauth" ? oauthPool : loginApiKeyPool).filter(
+			({ entry }) => !this.#deps.policies.isDisabled(provider, entry.credential),
+		);
 		if (pool.length === 0) return { state: "unknown", accounts: [] };
 		const sessionCredential = this.#deps.affinity.get(provider, options.sessionId);
 		const selectedCredentialId =

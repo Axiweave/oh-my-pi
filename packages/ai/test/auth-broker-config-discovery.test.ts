@@ -97,6 +97,22 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 		});
 	});
 
+	test("keeps `disabled: true` alone or with priority and capPct", async () => {
+		const accountPolicies = [
+			{ provider: "anthropic", account: { email: "off@example.com" }, disabled: true },
+			{ provider: "anthropic", account: { email: "capped@example.com" }, disabled: true, priority: 5, capPct: 80 },
+		] satisfies AuthAccountPolicies;
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			["auth:", `  accountPolicies: ${JSON.stringify(accountPolicies)}`, ""].join("\n"),
+		);
+		await expect(loadAuthAccountPolicyConfig({ agentDir })).resolves.toEqual({
+			accountPolicies,
+			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+			routing: {},
+		});
+	});
+
 	test("treats an empty or comment-only config.yml as no configuration", async () => {
 		for (const content of ["", "# nothing configured yet\n"]) {
 			await Bun.write(path.join(agentDir, "config.yml"), content);
@@ -302,6 +318,10 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 				error: "auth.accountPolicies[0].windowCapPct.5h must be a number between 1 and 100",
 			},
 			{ yaml: policy(["      reservePct: 10"]), error: "auth.accountPolicies[0] has unknown fields: reservePct" },
+			{
+				yaml: policy(['      disabled: "yes"']),
+				error: "auth.accountPolicies[0].disabled must be a boolean",
+			},
 			{
 				yaml: policy([], ['        keySuffix: "ab"']),
 				error: "auth.accountPolicies[0].account.keySuffix must have at least 4 characters",

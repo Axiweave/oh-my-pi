@@ -68,6 +68,8 @@ export interface AuthAccountPolicy {
 	readonly capPct?: number;
 	/** Per-window cap (1–100) by usage window id; overrides `capPct` for that window. */
 	readonly windowCapPct?: Readonly<Record<string, number>>;
+	/** When true, routing never selects the matched credential; it stays stored and refreshed. */
+	readonly disabled?: boolean;
 }
 
 /** Account routing mode for one provider. */
@@ -83,8 +85,12 @@ export interface ProviderRouting {
 	readonly sink?: boolean;
 }
 
-/** Effective routing settings plus the credential the next selection would pick and why. */
-export type RoutingPreview = Required<ProviderRouting> & { next?: { label: string; reason: string } };
+/** Effective routing settings, the enabled credential count, and the credential the next selection would pick and why. */
+export type RoutingPreview = Required<ProviderRouting> & {
+	/** Stored credentials routing may select: every type, minus the ones `auth.accountPolicies` disables. */
+	candidates: number;
+	next?: { label: string; reason: string };
+};
 
 /** Read access to the effective routing settings. */
 export interface RoutingApi {
@@ -1275,6 +1281,21 @@ export interface SessionsApi {
 	 * headroom, before considering a model/provider fallback.
 	 */
 	release(provider: string, sessionId: string): boolean;
+	/**
+	 * Listen for sessions whose explicitly pinned account is disabled by `auth.accountPolicies`
+	 * and that moved to another account. Fires once per move. Returns an unsubscribe function.
+	 */
+	onAccountDisabled(listener: (event: SessionAccountDisabledEvent) => void): () => void;
+}
+
+/** A session's explicit account pin was disabled by policy and the session moved to `nextLabel`. */
+export interface SessionAccountDisabledEvent {
+	readonly provider: string;
+	readonly sessionId: string;
+	/** The disabled account. */
+	readonly label: string;
+	/** The account that served the request instead. */
+	readonly nextLabel: string;
 }
 
 /** Usage reporting, observation, and provider configuration. */

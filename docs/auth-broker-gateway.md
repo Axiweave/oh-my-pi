@@ -303,7 +303,7 @@ The gateway uses the same broker URL/token resolution and account-pool environme
 | `auth.broker.url`   | unset   | Same as `OMP_AUTH_BROKER_URL`; env wins. Hidden from the settings UI. Values are resolved as a literal, an environment variable name, or `!<shell command>` to use trimmed stdout. |
 | `auth.broker.token` | unset   | Same as `OMP_AUTH_BROKER_TOKEN`; env wins. Values are resolved the same way.                                                                                                       |
 | `auth.routing` | `{}` | Per-provider routing: `auth.routing.<provider>.mode` (`smart`, `order`, `rotate`, `weight`, `usage`, `pace`; default `smart`), `.stays` (`auto`, `session`, `turn`, `off`, `strict`; default `auto`), and `.sink` (default `false`). Unknown fields or values are an error that names the setting. |
-| `auth.accountPolicies` | `[]` | Per-account routing rules: `provider`, identity selector `account` (`email`, `accountId`, `projectId`, optional `orgId` for OAuth accounts, or `keySuffix` of at least 4 characters for an API key), optional `priority`, `weight` (1–1000, default 1), `capPct` (1–100, cap on every window), and `windowCapPct` (window id → 1–100, overrides `capPct` for that window). |
+| `auth.accountPolicies` | `[]` | Per-account routing rules: `provider`, identity selector `account` (`email`, `accountId`, `projectId`, optional `orgId` for OAuth accounts, or `keySuffix` of at least 4 characters for an API key), optional `priority`, `weight` (1–1000, default 1), `capPct` (1–100, cap on every window), `windowCapPct` (window id → 1–100, overrides `capPct` for that window), and `disabled` (boolean, default `false`; the credential stays stored and refreshed, but routing never selects it). |
 | `retry.usageReservePct` | `10` | Global cap fallback: an account without its own cap is capped at `100 − usageReservePct`% of each window. Applies to selection only when the provider has at least one account policy. The usage-aware fallback health check always applies it. `order` mode ignores it. |
 
 Broker connection values come from the agent's main config file, not project settings. Account policies, routing, and the reserve use effective settings (including project/explicit config layers). Long-lived SDK sessions follow policy and routing changes on the next selection (an edit to `config.yml` needs `/reload-config`, or `config.hotReload: true`) and can replace the credential store in place when effective broker settings change; failed changes leave the current store active. `omp auth-gateway serve` reads `auth.routing` and `auth.accountPolicies` only at start, so restart the gateway to apply a change.
@@ -329,13 +329,16 @@ auth:
     - provider: openrouter
       account: { keySuffix: "x9Kq" }
       weight: 3
+    - provider: openrouter
+      account: { keySuffix: "b7Rt" }
+      disabled: true     # kept and refreshed, never selected
 retry:
   usageReservePct: 10    # global reserve; `order` ignores it
 ```
 
 #### How sessions choose and keep an account
 
-Each provider has a routing mode (`auth.routing.<provider>.mode`) that orders its accounts or keys. Every mode first skips an account that is blocked (hit a limit), disabled, outside a required plan, past its renewable allowance, or past its cap. OAuth accounts still go before API keys; the mode orders accounts inside each kind.
+Each provider has a routing mode (`auth.routing.<provider>.mode`) that orders its accounts or keys. Every mode first skips an account that is blocked (hit a limit), disabled by policy (`disabled: true`), outside a required plan, past its renewable allowance, or past its cap. A credential disabled by policy is never a fallback, not even when no other credential can serve. OAuth accounts still go before API keys; the mode orders accounts inside each kind.
 
 - `smart` (default): when the provider has account policies, Codex accounts with an untouched 5-hour window go first, accounts whose 5-hour window is at least 85% used fall back, accounts with a usage report beat accounts whose report could not be fetched, and only then does higher `priority` win. Ties go to the account whose quota would otherwise expire unused soonest.
 - `order`: accounts go by `priority` (highest first), then sign-in order. An account is used until it is blocked, refused for usage or auth, fails a plan check, reaches 100% of a window, or passes its own `capPct`/`windowCapPct`. `order` skips the global reserve (`retry.usageReservePct`), the 85% 5-hour guard, and the drain-urgency ranking.
@@ -362,8 +365,10 @@ Other rules:
 
 - API keys have no pin. Outside `smart`, the routing mode decides each API-key request, as with `stays: off`. `strict` still stops rotation to another key.
 - An account the user chose explicitly for a session is never moved by routing, caps, or the reserve, in any stays mode. It is still skipped while blocked, after a failed token refresh, or when it fails a required plan check; the session then falls through to a sibling.
+- A disabled account is skipped even when it is a pin. An explicit pin on a disabled account moves to a sibling, in any stays mode, and shows one warning: `<provider> account <label> is disabled by auth.accountPolicies. This session now uses <nextLabel>.` Under `stays: strict`, an automatic pin on a disabled account does not move. Every request fails with `No API key for provider: <provider> (session <sessionId> stays on <label> under \`stays: strict\`, and auth.accountPolicies disables that account. ...)`. The pin and hold do not change, so the session works on the same account again after the mark is removed.
+- When no credential can serve and at least one stored credential the session may use is disabled, the request fails with `No API key for provider: <provider> (auth.accountPolicies disables <labels>, and no other account or key can serve. Remove a disabled mark to use this provider.)`. Runtime, config, OAuth, login, fallback, and env keys still win before this error.
 - Pins are saved with the session. A resumed session restores its pin with its original last-use time, and subagents start on their parent's pins, then follow the stays mode. When a parked subagent is revived in the same session, its saved pin wins over the parent's automatic affinity; an explicit parent pin still wins, subject to the child's account pool.
-- `omp usage` shows a routing line for each provider with 2 or more accounts or keys, for example `routing: order · stays turn · sink off · next: first@example.com (first in order)`, and each account's caps in its policy line.
+- `omp usage` shows a routing line for each provider with 2 or more accounts or keys, not counting disabled OAuth accounts, for example `routing: order · stays turn · sink off · next: first@example.com (first in order)`, and each account's caps in its policy line. A disabled API key still counts toward the 2. A disabled account's policy line starts with `disabled` (for example `policy: disabled · priority 5 · cap 80%`), and `next:` never names a disabled credential. A disabled API key is only left out of the `weights:` line.
 
 ### Token files
 

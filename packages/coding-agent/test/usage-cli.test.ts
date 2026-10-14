@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import {
+	type AuthAccountPolicies,
 	AuthStorage,
 	type OAuthCredential,
 	type ProviderRouting,
@@ -1574,7 +1575,12 @@ describe("formatUsageBreakdown routing line", () => {
 	async function withCodexPool(
 		routing: ProviderRouting,
 		used: readonly number[],
-		run: (pool: { render(): string; select(): Promise<string | undefined> }) => Promise<void>,
+		run: (pool: {
+			authStorage: AuthStorage;
+			render(): string;
+			select(): Promise<string | undefined>;
+		}) => Promise<void>,
+		accountPolicies: AuthAccountPolicies = [],
 	): Promise<void> {
 		const reports = used.map((usedFraction, index) =>
 			createCodexUsageReport({
@@ -1587,15 +1593,17 @@ describe("formatUsageBreakdown routing line", () => {
 		const { authStorage, store } = await createRoutingStorage({
 			credentials: used.map((_used, index) => createCredential(`acct-${index}`, email(index))),
 			usageByAccount: new Map(reports.map((report, index) => [`acct-${index}`, report])),
+			accountPolicies,
 			routing: { "openai-codex": routing },
 		});
 		const policyOptions: UsagePolicyDiagnosticsOptions = {
 			globalReservePct: 10,
-			getAccountPolicy: () => undefined,
+			getAccountPolicy: (provider, identity) => authStorage.oauth.policy(provider, identity),
 			getRoutingPreview: (provider, providerReports) => authStorage.routing.preview(provider, providerReports),
 		};
 		try {
 			await run({
+				authStorage,
 				render: () =>
 					stripVTControlCharacters(formatUsageBreakdown(reports, [], Date.now(), undefined, [], policyOptions)),
 				async select() {
@@ -1640,6 +1648,31 @@ describe("formatUsageBreakdown routing line", () => {
 		});
 	});
 
+	it.each([
+		{ keyDisabled: false, routed: true },
+		{ keyDisabled: true, routed: false },
+	])(
+		"counts a stored API key toward the routing line unless it is disabled ($keyDisabled)",
+		async ({ keyDisabled, routed }) => {
+			const accountPolicies = keyDisabled
+				? [{ provider: "openai-codex", account: { keySuffix: "k3y9" }, disabled: true }]
+				: [];
+			await withCodexPool(
+				{ mode: "order" },
+				[0.1],
+				async pool => {
+					await pool.authStorage.credentials.upsert("openai-codex", {
+						type: "api_key",
+						key: "sk-test-k3y9",
+						source: "login",
+					});
+					expect(pool.render().includes("routing:")).toBe(routed);
+				},
+				accountPolicies,
+			);
+		},
+	);
+
 	it("does not advance the selection when rendered", async () => {
 		await withCodexPool({ mode: "rotate", stays: "off" }, [0.1, 0.1, 0.1], async pool => {
 			for (let request = 0; request < 4; request += 1) {
@@ -1648,6 +1681,77 @@ describe("formatUsageBreakdown routing line", () => {
 				expect(line).toContain(`next: ${await pool.select()} (its turn)`);
 			}
 		});
+	});
+
+	it("marks disabled accounts, keeps their windows, and routes only between enabled ones", async () => {
+		const seed = Number(process.env.ROUTING_SEED ?? 20_261_013);
+		console.log(`ROUTING_SEED=${seed}`);
+		let state = seed >>> 0;
+		// mulberry32
+		const random = () => {
+			state = (state + 0x6d2b79f5) >>> 0;
+			let t = Math.imul(state ^ (state >>> 15), state | 1);
+			t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+			return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+		};
+		const modes = ["smart", "order", "rotate", "weight", "usage", "pace"] as const;
+		// The two named cases first: 1 of 3 disabled, and only 1 enabled.
+		const cases = [
+			{ mode: "order" as const, used: [0.1, 0.2, 0.3], disabled: [0] },
+			{ mode: "usage" as const, used: [0.5, 0.1], disabled: [1] },
+			...Array.from({ length: 24 }, () => {
+				const used = Array.from({ length: 1 + Math.floor(random() * 5) }, () => Math.round(random() * 90) / 100);
+				return {
+					mode: modes[Math.floor(random() * modes.length)]!,
+					used,
+					disabled: used.flatMap((_used, index) => (random() < 0.4 ? [index] : [])),
+				};
+			}),
+		];
+		for (const [index, { mode, used, disabled }] of cases.entries()) {
+			const context = `ROUTING_SEED=${seed} case ${index} ${JSON.stringify({ mode, used, disabled })}`;
+			const policies = disabled.map(at => ({
+				provider: "openai-codex",
+				account: { email: email(at) },
+				disabled: true,
+			}));
+			await withCodexPool(
+				{ mode, stays: "turn" },
+				used,
+				async pool => {
+					const lines = pool
+						.render()
+						.split("\n")
+						.map(line => line.trim());
+					const block = (at: number) => {
+						const isAccount = (line: string) => line.startsWith("● user");
+						const start = lines.findIndex(line => isAccount(line) && line.includes(email(at)));
+						const end = lines.findIndex((line, i) => i > start && (isAccount(line) || line === ""));
+						return lines.slice(start, end < 0 ? undefined : end);
+					};
+					const routing = lines.find(line => line.startsWith("routing:"));
+					expect({
+						context,
+						routed: routing !== undefined,
+						nextIsDisabled: disabled.some(at => routing?.includes(`next: ${email(at)} `) === true),
+						markedDisabled: used.map((_used, at) =>
+							block(at).some(line => line.startsWith("policy: disabled · priority 0 · ")),
+						),
+						// A disabled account still shows its usage windows.
+						windowsShown: used.map((_used, at) =>
+							["1 Hour", "7 Day"].every(window => block(at).some(line => line.includes(window))),
+						),
+					}).toEqual({
+						context,
+						routed: used.length - disabled.length >= 2,
+						nextIsDisabled: false,
+						markedDisabled: used.map((_used, at) => disabled.includes(at)),
+						windowsShown: used.map(() => true),
+					});
+				},
+				policies,
+			);
+		}
 	});
 
 	it("routes a provider's section iff it holds 2+ credentials, and keeps usage-less keys out of accountsWithoutUsage", async () => {

@@ -227,6 +227,7 @@ describe("auth broker settings take effect live", () => {
 			"empty account": [{ account: {} }, "account"],
 			"short key suffix": [{ account: { keySuffix: "abc" } }, "account.keySuffix"],
 			"empty provider": [{ provider: "" }, "provider"],
+			"disabled yes": [{ disabled: "yes" }, "disabled"],
 		};
 		const agentDir = tempDir.join("agent");
 		await Bun.write(
@@ -263,6 +264,63 @@ describe("auth broker settings take effect live", () => {
 			expect(cfgAuthAccountPolicies.get(settings), context).toEqual(previous);
 			expect(await authStorage.keys.get(ROUTED_PROVIDER, `after-${run}`), context).toBe("access-a");
 		}
+	});
+
+	it("stops selecting an account as soon as a live auth.accountPolicies change disables it", async () => {
+		const agentDir = tempDir.join("agent");
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			routedConfig(`  routing: { ${ROUTED_PROVIDER}: { mode: order } }`),
+		);
+		const settings = await Settings.loadIsolated({ cwd: tempDir.path(), agentDir });
+		const authStorage = await openRoutedStorage(tempDir.path(), settings);
+		cleanups.push(() => authStorage.close());
+		const sync = createAuthStorageSettingsSync(settings, authStorage);
+		cleanups.push(() => sync.stop());
+		expect(await authStorage.keys.get(ROUTED_PROVIDER, "before-change")).toBe("access-a");
+
+		cfgAuthAccountPolicies.set(settings, [
+			{ provider: ROUTED_PROVIDER, account: { accountId: "account-a" }, priority: 100, disabled: true },
+			{ provider: ROUTED_PROVIDER, account: { accountId: "account-b" }, priority: 10 },
+		]);
+		await Promise.resolve();
+		await sync.settled();
+
+		expect(await authStorage.keys.get(ROUTED_PROVIDER, "after-change")).toBe("access-b");
+	});
+
+	it("refuses a non-boolean live disabled mark and keeps the account disabled", async () => {
+		const agentDir = tempDir.join("agent");
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			[
+				"auth:",
+				"  accountPolicies:",
+				`    - { provider: ${ROUTED_PROVIDER}, account: { accountId: account-a }, priority: 100, disabled: true }`,
+				`    - { provider: ${ROUTED_PROVIDER}, account: { accountId: account-b }, priority: 10 }`,
+				`  routing: { ${ROUTED_PROVIDER}: { mode: order } }`,
+				"",
+			].join("\n"),
+		);
+		const settings = await Settings.loadIsolated({ cwd: tempDir.path(), agentDir });
+		const authStorage = await openRoutedStorage(tempDir.path(), settings);
+		cleanups.push(() => authStorage.close());
+		const sync = createAuthStorageSettingsSync(settings, authStorage);
+		cleanups.push(() => sync.stop());
+		const previous = cfgAuthAccountPolicies.get(settings);
+		expect(await authStorage.keys.get(ROUTED_PROVIDER, "before-change")).toBe("access-b");
+
+		expect(() =>
+			cfgAuthAccountPolicies.set(settings, [
+				{ ...previous[0]!, disabled: "yes" as unknown as boolean },
+				previous[1]!,
+			]),
+		).toThrow("auth.accountPolicies[0].disabled must be a boolean");
+		await Promise.resolve();
+		await sync.settled();
+
+		expect(cfgAuthAccountPolicies.get(settings)).toEqual(previous);
+		expect(await authStorage.keys.get(ROUTED_PROVIDER, "after-change")).toBe("access-b");
 	});
 
 	it("reports a cap on a provider without usage reports on /reload-config, and keeps the previous policies", async () => {

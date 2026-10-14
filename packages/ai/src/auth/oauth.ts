@@ -253,7 +253,7 @@ export class OAuthAccounts implements OAuthApi {
 		if (this.#deps.overrides.suppressesOAuth(provider, this.#deps.affinity.isRestricted(provider, sessionId))) {
 			return [];
 		}
-		const sessionCredential = this.#deps.affinity.get(provider, sessionId);
+		const sessionCredential = this.#deps.affinity.activePin(provider, sessionId);
 		const activeCredentialId =
 			sessionCredential?.type === "oauth"
 				? this.#deps.pool.entries(provider)[sessionCredential.index]?.id

@@ -195,6 +195,7 @@ export class RateLimits implements LimitsApi {
 				(entry): entry is { credential: AuthCredential; index: number } =>
 					entry.credential.type === credentialType &&
 					entry.index !== targetIndex &&
+					!this.#deps.policies.isDisabled(provider, entry.credential) &&
 					this.#deps.affinity.allows(provider, sessionId, entry.credential),
 			);
 
@@ -498,6 +499,7 @@ export class RateLimits implements LimitsApi {
 					credential.type === sessionCredential.type &&
 					index !== sessionCredential.index &&
 					!this.#deps.blocks.isBlocked(provider, providerKey, index) &&
+					!this.#deps.policies.isDisabled(provider, credential) &&
 					this.#deps.affinity.allows(provider, sessionId, credential),
 			);
 		const target = this.#deps.pool.entries(provider)[sessionCredential.index];

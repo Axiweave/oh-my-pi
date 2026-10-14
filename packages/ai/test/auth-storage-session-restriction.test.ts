@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 
 const PROVIDER = "unit-oauth-restrict";
@@ -140,6 +141,32 @@ describe("AuthStorage session account restrictions", () => {
 
 		storage.sessions.unrestrict(PROVIDER, "session", lease);
 		expect(storage.sessions.permits(PROVIDER, "session", accountB.credentialId)).toBe(true);
+	});
+
+	test("fails with the disabled-account error when every account in the pool is disabled", async () => {
+		await storage.credentials.set(PROVIDER, [oauthCredential("a"), oauthCredential("b"), oauthCredential("c")]);
+		storage.sessions.restrict(PROVIDER, "session", ["account:acc-a", "account:acc-b"]);
+		storage.setAccountPolicies({
+			accountPolicies: ["a", "b"].map(suffix => ({
+				provider: PROVIDER,
+				account: { email: `${suffix}@example.com` },
+				disabled: true,
+			})),
+			defaultReservePct: 0,
+			routing: {},
+		});
+
+		for (let request = 0; request < 3; request += 1) {
+			const error = await storage.keys.get(PROVIDER, "session").catch((err: unknown) => err);
+			expect(error).toBeInstanceOf(AIError.MissingApiKeyError);
+			// Only the accounts this session may use are named; c is outside its pool.
+			expect((error as Error).message).toBe(
+				`No API key for provider: ${PROVIDER} (auth.accountPolicies disables a@example.com, b@example.com, and no other account or key can serve. Remove a disabled mark to use this provider.)`,
+			);
+		}
+		expect(exchanged).toEqual([]);
+		// An unrestricted session still gets the enabled account.
+		expect(await storage.keys.get(PROVIDER, "unrestricted")).toBe("access-c");
 	});
 
 	test("keeps restrictions across a credential store replacement", async () => {

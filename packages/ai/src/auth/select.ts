@@ -92,6 +92,24 @@ function signedOutError(provider: string, sessionId: string, account: StrictAcco
 	);
 }
 
+/** A strict session's automatic pin is on an account that `auth.accountPolicies` disables (E2). */
+function disabledError(provider: string, sessionId: string, label: string): Error {
+	return new AIError.MissingApiKeyError(
+		provider,
+		`No API key for provider: ${provider} (session ${sessionId} stays on ${label} under \`stays: strict\`, and auth.accountPolicies disables that account. Remove its disabled mark, change \`stays\`, or pin another account to this session.)`,
+	);
+}
+
+/**
+ * How routing output, notices, and errors name a stored credential:
+ * its OAuth account, or its API key's last 4 characters.
+ */
+export function credentialLabel(credential: AuthCredential, credentialId: number | undefined): string {
+	return credential.type === "oauth"
+		? (credential.email ?? credential.accountId ?? credential.projectId ?? `cred ${credentialId}`)
+		: `key …${credential.key.slice(-4)}`;
+}
+
 /** OAuth bearer and credential chosen for a request, with its durable row id when available. */
 export type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential; credentialId?: number };
 
@@ -169,6 +187,18 @@ export class CredentialSelector {
 		);
 	}
 
+	/** Labels of the stored credentials that a policy disables and that `sessionId` may use (error E3 names them). */
+	disabledLabels(provider: string, sessionId?: string): string[] {
+		return this.#deps.pool
+			.entries(provider)
+			.filter(
+				({ credential }) =>
+					this.#deps.policies.isDisabled(provider, credential) &&
+					this.#deps.affinity.allows(provider, sessionId, credential),
+			)
+			.map(({ id, credential }) => credentialLabel(credential, id));
+	}
+
 	/** Remember the account a strict session stays on; forget it once the session is not strict. */
 	#holdStrict(
 		provider: string,
@@ -224,6 +254,10 @@ export class CredentialSelector {
 				(held.pinHash !== undefined && credentialPinHash(provider, credential) === held.pinHash),
 		);
 		if (again) {
+			// A disabled account fails like a gone one, but the hold stays for when its mark is removed.
+			if (this.#deps.policies.isDisabled(provider, again.credential)) {
+				throw disabledError(provider, sessionId, credentialLabel(again.credential, entries[again.index]?.id));
+			}
 			if (held.goneFrom !== undefined) affinity.holdStrict(provider, sessionId, { ...held, goneFrom: undefined });
 			// A key check keeps the pin unserved, as its own pin would be.
 			if (recordAffinity) affinity.record(provider, sessionId, "oauth", again.index, undefined, false, advance);
@@ -236,6 +270,20 @@ export class CredentialSelector {
 		}
 		if (held.goneFrom === undefined) affinity.holdStrict(provider, sessionId, { ...held, goneFrom: ids });
 		throw signedOutError(provider, sessionId, held);
+	}
+
+	/** The label of `sessionId`'s explicit OAuth pin when a policy disables it and another row (`servedId`) serves. */
+	#disabledExplicitPinLabel(
+		provider: string,
+		sessionId: string | undefined,
+		servedId: number | undefined,
+	): string | undefined {
+		const pin = this.#deps.affinity.get(provider, sessionId);
+		if (pin?.type !== "oauth" || pin.explicit !== true || pin.credentialId === servedId) return undefined;
+		const entry = this.#deps.pool.entries(provider)[pin.index];
+		return entry && this.#deps.policies.isDisabled(provider, entry.credential)
+			? credentialLabel(entry.credential, entry.id)
+			: undefined;
 	}
 
 	/**
@@ -313,6 +361,7 @@ export class CredentialSelector {
 					index: number;
 				} => {
 					if (entry.credential.type !== type) return false;
+					if (this.#deps.policies.isDisabled(provider, entry.credential)) return false;
 					return filter?.(entry.credential) ?? true;
 				},
 			);
@@ -406,6 +455,7 @@ export class CredentialSelector {
 			.map((credential, index) => ({ credential, index }))
 			.filter((entry): entry is ApiKeySelection => {
 				if (entry.credential.type !== "api_key") return false;
+				if (this.#deps.policies.isDisabled(provider, entry.credential)) return false;
 				return filter?.(entry.credential) ?? true;
 			});
 
@@ -712,8 +762,11 @@ export class CredentialSelector {
 
 	/** See {@link RoutingApi.preview}: ranks the OAuth pool (else the API keys) from `reports`. */
 	preview(provider: string, reports: readonly UsageReport[]): RoutingPreview {
-		const routing = this.#deps.policies.routingFor(provider);
-		const pool = this.#deps.pool.credentials(provider).map((credential, index) => ({ credential, index }));
+		const pool = this.#deps.pool
+			.credentials(provider)
+			.map((credential, index) => ({ credential, index }))
+			.filter(({ credential }) => !this.#deps.policies.isDisabled(provider, credential));
+		const routing = { ...this.#deps.policies.routingFor(provider), candidates: pool.length };
 		const oauth = pool.filter(({ credential }) => credential.type === "oauth");
 		const credentials = oauth.length > 0 ? oauth : pool.filter(({ credential }) => credential.type === "api_key");
 		// One OAuth account beside API keys still serves first, so it is the next pick.
@@ -767,11 +820,7 @@ export class CredentialSelector {
 		) {
 			return routing;
 		}
-		const { credential } = next.selection;
-		const label =
-			credential.type === "oauth"
-				? (credential.email ?? credential.accountId ?? credential.projectId ?? `cred ${next.credentialId}`)
-				: `key …${credential.key.slice(-4)}`;
+		const label = credentialLabel(next.selection.credential, next.credentialId);
 		const reason =
 			credentials.length === 1
 				? "only account"
@@ -811,6 +860,11 @@ export class CredentialSelector {
 	 * Under `strict`, a session whose pin was dropped goes back to its account. While
 	 * that account is gone, every request throws {@link AIError.MissingApiKeyError}, until
 	 * the account signs in again or the provider's accounts change.
+	 *
+	 * An account that `auth.accountPolicies` disables is never a candidate, but its token
+	 * still refreshes in the background. Under `strict`, an automatic pin on a disabled
+	 * account throws {@link AIError.MissingApiKeyError} on every request and does not move.
+	 * An explicit pin on one moves to a sibling, and `sessions.onAccountDisabled` fires once.
 	 */
 	async resolveOAuth(
 		provider: string,
@@ -827,10 +881,34 @@ export class CredentialSelector {
 			provider,
 			stored.map(entry => entry.credential),
 		);
-		// A session restriction drops every other account before ranking, pins,
+		// FR-003: selection is local mode's only refresh trigger, so keep disabled accounts signed in,
+		// also when every account is disabled.
+		const rows = this.#deps.pool.entries(provider);
+		for (const { credential, index } of stored) {
+			const id = rows[index]?.id;
+			// Without a row id, `refresh` does not save the new token.
+			if (id === undefined || Date.now() + OAUTH_REFRESH_SKEW_MS < credential.expires) continue;
+			if (!this.#deps.policies.isDisabled(provider, credential)) continue;
+			void this.#deps.refresher.refresh(provider, credential, id).catch(error => {
+				logger.debug("Disabled OAuth account refresh failed", { provider, credentialId: id, error: String(error) });
+			});
+		}
+		// `strict` never moves an automatic pin, so a disabled one fails every request until its mark is removed.
+		if (sessionId && this.strict(provider, sessionId)) {
+			const pin = this.#deps.affinity.get(provider, sessionId);
+			const pinned = pin?.type === "oauth" ? stored.find(entry => entry.index === pin.index)?.credential : undefined;
+			if (pinned && this.#deps.policies.isDisabled(provider, pinned)) {
+				throw disabledError(provider, sessionId, credentialLabel(pinned, pin?.credentialId));
+			}
+		}
+		// A session restriction and a disabled mark drop an account before ranking, pins,
 		// and the fallback passes below, so none of them can route back to it.
-		const credentials = stored.filter(entry => this.#deps.affinity.allows(provider, sessionId, entry.credential));
-		// Every OAuth row, so a restriction that leaves the account out is not read as a sign-out.
+		const credentials = stored.filter(
+			entry =>
+				this.#deps.affinity.allows(provider, sessionId, entry.credential) &&
+				!this.#deps.policies.isDisabled(provider, entry.credential),
+		);
+		// Every OAuth row, so a restriction or a disabled mark that leaves the account out is not read as a sign-out.
 		if (sessionId) this.#backToStrictAccount(provider, sessionId, stored, options?.recordAffinity !== false, advance);
 
 		if (credentials.length === 0) return undefined;
@@ -1567,8 +1645,20 @@ export class CredentialSelector {
 			}
 			this.#deps.pool.noteBearer(provider, result.apiKey, credentialId);
 			if (options?.recordAffinity !== false) {
+				// Read before `record` replaces the pin: leaving a disabled explicit pin warns once per move.
+				const disabledPin = this.#disabledExplicitPinLabel(provider, sessionId, credentialId);
 				this.#deps.affinity.record(provider, sessionId, "oauth", selection.index, undefined, false, advance);
-				if (sessionId) this.#holdStrict(provider, sessionId, credentialId, updated);
+				if (sessionId) {
+					this.#holdStrict(provider, sessionId, credentialId, updated);
+					if (disabledPin !== undefined) {
+						this.#deps.affinity.emitAccountDisabled({
+							provider,
+							sessionId,
+							label: disabledPin,
+							nextLabel: credentialLabel(updated, credentialId),
+						});
+					}
+				}
 			}
 			return { apiKey: result.apiKey, credential: updated, credentialId };
 		} catch (error) {

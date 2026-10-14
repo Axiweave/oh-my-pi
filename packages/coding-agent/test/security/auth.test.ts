@@ -25,13 +25,80 @@ describe("exact security OAuth resolver", () => {
 			{ credentialId: 42, position: 1, active: false, accountId: "workspace-b" },
 		]);
 		const selected = selectSecurityAuth(
-			{ oauth: { accounts: listOAuthAccounts } } as unknown as AuthStorage,
+			{ oauth: { accounts: listOAuthAccounts, policy: () => undefined } } as unknown as AuthStorage,
 			model(),
 			42,
 			"session-a",
 		);
 		expect(selected).toEqual({ provider: "openai-codex", credentialId: 42, accountId: "workspace-b" });
 		expect(listOAuthAccounts).toHaveBeenCalledWith("openai-codex", "session-a");
+	});
+
+	test("an implicit pick is never a disabled account, and all-disabled fails naming them", () => {
+		const seed = Number(process.env.ROUTING_SEED ?? 20_260_511);
+		let state = seed >>> 0;
+		const draw = (n: number) => {
+			state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+			return (state >>> 16) % n;
+		};
+		for (let run = 0; run < 200; run++) {
+			const count = 1 + draw(4);
+			// `oauth.accounts()` marks at most one row active.
+			const activeAt = draw(count + 1);
+			const disabled = Array.from({ length: count }, () => draw(2) === 1);
+			const accounts = disabled.map((_d, position) => ({
+				credentialId: position + 1,
+				position,
+				active: position === activeAt,
+				email: `user${position}@example.test`,
+			}));
+			const authStorage = {
+				oauth: {
+					accounts: () => accounts,
+					policy: (_provider: string, identity: { credentialId: number }) =>
+						disabled[identity.credentialId - 1] ? { disabled: true } : undefined,
+				},
+			} as unknown as AuthStorage;
+			const where = `ROUTING_SEED=${seed} run=${run} disabled=${disabled} active=${activeAt}`;
+			const enabledIds = accounts.filter((_a, index) => !disabled[index]).map(a => a.credentialId);
+			let picked: number | undefined;
+			let error: string | undefined;
+			try {
+				const ref = selectSecurityAuth(authStorage, model(), undefined, "s");
+				if ("credentialId" in ref) picked = ref.credentialId;
+			} catch (thrown) {
+				error = thrown instanceof Error ? thrown.message : String(thrown);
+			}
+			const activeEnabled = activeAt < count && !disabled[activeAt] ? activeAt + 1 : undefined;
+			const sole = enabledIds.length === 1 ? enabledIds[0] : undefined;
+			const allDisabled =
+				"Security scans have no usable OAuth account for openai-codex: auth.accountPolicies disables " +
+				`${accounts.map(a => a.email).join(", ")}. Remove a disabled mark to use this provider.`;
+			expect({
+				where,
+				pickedEnabled: picked === undefined || enabledIds.includes(picked),
+				activeWins: activeEnabled === undefined || picked === activeEnabled,
+				soleWins: sole === undefined || picked === sole,
+				allDisabledError: enabledIds.length > 0 || error === allDisabled,
+			}).toEqual({ where, pickedEnabled: true, activeWins: true, soleWins: true, allDisabledError: true });
+			// The disable mark overrides an explicit choice, and a scan has no session to move.
+			const explicit = 1 + draw(count);
+			let explicitResult: number | string;
+			try {
+				const ref = selectSecurityAuth(authStorage, model(), explicit, "s");
+				explicitResult = "credentialId" in ref ? ref.credentialId : "provider auth";
+			} catch (thrown) {
+				explicitResult = thrown instanceof Error ? thrown.message : String(thrown);
+			}
+			expect({ where, explicit, explicitResult }).toEqual({
+				where,
+				explicit,
+				explicitResult: disabled[explicit - 1]
+					? `Security OAuth credential ${explicit} for openai-codex is disabled: auth.accountPolicies disables ` +
+						`${accounts[explicit - 1]!.email}. Remove its disabled mark or pick another account.`
+					: explicit,
+			});
+		}
 	});
 
 	test("plans provider-owned authentication for recognized Bedrock routes without OAuth", () => {

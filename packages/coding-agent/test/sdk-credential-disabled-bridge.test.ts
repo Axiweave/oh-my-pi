@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage, type CredentialDisabledEvent, getOAuthProviders } from "@oh-my-pi/pi-ai";
+import { DEFAULT_USAGE_RESERVE_PCT } from "@oh-my-pi/pi-ai/auth-storage";
 import * as oauthUtils from "@oh-my-pi/pi-ai/oauth";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -578,5 +579,89 @@ describe("createAgentSession credential_disabled subscription", () => {
 		} finally {
 			await session.dispose();
 		}
+	});
+
+	it("warns only its own session when auth.accountPolicies disables the account it pinned", async () => {
+		const dirs = makeDirs("account-disabled");
+		const authStorage = await createAuthStorage(path.join(dirs.agentDir, "agent.db"), {
+			usageProviderResolver: () => undefined,
+		});
+		const { session } = await createAgentSession(baseOptions(dirs, authStorage));
+		const notices = recordNotices(session);
+		try {
+			const account = (suffix: string) => ({
+				type: "oauth" as const,
+				access: `access-${suffix}`,
+				refresh: `refresh-${suffix}`,
+				expires: Date.now() + 60 * 60_000,
+				accountId: `account-${suffix}`,
+				email: `${suffix}@example.com`,
+			});
+			await authStorage.credentials.set("anthropic", [account("a"), account("b")]);
+			const pinned = authStorage.credentials
+				.list("anthropic")
+				.find(row => row.credential.type === "oauth" && row.credential.email === "a@example.com");
+			expect(pinned).toBeDefined();
+			const otherSessionId = `${session.sessionId}-other`;
+			expect(authStorage.sessions.pin("anthropic", session.sessionId, pinned!.id)).toBe(true);
+			expect(authStorage.sessions.pin("anthropic", otherSessionId, pinned!.id)).toBe(true);
+			authStorage.setAccountPolicies({
+				accountPolicies: [{ provider: "anthropic", account: { email: "a@example.com" }, disabled: true }],
+				defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+				routing: {},
+			});
+
+			// Another session's move reaches that session only.
+			expect(await authStorage.keys.get("anthropic", otherSessionId)).toBe("access-b");
+			expect(notices).toEqual([]);
+
+			// The new automatic pin makes the second lookup quiet: one warning per move.
+			expect(await authStorage.keys.get("anthropic", session.sessionId)).toBe("access-b");
+			expect(await authStorage.keys.get("anthropic", session.sessionId)).toBe("access-b");
+			expect(notices).toEqual([
+				{
+					type: "notice",
+					level: "warning",
+					source: CREDENTIAL_DISABLED_NOTICE_SOURCE,
+					message:
+						"anthropic account a@example.com is disabled by auth.accountPolicies. This session now uses b@example.com.",
+				},
+			]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("stops warning a disposed session when its disabled pin moves", async () => {
+		const dirs = makeDirs("account-disabled-dispose");
+		const authStorage = await createAuthStorage(path.join(dirs.agentDir, "agent.db"), {
+			usageProviderResolver: () => undefined,
+		});
+		const { session } = await createAgentSession(baseOptions(dirs, authStorage));
+		const sessionId = session.sessionId;
+		const account = (suffix: string) => ({
+			type: "oauth" as const,
+			access: `access-${suffix}`,
+			refresh: `refresh-${suffix}`,
+			expires: Date.now() + 60 * 60_000,
+			accountId: `account-${suffix}`,
+			email: `${suffix}@example.com`,
+		});
+		await authStorage.credentials.set("anthropic", [account("a"), account("b")]);
+		const pinned = authStorage.credentials
+			.list("anthropic")
+			.find(row => row.credential.type === "oauth" && row.credential.email === "a@example.com");
+		expect(authStorage.sessions.pin("anthropic", sessionId, pinned!.id)).toBe(true);
+		await session.dispose();
+		const emitNotice = vi.spyOn(session, "emitNotice");
+		authStorage.setAccountPolicies({
+			accountPolicies: [{ provider: "anthropic", account: { email: "a@example.com" }, disabled: true }],
+			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+			routing: {},
+		});
+
+		// The move still happens, but the disposed session no longer listens.
+		expect(await authStorage.keys.get("anthropic", sessionId)).toBe("access-b");
+		expect(emitNotice).not.toHaveBeenCalled();
 	});
 });

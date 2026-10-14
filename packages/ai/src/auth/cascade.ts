@@ -6,6 +6,7 @@ import * as AIError from "../error";
 import { isUsageLimitOutcome } from "../error/rate-limit";
 import { AUTHENTICATED_SENTINEL } from "../registry/types";
 import type { SessionAffinity } from "./affinity";
+import type { AccountPolicies } from "./policy";
 import type { CredentialPool } from "./pool";
 import type { CredentialSelector, OAuthResolutionResult } from "./select";
 import type {
@@ -145,6 +146,7 @@ export interface KeyCascadeDeps {
 	overrides: KeyOverrides;
 	selector: CredentialSelector;
 	affinity: SessionAffinity;
+	policies: AccountPolicies;
 	/** LimitsApi.rotate, injected to avoid a cascade↔rotation import cycle. */
 	rotate: LimitsApi["rotate"];
 	sourceLabel?: string;
@@ -176,9 +178,14 @@ export class KeyCascade implements KeysApi {
 		return fallback !== undefined && fallback !== "" && credential.key === fallback;
 	}
 
-	/** Stored credentials that carry real auth — keyless-fallback markers excluded. */
+	/** Stored credentials that carry real auth: keyless-fallback markers and credentials a policy disables are excluded. */
 	#getAuthBearingCredentials(provider: string): AuthCredential[] {
-		return this.#deps.pool.credentials(provider).filter(credential => !this.isKeylessFallback(provider, credential));
+		return this.#deps.pool
+			.credentials(provider)
+			.filter(
+				credential =>
+					!this.isKeylessFallback(provider, credential) && !this.#deps.policies.isDisabled(provider, credential),
+			);
 	}
 
 	/**
@@ -337,6 +344,9 @@ export class KeyCascade implements KeysApi {
 	 * OAuth accounts and throws {@link AIError.MissingApiKeyError} when none
 	 * can serve or a config key (a models.yml `apiKey`, often for a proxy
 	 * `baseUrl`) owns the provider, rather than using any other credential.
+	 * When no source serves and `auth.accountPolicies` disables a stored
+	 * credential the session may use, it throws {@link AIError.MissingApiKeyError}
+	 * that names the disabled credentials.
 	 * A transient OAuth refresh failure resolves `undefined`, so availability
 	 * probes move on to their next candidate; request paths use
 	 * {@link KeysApi.getWithCredential}, which surfaces it. A probe picks the
@@ -408,9 +418,12 @@ export class KeyCascade implements KeysApi {
 		}
 		if (restricted) {
 			if (oauthRefreshFailure) throw oauthRefreshFailure;
-			throw new AIError.MissingApiKeyError(
-				provider,
-				`No API key for provider: ${provider} (session ${sessionId} is restricted to its OAuth account pool and none of those accounts is available)`,
+			throw (
+				this.#disabledError(provider, sessionId) ??
+				new AIError.MissingApiKeyError(
+					provider,
+					`No API key for provider: ${provider} (session ${sessionId} is restricted to its OAuth account pool and none of those accounts is available)`,
+				)
 			);
 		}
 		if (
@@ -466,7 +479,19 @@ export class KeyCascade implements KeysApi {
 			return apiKey;
 		}
 		if (oauthRefreshFailure) throw oauthRefreshFailure;
+		const disabled = this.#disabledError(provider, sessionId);
+		if (disabled) throw disabled;
 		return undefined;
+	}
+
+	/** Error E3 when no source resolved and a policy disables a stored credential `sessionId` may use. */
+	#disabledError(provider: string, sessionId: string | undefined): AIError.MissingApiKeyError | undefined {
+		const labels = this.#deps.selector.disabledLabels(provider, sessionId);
+		if (labels.length === 0) return undefined;
+		return new AIError.MissingApiKeyError(
+			provider,
+			`No API key for provider: ${provider} (auth.accountPolicies disables ${labels.join(", ")}, and no other account or key can serve. Remove a disabled mark to use this provider.)`,
+		);
 	}
 
 	/**
@@ -552,7 +577,12 @@ export class KeyCascade implements KeysApi {
 		): string | undefined => {
 			const typed = stored
 				.map((entry, index) => ({ entry, index }))
-				.filter(({ entry }) => entry.credential.type === type && (filter?.(entry.credential) ?? true));
+				.filter(
+					({ entry }) =>
+						entry.credential.type === type &&
+						!this.#deps.policies.isDisabled(provider, entry.credential) &&
+						(filter?.(entry.credential) ?? true),
+				);
 			if (typed.length === 0) return undefined;
 			const sticky = session?.type === type ? typed.find(entry => entry.index === session.index) : undefined;
 			const chosen = sticky?.entry ?? typed[0].entry;

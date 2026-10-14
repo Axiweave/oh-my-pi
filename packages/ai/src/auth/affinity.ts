@@ -1,10 +1,17 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import { getEnvApiKey } from "../env-api-key";
-import type { AuthCredential, OAuthCredential, SessionRestrictionLease, SessionsApi } from "./types";
+import type {
+	AuthCredential,
+	OAuthCredential,
+	SessionAccountDisabledEvent,
+	SessionRestrictionLease,
+	SessionsApi,
+} from "./types";
 import type { AuthCredentialStore } from "./store";
 import type { CredentialPool } from "./pool";
 import type { KeyOverrides } from "./cascade";
+import type { AccountPolicies } from "./policy";
 import { resolveCredentialIdentityKey } from "./sqlite-credential-store";
 
 /** Prefix for persisted session-to-credential affinity. */
@@ -101,6 +108,9 @@ type SessionRestriction = { readonly allowed: ReadonlySet<string>; readonly leas
  */
 export type SessionRestrictions = Map<string, Map<string, SessionRestriction>>;
 
+/** Listeners of {@link SessionsApi.onAccountDisabled}. Owned by `AuthStorage`, so they outlive store replacement. */
+export type AccountDisabledListeners = Set<(event: SessionAccountDisabledEvent) => void>;
+
 /** Session → credential affinity (pins), persisted in the store cache. */
 export class SessionAffinity implements SessionsApi {
 	/** Tracks the last used credential per provider for a session (used for rate-limit switching). */
@@ -113,17 +123,44 @@ export class SessionAffinity implements SessionsApi {
 	#pool: CredentialPool;
 	#overrides: KeyOverrides;
 	#restrictions: SessionRestrictions;
+	#accountDisabledListeners: AccountDisabledListeners;
+	#policies: AccountPolicies;
 
 	constructor(
 		store: AuthCredentialStore,
 		pool: CredentialPool,
 		overrides: KeyOverrides,
 		restrictions: SessionRestrictions,
+		accountDisabledListeners: AccountDisabledListeners,
+		policies: AccountPolicies,
 	) {
 		this.#store = store;
 		this.#pool = pool;
 		this.#overrides = overrides;
 		this.#restrictions = restrictions;
+		this.#accountDisabledListeners = accountDisabledListeners;
+		this.#policies = policies;
+	}
+
+	onAccountDisabled(listener: (event: SessionAccountDisabledEvent) => void): () => void {
+		this.#accountDisabledListeners.add(listener);
+		return () => {
+			this.#accountDisabledListeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Tell {@link onAccountDisabled} listeners that a session left its disabled explicit pin.
+	 * A listener error is logged and never fails selection.
+	 */
+	emitAccountDisabled(event: SessionAccountDisabledEvent): void {
+		for (const listener of this.#accountDisabledListeners) {
+			try {
+				listener(event);
+			} catch (err) {
+				logger.debug("Session account-disabled listener failed", { err });
+			}
+		}
 	}
 
 	restrict(provider: string, sessionId: string, identityKeys: readonly string[]): SessionRestrictionLease {
@@ -400,6 +437,20 @@ export class SessionAffinity implements SessionsApi {
 		return credential && this.#permits(provider, sessionId, credential.index) ? credential : undefined;
 	}
 
+	/**
+	 * The session's pin as its active account: like {@link get}, but an OAuth pin on an account
+	 * that `auth.accountPolicies` disables counts as none, because the next request moves it.
+	 * Only a `stays: strict` session on an automatic pin stays there (and fails), so it keeps it.
+	 */
+	activePin(provider: string, sessionId: string | undefined): SessionCredential | undefined {
+		const pin = this.get(provider, sessionId);
+		if (pin?.type !== "oauth") return pin;
+		const credential = this.#pool.credentials(provider)[pin.index];
+		if (!credential || !this.#policies.isDisabled(provider, credential)) return pin;
+		const held = this.#policies.routingFor(provider).stays === "strict" && pin.explicit !== true;
+		return held ? pin : undefined;
+	}
+
 	#lookup(provider: string, sessionId: string): SessionCredential | undefined {
 		const live = this.#sessionLastCredential.get(provider)?.get(sessionId);
 		if (live) {
@@ -497,7 +548,7 @@ export class SessionAffinity implements SessionsApi {
 		if (this.#overrides.suppressesOAuth(provider, restricted)) return undefined;
 
 		// Prefer the session-sticky credential when available.
-		const sessionPref = this.get(provider, sessionId);
+		const sessionPref = this.activePin(provider, sessionId);
 		// If the session has been routed to a stored API key, do not inject OAuth account_uuid.
 		if (sessionPref !== undefined && sessionPref.type !== "oauth") return undefined;
 
@@ -514,7 +565,9 @@ export class SessionAffinity implements SessionsApi {
 		// filtered array would be off-by-N when any non-OAuth credential precedes the
 		// OAuth ones (e.g. [api_key, oauth_A, oauth_B] stored order).
 		const stickyCredential = sessionPref?.type === "oauth" ? allCredentials[sessionPref.index] : undefined;
-		return stickyCredential?.type === "oauth" ? stickyCredential : oauthCredentials[0];
+		if (stickyCredential?.type === "oauth") return stickyCredential;
+		// A disabled account never serves, so the unpinned fallback must not name it.
+		return oauthCredentials.find(credential => !this.#policies.isDisabled(provider, credential));
 	}
 
 	/**

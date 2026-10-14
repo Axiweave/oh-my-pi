@@ -1,4 +1,4 @@
-import { type CredentialDisabledEvent, getOAuthProviders } from "@oh-my-pi/pi-ai";
+import { type CredentialDisabledEvent, getOAuthProviders, type SessionAccountDisabledEvent } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 
 /** `notice` source of an automatic credential disable; print mode writes these to stderr. */
@@ -22,4 +22,9 @@ export function formatCredentialDisabledNotice(event: CredentialDisabledEvent): 
 		.trim();
 	const subject = account ? `${login.name} account ${account}` : `A ${login.name} account`;
 	return `${subject} was signed out automatically. Run /login to sign in again.`;
+}
+
+/** Warning for a session that left its explicit pin because `auth.accountPolicies` disables that account. */
+export function formatSessionAccountDisabledNotice(event: SessionAccountDisabledEvent): string {
+	return `${event.provider} account ${event.label} is disabled by auth.accountPolicies. This session now uses ${event.nextLabel}.`;
 }

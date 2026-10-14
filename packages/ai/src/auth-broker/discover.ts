@@ -126,7 +126,7 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 			throw new AIError.ConfigurationError(`${path} must be an object`);
 		}
 		const policy = entry as Record<string, unknown>;
-		const policyFields = ["provider", "account", "priority", "weight", "capPct", "windowCapPct"];
+		const policyFields = ["provider", "account", "priority", "weight", "capPct", "windowCapPct", "disabled"];
 		const unknownPolicyFields = Object.keys(policy).filter(key => !policyFields.includes(key));
 		if (unknownPolicyFields.length > 0) {
 			throw new AIError.ConfigurationError(`${path} has unknown fields: ${unknownPolicyFields.join(", ")}`);
@@ -183,6 +183,7 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 			...(policy.windowCapPct !== undefined
 				? { windowCapPct: policy.windowCapPct as Readonly<Record<string, number>> }
 				: {}),
+			...(policy.disabled !== undefined ? { disabled: policy.disabled as boolean } : {}),
 		};
 	});
 	validateAccountPolicies(policies);

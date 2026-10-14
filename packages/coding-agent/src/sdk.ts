@@ -201,6 +201,7 @@ import type { AuthStorage } from "./session/auth-storage";
 import {
 	CREDENTIAL_DISABLED_NOTICE_SOURCE,
 	formatCredentialDisabledNotice,
+	formatSessionAccountDisabledNotice,
 } from "./session/credential-disabled-notice";
 import { DateCwdReminderInjector } from "./session/date-cwd-reminder";
 import { createInterruptedToolResults, createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
@@ -1806,6 +1807,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 	});
 	startupCleanup.defer(unsubscribeCredentialDisabled);
+	const unsubscribeAccountDisabled = authStorage.sessions.onAccountDisabled(event => {
+		if (credentialNoticeSession && event.sessionId === credentialNoticeSession.sessionId) {
+			credentialNoticeSession.emitNotice(
+				"warning",
+				formatSessionAccountDisabledNotice(event),
+				CREDENTIAL_DISABLED_NOTICE_SOURCE,
+			);
+		}
+	});
+	startupCleanup.defer(unsubscribeAccountDisabled);
 	// Local-only and never rejects; awaited just before the first catalog read so
 	// its credential/cache I/O overlaps the cwd-scoped discoveries started below.
 	const credentialScopedCacheHydration = logger.time("hydrateCredentialScopedModelCaches", () =>
@@ -5220,6 +5231,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					}
 					unregisterUnlessParked();
 					unsubscribeCredentialDisabled();
+					unsubscribeAccountDisabled();
 					unbindSessionEffects?.();
 					restoreProviderToggles?.();
 					unsubscribeMcpNotifications?.();

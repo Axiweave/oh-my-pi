@@ -4,13 +4,16 @@ import {
 	type AuthAccountPolicy,
 	type AuthApiKeyOptions,
 	AuthStorage,
+	DEFAULT_USAGE_RESERVE_PCT,
 	type ProviderRouting,
 	resolveCredentialIdentityKey,
 	type RoutingMode,
+	type SessionAccountDisabledEvent,
 	SqliteAuthCredentialStore,
 	type StaysMode,
 } from "@oh-my-pi/pi-ai/auth-storage";
 import { credentialPinHash } from "@oh-my-pi/pi-ai/auth/affinity";
+import { OAUTH_REFRESH_SKEW_MS } from "@oh-my-pi/pi-ai/auth/refresh";
 import { getEnvApiKeyName } from "@oh-my-pi/pi-ai/env-api-key";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
@@ -43,6 +46,8 @@ type Account = {
 	weight?: number;
 	/** Token already expired, so a request refreshes it first (preflight). */
 	stale?: boolean;
+	/** `auth.accountPolicies` disables this account. */
+	disabled?: boolean;
 };
 
 const accountId = (index: number) => `acct-${index}`;
@@ -55,6 +60,25 @@ const hasPolicy = (account: Account) =>
 	account.capPct !== undefined ||
 	account.windowCapPct !== undefined ||
 	account.weight !== undefined;
+
+/** The `auth.accountPolicies` entries `accounts` describe, matched by email. */
+function policiesFor(accounts: readonly Account[]): AuthAccountPolicy[] {
+	return accounts.flatMap((account, index): AuthAccountPolicy[] =>
+		hasPolicy(account) || account.disabled
+			? [
+					{
+						provider: PROVIDER,
+						account: { email: emailOf(index) },
+						...(account.priority === undefined ? {} : { priority: account.priority }),
+						...(account.capPct === undefined ? {} : { capPct: account.capPct }),
+						...(account.windowCapPct === undefined ? {} : { windowCapPct: account.windowCapPct }),
+						...(account.weight === undefined ? {} : { weight: account.weight }),
+						...(account.disabled ? { disabled: true } : {}),
+					},
+				]
+			: [],
+	);
+}
 
 function reportFor(index: number, usage: Usage, spent: boolean | undefined): UsageReport {
 	const report = createCodexUsageReport({
@@ -93,20 +117,7 @@ async function withPool<T>(
 	const reports = accounts.flatMap((account, index) =>
 		account.usage ? [reportFor(index, account.usage, account.spent)] : [],
 	);
-	const accountPolicies = accounts.flatMap((account, index): AuthAccountPolicy[] =>
-		hasPolicy(account)
-			? [
-					{
-						provider: PROVIDER,
-						account: { email: emailOf(index) },
-						...(account.priority === undefined ? {} : { priority: account.priority }),
-						...(account.capPct === undefined ? {} : { capPct: account.capPct }),
-						...(account.windowCapPct === undefined ? {} : { windowCapPct: account.windowCapPct }),
-						...(account.weight === undefined ? {} : { weight: account.weight }),
-					},
-				]
-			: [],
-	);
+	const accountPolicies = policiesFor(accounts);
 	const { authStorage, store } = await createRoutingStorage({
 		credentials: accounts.map((account, index) => ({
 			...createCredential(accountId(index), emailOf(index)),
@@ -199,6 +210,20 @@ async function withEnvKey(run: () => Promise<void>): Promise<void> {
 	} finally {
 		if (envBefore === undefined) delete Bun.env[envName];
 		else Bun.env[envName] = envBefore;
+	}
+}
+
+/** Run with the providers' env keys unset, so only stored credentials can serve. */
+async function withoutEnvKeys(providers: readonly string[], run: () => Promise<void>): Promise<void> {
+	const names = providers.flatMap(provider => getEnvApiKeyName(provider) ?? []);
+	const before = names.map(name => Bun.env[name]);
+	for (const name of names) delete Bun.env[name];
+	try {
+		await run();
+	} finally {
+		for (const [index, name] of names.entries()) {
+			if (before[index] !== undefined) Bun.env[name] = before[index];
+		}
 	}
 }
 
@@ -2003,6 +2028,715 @@ describe("API-key pools without a usage strategy", () => {
 				authStorage.usage.setProvider("openrouter", { id: "openrouter", fetchUsage: async () => null });
 				authStorage.setAccountPolicies(next);
 				expect(authStorage.routing.config("openrouter").mode).toBe("rotate");
+			});
+		});
+	});
+});
+
+describe("disabled accounts", () => {
+	const lowAccounts = (count: number): Account[] =>
+		Array.from({ length: count }, () => ({
+			usage: { primary: 0.1, secondary: 0.1, secondaryResetMs: 72 * HOUR_MS },
+		}));
+	const emails = (count: number) => Array.from({ length: count }, (_account, index) => emailOf(index));
+	/** Contract E3. */
+	const noKeyText = (provider: string, labels: readonly string[]) =>
+		`No API key for provider: ${provider} (auth.accountPolicies disables ${labels.join(", ")}, and no other account or key can serve. Remove a disabled mark to use this provider.)`;
+	/** Contract E2. */
+	const strictText = (sessionId: string, label: string) =>
+		`No API key for provider: ${PROVIDER} (session ${sessionId} stays on ${label} under \`stays: strict\`, and auth.accountPolicies disables that account. Remove its disabled mark, change \`stays\`, or pin another account to this session.)`;
+	/** A request's value, or its error. */
+	const settle = (promise: Promise<unknown>): Promise<unknown> =>
+		promise.then(
+			value => value,
+			(error: unknown) => error,
+		);
+	const errorText = (value: unknown) =>
+		value instanceof AIError.MissingApiKeyError ? value.message : `not a missing-key error: ${String(value)}`;
+	const marked = (accounts: readonly Account[], disabled: (index: number) => boolean): Account[] =>
+		accounts.map((account, index) => ({ ...account, disabled: disabled(index) }));
+	/** Apply `accounts`' policies live, as a settings reload does. */
+	const applyPolicies = (
+		authStorage: AuthStorage,
+		accounts: readonly Account[],
+		routing: ProviderRouting,
+		extra: readonly AuthAccountPolicy[] = [],
+	) =>
+		authStorage.setAccountPolicies({
+			accountPolicies: [...policiesFor(accounts), ...extra],
+			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+			routing: { [PROVIDER]: routing },
+		});
+	/** Account ids the OAuth exchange serves from now on. */
+	const recordServed = () => {
+		const served: string[] = [];
+		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (_provider, credentials) => {
+			const credential = credentials[PROVIDER] as OAuthCredentials;
+			served.push(credential.accountId!);
+			return { apiKey: `api-${credential.accountId}`, newCredentials: credential };
+		});
+		return served;
+	};
+	const listen = (authStorage: AuthStorage) => {
+		const events: SessionAccountDisabledEvent[] = [];
+		authStorage.sessions.onAccountDisabled(event => events.push(event));
+		return events;
+	};
+
+	it("no mode selects a disabled account, not even when every enabled account is blocked or past its cap, and removing the mark makes it selectable again (FR-002)", async () => {
+		await withoutEnvKeys([PROVIDER], () =>
+			forAll(CASES, async g => {
+				const mode = g.pick(MODES);
+				const routing: ProviderRouting = { mode, stays: "off" };
+				const allDisabled = g.chance(0.15);
+				// Every enabled account is blocked or over its cap, so only a last fallback can serve.
+				const unusable = g.chance(0.3);
+				const accounts: Account[] = Array.from({ length: g.int(1, 6) }, () => {
+					const account: Account = {
+						usage: randomUsage(g, true),
+						disabled: allDisabled || g.chance(0.4),
+						...(g.chance(0.5) ? { priority: g.int(0, 3) } : {}),
+						...(g.chance(0.3) ? { weight: g.int(1, 5) } : {}),
+						...(g.chance(0.4) ? { capPct: g.int(30, 99) } : {}),
+					};
+					if (unusable && !account.disabled) {
+						if (g.chance(0.5)) {
+							account.usage = { ...account.usage!, primary: 1 };
+						} else {
+							account.capPct = g.int(30, 90);
+							account.usage = { ...account.usage!, primary: 0.1, secondary: account.capPct / 100 + 0.05 };
+						}
+					}
+					return account;
+				});
+				const disabled = accounts.map(account => account.disabled === true);
+				await withPool(accounts, { routing }, async pool => {
+					for (let request = 0; request < 5; request += 1) {
+						const served = await settle(pool.select(`s-${g.int(0, 2)}`));
+						if (disabled.every(Boolean)) {
+							expect({ mode, error: errorText(served) }).toEqual({
+								mode,
+								error: noKeyText(PROVIDER, emails(accounts.length)),
+							});
+						} else {
+							const enabled = typeof served === "number" && served >= 0 && !disabled[served];
+							expect({ mode, unusable, disabled, served, enabled }).toEqual({
+								mode,
+								unusable,
+								disabled,
+								served,
+								enabled: true,
+							});
+						}
+					}
+					// The marks go: each account that had one serves again from its stored row, with no new sign-in.
+					applyPolicies(
+						pool.authStorage,
+						marked(accounts, () => false),
+						routing,
+					);
+					const unmarked = await pool.select("unmarked");
+					expect({ mode, unmarked: unmarked >= 0 && unmarked < accounts.length }).toEqual({
+						mode,
+						unmarked: true,
+					});
+					for (const [index, wasDisabled] of disabled.entries()) {
+						if (!wasDisabled) continue;
+						applyPolicies(
+							pool.authStorage,
+							marked(accounts, other => other !== index),
+							routing,
+						);
+						expect({ mode, index, served: await pool.select(`back-${index}`) }).toEqual({
+							mode,
+							index,
+							served: index,
+						});
+					}
+					expect(pool.authStorage.credentials.list(PROVIDER).map(row => row.id)).toEqual(pool.ids);
+				});
+			}),
+		);
+	});
+
+	it("no mode selects a disabled API key, not even when every enabled key is blocked, and removing the mark makes it selectable again (FR-002)", async () => {
+		await withoutEnvKeys(["openrouter"], () =>
+			forAll(CASES, async g => {
+				const mode = g.pick(MODES);
+				const routing: ProviderRouting = { mode, stays: "off" };
+				const allDisabled = g.chance(0.15);
+				// Every enabled key is blocked, so only a last fallback can serve.
+				const unusable = g.chance(0.3);
+				const keys = Array.from({ length: g.int(1, 6) }, () => ({
+					disabled: allDisabled || g.chance(0.4),
+					priority: g.chance(0.5) ? g.int(0, 3) : undefined,
+					weight: g.chance(0.3) ? g.int(1, 5) : undefined,
+					blocked: unusable || g.chance(0.2),
+				}));
+				const disabled = keys.map(key => key.disabled);
+				const policies = (isDisabled: (index: number) => boolean) =>
+					keys.map((key, index): AuthAccountPolicy => ({
+						provider: "openrouter",
+						account: { keySuffix: keySuffixOf(index) },
+						...(key.priority === undefined ? {} : { priority: key.priority }),
+						...(key.weight === undefined ? {} : { weight: key.weight }),
+						...(isDisabled(index) ? { disabled: true } : {}),
+					}));
+				await withKeyPool(
+					keys.length,
+					{ routing, accountPolicies: policies(index => disabled[index]!) },
+					async (select, authStorage) => {
+						const ids = authStorage.credentials.list("openrouter").map(row => row.id);
+						for (const [index, key] of keys.entries()) {
+							if (!key.blocked) continue;
+							await authStorage.limits.markReached("openrouter", undefined, {
+								credentialId: ids[index],
+								retryAfterMs: HOUR_MS,
+							});
+						}
+						const labels = keys.map((_key, index) => `key …${keyOf(index).slice(-4)}`);
+						for (let request = 0; request < 5; request += 1) {
+							const served = await settle(select(`s-${g.int(0, 2)}`));
+							if (disabled.every(Boolean)) {
+								expect({ mode, error: errorText(served) }).toEqual({
+									mode,
+									error: noKeyText("openrouter", labels),
+								});
+							} else {
+								const enabled = typeof served === "number" && served >= 0 && !disabled[served];
+								expect({ mode, unusable, disabled, served, enabled }).toEqual({
+									mode,
+									unusable,
+									disabled,
+									served,
+									enabled: true,
+								});
+							}
+						}
+						const setPolicies = (isDisabled: (index: number) => boolean) =>
+							authStorage.setAccountPolicies({
+								accountPolicies: policies(isDisabled),
+								defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+								routing: { openrouter: routing },
+							});
+						setPolicies(() => false);
+						const unmarked = await select("unmarked");
+						expect({ mode, unmarked: unmarked >= 0 && unmarked < keys.length }).toEqual({ mode, unmarked: true });
+						for (const [index, wasDisabled] of disabled.entries()) {
+							if (!wasDisabled) continue;
+							setPolicies(other => other !== index);
+							expect({ mode, index, served: await select(`back-${index}`) }).toEqual({
+								mode,
+								index,
+								served: index,
+							});
+						}
+						expect(authStorage.credentials.list("openrouter").map(row => row.id)).toEqual(ids);
+					},
+				);
+			}),
+		);
+	});
+
+	it("with every OAuth account disabled, the provider's enabled API key serves; with that key disabled too, the error names all of them", async () => {
+		await withoutEnvKeys([PROVIDER], () =>
+			forAll(CASES, async g => {
+				const mode = g.pick(MODES);
+				const stays = g.pick(STAYS);
+				const routing: ProviderRouting = { mode, stays };
+				const accounts: Account[] = Array.from({ length: g.int(1, 3) }, () => ({
+					usage: randomUsage(g, true),
+					disabled: true,
+				}));
+				const keyDisabled = g.chance(0.5);
+				await withPool(accounts, { routing }, async pool => {
+					// Keys resolve as `api-acct-<n>`, so this key reads as account 99.
+					await pool.authStorage.credentials.upsert(PROVIDER, {
+						type: "api_key",
+						key: "api-acct-99",
+						source: "login",
+					});
+					if (keyDisabled) {
+						applyPolicies(pool.authStorage, accounts, routing, [
+							{ provider: PROVIDER, account: { keySuffix: "t-99" }, disabled: true },
+						]);
+					}
+					const results: unknown[] = [];
+					for (let request = 0; request < 3; request += 1)
+						results.push(await settle(pool.select(`s-${g.int(0, 1)}`)));
+					const expected = keyDisabled ? noKeyText(PROVIDER, [...emails(accounts.length), "key …t-99"]) : 99;
+					expect({
+						mode,
+						stays,
+						keyDisabled,
+						results: results.map(result => (typeof result === "number" ? result : errorText(result))),
+					}).toEqual({ mode, stays, keyDisabled, results: [expected, expected, expected] });
+				});
+			}),
+		);
+	});
+
+	it("describe() agrees with source() and the served account: it never names a disabled account", async () => {
+		await withoutEnvKeys([PROVIDER], () =>
+			forAll(CASES, async g => {
+				const mode = g.pick(MODES);
+				const allDisabled = g.chance(0.25);
+				const accounts: Account[] = Array.from({ length: g.int(1, 4) }, () => ({
+					usage: randomUsage(g, true),
+					disabled: allDisabled || g.chance(0.5),
+				}));
+				await withPool(accounts, { routing: { mode, stays: "session" } }, async pool => {
+					const { keys } = pool.authStorage;
+					const enabled = accounts.flatMap((account, index) => (account.disabled ? [] : [emailOf(index)]));
+					if (enabled.length === 0) {
+						expect({ mode, source: keys.source(PROVIDER), describe: keys.describe(PROVIDER) }).toEqual({
+							mode,
+							source: undefined,
+							describe: undefined,
+						});
+						return;
+					}
+					const named = (text: string | undefined) => /\(([^)]+)\)$/.exec(text ?? "")?.[1];
+					const served = emailOf(await pool.select("s"));
+					expect({
+						mode,
+						unpinned: enabled.includes(named(keys.describe(PROVIDER)) ?? ""),
+						pinned: named(keys.describe(PROVIDER, "s")),
+					}).toEqual({ mode, unpinned: true, pinned: served });
+				});
+			}),
+		);
+	});
+
+	it("an unpinned session's active account is never a disabled one", async () => {
+		await withoutEnvKeys([PROVIDER], () =>
+			forAll(CASES, async g => {
+				const accounts: Account[] = Array.from({ length: g.int(1, 4) }, () => ({
+					usage: randomUsage(g, true),
+					disabled: g.chance(0.5),
+				}));
+				await withPool(accounts, { routing: { mode: g.pick(MODES) } }, async pool => {
+					const enabled = accounts.flatMap((account, index) => (account.disabled ? [] : [emailOf(index)]));
+					const email = pool.authStorage.oauth.identity(PROVIDER, "unpinned")?.email;
+					expect({ enabled, email: enabled.length === 0 ? email : enabled.includes(email ?? "") }).toEqual({
+						enabled,
+						email: enabled.length === 0 ? undefined : true,
+					});
+				});
+			}),
+		);
+	});
+
+	it("a pinned account that becomes disabled stops being the active account, unless strict holds it", async () => {
+		await withoutEnvKeys([PROVIDER], () =>
+			forAll(CASES, async g => {
+				const stays = g.pick(STAYS);
+				const routing: ProviderRouting = { mode: g.pick(MODES), stays };
+				const accounts: Account[] = Array.from({ length: g.int(1, 4) }, () => ({ usage: randomUsage(g, true) }));
+				const explicit = g.chance(0.5);
+				await withPool(accounts, { routing }, async pool => {
+					const pinned = explicit ? g.int(0, accounts.length - 1) : await pool.select("s");
+					if (explicit) expect(pool.authStorage.sessions.pin(PROVIDER, "s", pool.ids[pinned]!)).toBe(true);
+					const disabled = new Set([pinned, ...accounts.flatMap((_a, index) => (g.chance(0.4) ? [index] : []))]);
+					applyPolicies(pool.authStorage, marked(accounts, index => disabled.has(index)), routing);
+					const held = stays === "strict" && !explicit;
+					const enabled = accounts.flatMap((_a, index) => (disabled.has(index) ? [] : [emailOf(index)]));
+					const identity = pool.authStorage.oauth.identity(PROVIDER, "s")?.email;
+					const active = pool.authStorage.oauth.accounts(PROVIDER, "s").find(account => account.active)?.email;
+					expect({
+						stays,
+						explicit,
+						identity: held ? identity : identity === undefined || enabled.includes(identity),
+						active,
+					}).toEqual({
+						stays,
+						explicit,
+						identity: held ? emailOf(pinned) : true,
+						active: held ? emailOf(pinned) : undefined,
+					});
+				});
+			}),
+		);
+	});
+
+	describe("token refresh (FR-003)", () => {
+		type RefreshingPool = {
+			authStorage: AuthStorage;
+			store: SqliteAuthCredentialStore;
+			ids: number[];
+			/** Account ids the fake token endpoint refreshed, in call order. */
+			refreshed: string[];
+			/** Wait for every refresh the fake started, then for the save that follows it. */
+			settle(): Promise<void>;
+		};
+
+		/** A real SQLite store and save path, with the token endpoint faked through `refreshOAuthCredential`. */
+		async function withRefreshingPool(
+			accounts: ReadonlyArray<{ disabled: boolean; expires: number }>,
+			run: (pool: RefreshingPool) => Promise<void>,
+		): Promise<void> {
+			const refreshed: string[] = [];
+			const pending: Promise<unknown>[] = [];
+			vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (_provider, credentials) => {
+				const credential = credentials[PROVIDER] as OAuthCredentials;
+				return { apiKey: `api-${credential.accountId}`, newCredentials: credential };
+			});
+			const store = new SqliteAuthCredentialStore(new Database(":memory:"));
+			const authStorage = new AuthStorage(store, {
+				usageProviderResolver: () => undefined,
+				accountPolicies: policiesFor(accounts.map(({ disabled }) => ({ disabled }))),
+				routing: { [PROVIDER]: { mode: "order", stays: "off" } },
+				refreshOAuthCredential: (_provider, _credentialId, credential) => {
+					refreshed.push(credential.accountId!);
+					const promise = Promise.resolve({
+						...credential,
+						access: `access-${credential.accountId}-new`,
+						refresh: `refresh-${credential.accountId}-new`,
+						expires: Date.now() + WEEK_MS,
+					});
+					pending.push(promise);
+					return promise;
+				},
+			});
+			try {
+				await authStorage.credentials.set(
+					PROVIDER,
+					accounts.map((account, index) => ({
+						type: "oauth" as const,
+						...createCredential(accountId(index), emailOf(index)),
+						expires: account.expires,
+					})),
+				);
+				await run({
+					authStorage,
+					store,
+					ids: authStorage.credentials.list(PROVIDER).map(row => row.id),
+					refreshed,
+					async settle() {
+						await Promise.allSettled(pending);
+						// `refreshStored` saves the row in a promise chain the selector does not return, after
+						// the fake resolves. One zero-delay yield drains it; there is no promise to await instead.
+						await Bun.sleep(0);
+					},
+				});
+			} finally {
+				vi.restoreAllMocks();
+				store.close();
+			}
+		}
+
+		const storedTokens = (pool: RefreshingPool, index: number) => {
+			const credential = pool.store
+				.listAuthCredentials(PROVIDER)
+				.find(row => row.id === pool.ids[index])?.credential;
+			return credential?.type === "oauth" ? { access: credential.access, refresh: credential.refresh } : undefined;
+		};
+
+		it("a disabled account whose token is near expiry is refreshed once and its row saves the new tokens, while another account serves", async () => {
+			for (const disabledIndex of [0, 1]) {
+				const accounts = [0, 1].map(index => ({
+					disabled: index === disabledIndex,
+					expires: Date.now() + (index === disabledIndex ? OAUTH_REFRESH_SKEW_MS / 2 : WEEK_MS),
+				}));
+				await withRefreshingPool(accounts, async pool => {
+					const served = await pool.authStorage.keys.getWithCredential(PROVIDER, "s");
+					await pool.settle();
+					expect({
+						disabledIndex,
+						served: served?.apiKey,
+						refreshed: pool.refreshed,
+						row: storedTokens(pool, disabledIndex),
+					}).toEqual({
+						disabledIndex,
+						served: `api-${accountId(1 - disabledIndex)}`,
+						refreshed: [accountId(disabledIndex)],
+						row: {
+							access: `access-${accountId(disabledIndex)}-new`,
+							refresh: `refresh-${accountId(disabledIndex)}-new`,
+						},
+					});
+				});
+			}
+		});
+
+		it("with every account disabled and expired, a request fails with the error that names them, and each account is still refreshed once", async () => {
+			await withoutEnvKeys([PROVIDER], async () => {
+				for (const count of [1, 2, 3]) {
+					const accounts = Array.from({ length: count }, () => ({ disabled: true, expires: Date.now() - 1 }));
+					await withRefreshingPool(accounts, async pool => {
+						const result = await settle(pool.authStorage.keys.getWithCredential(PROVIDER, "s"));
+						await pool.settle();
+						expect({ count, error: errorText(result), refreshed: pool.refreshed.toSorted() }).toEqual({
+							count,
+							error: noKeyText(PROVIDER, emails(count)),
+							refreshed: accounts.map((_account, index) => accountId(index)),
+						});
+					});
+				}
+			});
+		});
+
+		it("a disabled account whose token is fresh is not refreshed", async () => {
+			const accounts = [0, 1].map(index => ({ disabled: index === 0, expires: Date.now() + WEEK_MS }));
+			await withRefreshingPool(accounts, async pool => {
+				const served = await pool.authStorage.keys.getWithCredential(PROVIDER, "s");
+				await pool.settle();
+				expect({ served: served?.apiKey, refreshed: pool.refreshed }).toEqual({
+					served: `api-${accountId(1)}`,
+					refreshed: [],
+				});
+			});
+		});
+	});
+
+	describe("sessions", () => {
+		it("an automatic pin on an account that becomes disabled moves to an enabled account under auto, session, turn, and off", async () => {
+			await forAll(CASES, async g => {
+				const mode = g.pick(MODES);
+				const stays = g.pick(STAYS.filter(value => value !== "strict"));
+				const routing: ProviderRouting = { mode, stays };
+				const accounts = lowAccounts(g.int(2, 4));
+				await withPool(accounts, { routing }, async pool => {
+					const events = listen(pool.authStorage);
+					const pinned = await pool.select("s");
+					// The pinned account and maybe others are disabled; one stays enabled.
+					const others = accounts.map((_account, index) => index).filter(index => index !== pinned);
+					const kept = g.pick(others);
+					const disabled = new Set([pinned, ...others.filter(index => index !== kept && g.chance(0.5))]);
+					applyPolicies(
+						pool.authStorage,
+						marked(accounts, index => disabled.has(index)),
+						routing,
+					);
+					const picks: number[] = [];
+					for (let request = 0; request < 3; request += 1)
+						picks.push(await pool.select("s", { withinTurn: true }));
+					expect({
+						mode,
+						stays,
+						picks,
+						enabled: picks.every(pick => pick >= 0 && !disabled.has(pick)),
+						events,
+					}).toEqual({ mode, stays, picks, enabled: true, events: [] });
+				});
+			});
+		});
+
+		/** An explicit pin on an account that becomes disabled moves, and one warning names both accounts. */
+		const explicitPinMoves = async (g: Gen, stays: StaysMode) => {
+			const mode = g.pick(MODES);
+			const routing: ProviderRouting = { mode, stays };
+			const accounts = lowAccounts(g.int(2, 4));
+			const pinned = g.int(0, accounts.length - 1);
+			await withPool(accounts, { routing }, async pool => {
+				const events = listen(pool.authStorage);
+				expect(pool.authStorage.sessions.pin(PROVIDER, "s", pool.ids[pinned]!)).toBe(true);
+				expect(await pool.select("s")).toBe(pinned);
+				applyPolicies(
+					pool.authStorage,
+					marked(accounts, index => index === pinned),
+					routing,
+				);
+				const picks: number[] = [];
+				for (let request = 0; request < 5; request += 1) picks.push(await pool.select("s"));
+				expect({ mode, stays, picks, enabled: picks.every(pick => pick >= 0 && pick !== pinned), events }).toEqual({
+					mode,
+					stays,
+					picks,
+					enabled: true,
+					events: [{ provider: PROVIDER, sessionId: "s", label: emailOf(pinned), nextLabel: emailOf(picks[0]!) }],
+				});
+			});
+		};
+
+		it("an explicit pin on an account that becomes disabled moves to an enabled account and warns exactly once over 5 requests", async () => {
+			await forAll(CASES, g => explicitPinMoves(g, g.pick(STAYS.filter(value => value !== "strict"))));
+		});
+
+		it("strict: an explicit pin on an account that becomes disabled moves to an enabled account and warns exactly once", async () => {
+			await forAll(CASES, g => explicitPinMoves(g, "strict"));
+		});
+
+		it("strict: an automatic pin on an account that becomes disabled fails every request with the strict error and uses no other credential, until the mark goes", async () => {
+			await withEnvKey(async () => {
+				await forAll(CASES, async g => {
+					const mode = g.pick(MODES);
+					const routing: ProviderRouting = { mode, stays: "strict" };
+					const accounts = lowAccounts(g.int(2, 4));
+					const pinned = g.int(0, accounts.length - 1);
+					await withPool(accounts, { routing }, async pool => {
+						// Keys resolve as `api-acct-<n>`: the login key reads as 99, the env key as 98.
+						await pool.authStorage.credentials.upsert(PROVIDER, {
+							type: "api_key",
+							key: "api-acct-99",
+							source: "login",
+						});
+						const events = listen(pool.authStorage);
+						expect(
+							pool.authStorage.sessions.pin(PROVIDER, "s", pool.ids[pinned]!, { restoredAtMs: Date.now() }),
+						).toBe(true);
+						expect(await pool.select("s")).toBe(pinned);
+						const served = recordServed();
+						applyPolicies(
+							pool.authStorage,
+							marked(accounts, index => index === pinned),
+							routing,
+						);
+						const errors: string[] = [];
+						for (let request = 0; request < 3; request += 1)
+							errors.push(errorText(await settle(pool.select("s"))));
+						expect({ mode, errors, served, events }).toEqual({
+							mode,
+							errors: Array(3).fill(strictText("s", emailOf(pinned))),
+							served: [],
+							events: [],
+						});
+						applyPolicies(pool.authStorage, accounts, routing);
+						expect({ mode, back: await pool.select("s") }).toEqual({ mode, back: pinned });
+					});
+				});
+			});
+		});
+
+		it("with every account disabled, a request fails with the error that names them, whatever the pin; a strict automatic pin gets the strict error", async () => {
+			await withoutEnvKeys([PROVIDER], () =>
+				forAll(CASES, async g => {
+					const mode = g.pick(MODES);
+					const stays = g.pick(STAYS);
+					const routing: ProviderRouting = { mode, stays };
+					const accounts = lowAccounts(g.int(1, 4));
+					const pin = g.pick(["none", "explicit", "automatic"] as const);
+					const pinned = g.int(0, accounts.length - 1);
+					await withPool(accounts, { routing }, async pool => {
+						const events = listen(pool.authStorage);
+						if (pin !== "none") {
+							const pinOptions = pin === "automatic" ? { restoredAtMs: Date.now() } : undefined;
+							expect(pool.authStorage.sessions.pin(PROVIDER, "s", pool.ids[pinned]!, pinOptions)).toBe(true);
+							const first = await pool.select("s");
+							if (pin === "explicit" || stays === "strict") expect(first).toBe(pinned);
+						}
+						applyPolicies(
+							pool.authStorage,
+							marked(accounts, () => true),
+							routing,
+						);
+						const expected =
+							stays === "strict" && pin === "automatic"
+								? strictText("s", emailOf(pinned))
+								: noKeyText(PROVIDER, emails(accounts.length));
+						const errors = [errorText(await settle(pool.select("s"))), errorText(await settle(pool.select("s")))];
+						expect({ mode, stays, pin, errors, events }).toEqual({
+							mode,
+							stays,
+							pin,
+							errors: [expected, expected],
+							events: [],
+						});
+					});
+				}),
+			);
+		});
+
+		it("a pin restored on a disabled account moves to an enabled account on the first request, with no warning", async () => {
+			await forAll(CASES, async g => {
+				const mode = g.pick(MODES);
+				const stays = g.pick(STAYS.filter(value => value !== "strict"));
+				const count = g.int(2, 4);
+				const pinned = g.int(0, count - 1);
+				const accounts = marked(lowAccounts(count), index => index === pinned);
+				await withPool(accounts, { routing: { mode, stays } }, async pool => {
+					const events = listen(pool.authStorage);
+					expect(
+						pool.authStorage.sessions.pin(PROVIDER, "s", pool.ids[pinned]!, { restoredAtMs: Date.now() }),
+					).toBe(true);
+					const first = await pool.select("s", { withinTurn: true });
+					expect({ mode, stays, first, moved: first >= 0 && first !== pinned, events }).toEqual({
+						mode,
+						stays,
+						first,
+						moved: true,
+						events: [],
+					});
+				});
+			});
+		});
+
+		it("strict: a pin restored on a disabled account fails with the strict error and does not move, until the mark goes", async () => {
+			await forAll(CASES, async g => {
+				const mode = g.pick(MODES);
+				const routing: ProviderRouting = { mode, stays: "strict" };
+				const count = g.int(2, 4);
+				const pinned = g.int(0, count - 1);
+				const accounts = lowAccounts(count);
+				await withPool(
+					marked(accounts, index => index === pinned),
+					{ routing },
+					async pool => {
+						const events = listen(pool.authStorage);
+						const served = recordServed();
+						expect(
+							pool.authStorage.sessions.pin(PROVIDER, "s", pool.ids[pinned]!, { restoredAtMs: Date.now() }),
+						).toBe(true);
+						const errors: string[] = [];
+						for (let request = 0; request < 3; request += 1)
+							errors.push(errorText(await settle(pool.select("s"))));
+						expect({ mode, errors, served, events }).toEqual({
+							mode,
+							errors: Array(3).fill(strictText("s", emailOf(pinned))),
+							served: [],
+							events: [],
+						});
+						applyPolicies(pool.authStorage, accounts, routing);
+						expect({ mode, back: await pool.select("s") }).toEqual({ mode, back: pinned });
+					},
+				);
+			});
+		});
+
+		it("a subagent that inherits its parent's pins never uses the disabled account, whether it inherits before or after the mark", async () => {
+			await forAll(CASES, async g => {
+				const mode = g.pick(MODES);
+				const stays = g.pick(STAYS);
+				const routing: ProviderRouting = { mode, stays };
+				const accounts = lowAccounts(g.int(2, 4));
+				const pinned = g.int(0, accounts.length - 1);
+				const explicit = g.chance(0.5);
+				const inheritFirst = g.chance(0.5);
+				await withPool(accounts, { routing }, async pool => {
+					const { sessions } = pool.authStorage;
+					const pinOptions = explicit ? undefined : { restoredAtMs: Date.now() };
+					expect(sessions.pin(PROVIDER, "parent", pool.ids[pinned]!, pinOptions)).toBe(true);
+					await pool.select("parent");
+					if (inheritFirst) sessions.inherit("parent", "child");
+					applyPolicies(
+						pool.authStorage,
+						marked(accounts, index => index === pinned),
+						routing,
+					);
+					if (!inheritFirst) sessions.inherit("parent", "child");
+					const outcomes: string[] = [];
+					for (let request = 0; request < 3; request += 1) {
+						const result = await settle(pool.select("child"));
+						outcomes.push(
+							typeof result === "number"
+								? result >= 0 && result !== pinned
+									? "enabled account"
+									: `account ${result}`
+								: result instanceof AIError.MissingApiKeyError
+									? "no key"
+									: String(result),
+						);
+					}
+					// A strict automatic pin never moves, so the child gets no key rather than the disabled account.
+					const expected = stays === "strict" && !explicit ? "no key" : "enabled account";
+					expect({ mode, stays, explicit, inheritFirst, outcomes }).toEqual({
+						mode,
+						stays,
+						explicit,
+						inheritFirst,
+						outcomes: [expected, expected, expected],
+					});
+				});
 			});
 		});
 	});

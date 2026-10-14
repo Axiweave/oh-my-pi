@@ -143,6 +143,9 @@ export function validateAccountPolicies(accountPolicies: AuthAccountPolicies): v
 				}
 			}
 		}
+		if (policy.disabled !== undefined && typeof policy.disabled !== "boolean") {
+			throw new AIError.ConfigurationError(`${path}.disabled must be a boolean`);
+		}
 	}
 }
 
@@ -295,5 +298,10 @@ export class AccountPolicies {
 		return this.#accountPolicies.find(
 			policy => policy.provider === provider && matchesCredential(policy.account, credential),
 		);
+	}
+
+	/** Whether a policy disables `credential`: routing then never selects it, not even as a last fallback. */
+	isDisabled(provider: string, credential: AuthCredential): boolean {
+		return this.forCredential(provider, credential)?.disabled === true;
 	}
 }

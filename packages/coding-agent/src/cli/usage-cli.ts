@@ -686,7 +686,7 @@ function formatPolicyLine(
 	const policy = options.getAccountPolicy(provider, identity);
 	const mode = options.getRoutingMode?.(provider) ?? "smart";
 	const weight = mode === "weight" || policy?.weight !== undefined ? ` · weight ${policy?.weight ?? 1}` : "";
-	const priority = `${policy?.priority ?? 0}${weight}`;
+	const priority = `${policy?.disabled ? "disabled · " : ""}priority ${policy?.priority ?? 0}${weight}`;
 	const caps = capFor(policy, mode, options.globalReservePct);
 	const accountCap = caps(undefined);
 	const windowCaps = Object.entries(policy?.windowCapPct ?? {}).map(([windowId, pct]) => `${windowId} ${pct}%`);
@@ -710,12 +710,12 @@ function formatPolicyLine(
 		.filter((fraction): fraction is number => fraction !== undefined && Number.isFinite(fraction));
 	if (usedFractions.length === 0) {
 		const unmeasured = exhausted ? "exhausted" : "reserve unknown";
-		return `policy: priority ${priority} · cap ${capLabel} · ${unmeasured}`;
+		return `policy: ${priority} · cap ${capLabel} · ${unmeasured}`;
 	}
 	const remainingFraction = Math.max(0, 1 - Math.max(...usedFractions));
 	const state =
 		exhausted || remainingFraction <= 0 ? " · exhausted" : isOverCaps(limits ?? [], caps) ? " · inside cap" : "";
-	return `policy: priority ${priority} · cap ${capLabel}${state} · ${(remainingFraction * 100).toFixed(1)}% left`;
+	return `policy: ${priority} · cap ${capLabel}${state} · ${(remainingFraction * 100).toFixed(1)}% left`;
 }
 
 /** `1 expires in 6h`, or `2 expire, soonest in 6h`. */
@@ -849,9 +849,9 @@ export function formatUsageBreakdown(
 		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
 		for (const note of providerNotes)
 			lines.push(`  ${chalk.dim(sanitizeText(note.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ")))}`);
-		// Routing ranks every stored credential, including API keys a report hides.
-		const credentialCount = Math.max(accountCount, accounts.filter(account => account.provider === provider).length);
-		const routing = credentialCount >= 2 ? policyOptions?.getRoutingPreview?.(provider, reports) : undefined;
+		// Routing ranks every stored credential, including API keys a report hides, but never a disabled one.
+		const preview = policyOptions?.getRoutingPreview?.(provider, reports);
+		const routing = preview && preview.candidates >= 2 ? preview : undefined;
 		// Weight mode names each account's share; without a policy line that is the default 1.
 		const defaultWeight = policyOptions?.getRoutingMode?.(provider) === "weight" && !policyProviders.has(provider);
 		if (routing) {
