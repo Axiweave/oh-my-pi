@@ -385,7 +385,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.peekPlanProposalHandler()).toBeUndefined();
 	});
 
-	it("leaves plan mode on /new so the new session matches its empty mode record (issue #14653)", async () => {
+	it("leaves plan mode when an internal reset starts a new session, despite plan.defaultOnStartup (issue #14653)", async () => {
 		const writeTool = makeTool("write");
 		const created = createHarness(
 			Settings.isolated({
@@ -453,6 +453,26 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.sessionManager.getLastReviewPlan()).toBe(session?.reviewPlan);
 	});
 
+	it("re-enters plan mode in the session /new starts when plan.defaultOnStartup is on (issue #15627)", async () => {
+		const created = createHarness(
+			Settings.isolated({
+				"plan.defaultOnStartup": true,
+				"compaction.enabled": false,
+				modelRoles: { plan: "anthropic/claude-sonnet-4-6" },
+			}),
+		);
+		await created.init({ suppressWelcomeIntro: true });
+		const previousSessionFile = session?.sessionFile;
+
+		await created.handleNewCommand();
+
+		expect(session?.sessionFile).not.toBe(previousSessionFile);
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.sessionManager.buildSessionContext().mode).toBe("plan");
+		expect(session?.getPlanModeState()?.enabled).toBe(true);
+		expect(session?.peekPlanProposalHandler()).toBeDefined();
+		expect(session?.model?.id).toBe("claude-sonnet-4-6");
+	});
 	it("enters only when enabled and the session has no conversation or explicit mode", () => {
 		expect(startupDecisionHarness(Settings.isolated({ "compaction.enabled": false }))).toBe(false);
 		const enabled = Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false });

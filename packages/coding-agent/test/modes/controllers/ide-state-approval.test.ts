@@ -145,6 +145,8 @@ function makeHarness(): {
 			extensionRunner: undefined,
 			setUsageFallbackConfirmer: vi.fn(),
 			isStreaming: true,
+			getQueuedMessages: () => ({ steering: [], followUp: [], liveSteered: 0 }),
+			subscribe: () => () => {},
 		},
 		mcpManager: fake.manager,
 		setToolUIContext(context: ExtensionUIContext, hasUI: boolean): void {

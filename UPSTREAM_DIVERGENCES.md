@@ -3,18 +3,18 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.10.4` on 2026-10-13.
+**Reviewed against:** `v18.11.0` on 2026-10-14.
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.10.4`.
-`bun check` stops at `check:tools`, because `oxfmt` flags `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. That file has the same formatting at the pre-merge fork head, and this merge does not change it. `oxlint`, every other formatting target, all `check:types` packages, and `check:rs` pass.
-The merge had conflicts in 16 files. The resolutions preserve every fork decision and retain upstream behavior.
-Upstream removed Codex Code Mode. The fork keeps its impl-review and cyber-mode code in `agent-session.ts` without the code-mode state, and the fork's plan-mode test harness keeps its `initialModel` option.
-Upstream made plan review non-blocking with an owner. The fork's debate consensus checks run after upstream's stale-session guards.
-Upstream moved tool approval into `ApprovalDialogComponent`. The fork's IDE `needs-input` publishing works through it unchanged, and its approval test now drives that dialog.
-Upstream stopped adding `yield` to agent tool lists. The executor adds it for structured runs, so the bundled `impl-reviewer` lists only its read-only tools.
-258 test files ran in separate processes: every divergence check and every test file that this merge changes. `sixel-probe` fails at bare `v18.10.4` on this host. `sdk-tool-activation` fails its Cursor cases at the pre-merge fork head with `No API key found for cursor.`
-`bun run test:rs` passed all 3468 tests, with 5 skipped.
+The launcher targets this checkout and reports `18.11.0`.
+`bun check` stops at `check:tools`, because `oxfmt` flags `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. This merge does not change that file. `oxlint`, every other formatting target, all `check:types` packages, and `check:rs` pass.
+The merge had conflicts in 10 files. The resolutions preserve every fork decision and keep upstream behavior.
+Upstream catches a pool-blocked `MissingApiKeyError` in the retry fallback walk. The fork keeps its cyber-mode skip before that key lookup.
+Upstream adds `structured` agent frontmatter and dictation gating for native sends. The fork keeps `modelInheritsLiveThinkingLevel` and the public `nativeSendable` getter beside them.
+Upstream hangs wrapped tool-card rows under their prefix (#15677). The fork pre-wraps the collapsed write preview and the streaming edit diff for constant height. Those rows now hang under the code column and the diff rail at the same row count.
+Upstream's approval dialog reads the steering queue. The fork's `ide-state-approval` harness now stubs `getQueuedMessages` and `subscribe`.
+307 test files ran in separate processes: every divergence check, every test file that this merge changes, and the tests for each conflicted source file. `sixel-probe` and the recursive-submodule case in `task/worktree` also fail at bare `v18.11.0` on this host.
+`bun run test:rs` passed all 3504 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -183,6 +183,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 ### Constant write preview height
 
 - **Decision:** Keep the streaming write-tool preview at a constant height.
+- **Decision:** Wrapped collapsed-preview rows hang under the code column inside the reserved gutter width, so the row count stays the same.
 - **Why:** Stable preview geometry prevents the composer and transcript from moving during streamed arguments.
 - **Key path:** `packages/tui/src/tools/write.ts`.
 - **Checks:** `packages/tui/test/write-streaming-incremental-render.test.ts` and `packages/coding-agent/test/write-streaming-preview-expand.test.ts`.

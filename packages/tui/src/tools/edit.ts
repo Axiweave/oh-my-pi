@@ -548,9 +548,10 @@ function formatStreamingDiff(
 		// Wrap the RENDERED rows, not the raw ones the tail was measured on:
 		// renderDiff pads line numbers to a 3-column gutter, so a raw row can
 		// measure one column narrower than the row the frame actually draws.
+		// Continuations hang under the diff rail, like the finished diff.
 		const rows = renderDiffColored(tail.content, { filePath: rawPath, theme: uiTheme })
 			.split("\n")
-			.flatMap(row => wrapTextWithAnsi(row.trimEnd(), innerWidth));
+			.flatMap(row => wrapEditRendererLine(row.trimEnd(), innerWidth));
 		// A single line taller than the window is admitted whole by the tail
 		// slicer; cut it back to the budget instead of blowing the frame open.
 		const over = rows.length > bodyRows;
@@ -1164,7 +1165,10 @@ export const editToolRenderer = {
 				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 				return {
 					header,
-					sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
+					sections:
+						bodyLines.length > 0
+							? [{ content: bodyLines.flatMap(line => wrapEditRendererLine(line, Math.max(1, width - 2))) }]
+							: [],
 					phase: applyPatchError ? "error" : "pending",
 					borderColor: applyPatchError ? "error" : "borderMuted",
 					contentPaddingLeft: 0,

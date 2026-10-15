@@ -7,6 +7,7 @@ import { getLanguageFromPath } from "../lang-from-path";
 import { createHighlightStream, highlightCode, type Theme } from "../theme/theme";
 import { fileHyperlink, renderStatusLine } from "../render";
 import { framedToolCard } from "../render/tool-card";
+import { wrapPrefixedLine } from "../render/hanging-wrap";
 import {
 	cachedRenderedString,
 	createRenderedStringCache,
@@ -400,8 +401,8 @@ function sliceStreamingContentTail(
  * Measuring rows one way and letting the output block wrap another way is
  * what made this frame change size for so long. Emitting pre-wrapped rows keeps
  * a single source of truth: every row here already fits the frame, so the block
- * re-wraps nothing. Continuation rows carry no gutter, matching how the block's
- * own wrapping rendered them.
+ * re-wraps nothing. Continuation rows hang under the code column: the gutter's
+ * width in spaces, which `innerWidth` already reserves, so the row count holds.
  *
  * Over-budget rows are cut from the far end — `tail` keeps the newest rows (the
  * streaming edge), `head` keeps the first. Only a single line taller than the
@@ -419,6 +420,7 @@ function previewBodyRows(
 	uiTheme: Theme,
 ): string[] {
 	const rows: string[] = [];
+	const hang = " ".repeat(lineNumberWidth + 1);
 	for (let i = 0; i < highlighted.length; i++) {
 		const gutter = uiTheme.fg("dim", `${String(firstLineNumber + i).padStart(lineNumberWidth, " ")} `);
 		const wrapped = wrapTextWithAnsi(replaceTabs(highlighted[i] ?? ""), innerWidth);
@@ -426,7 +428,7 @@ function previewBodyRows(
 			rows.push(gutter);
 			continue;
 		}
-		for (let r = 0; r < wrapped.length; r++) rows.push(r === 0 ? `${gutter}${wrapped[r]}` : (wrapped[r] ?? ""));
+		for (let r = 0; r < wrapped.length; r++) rows.push(`${r === 0 ? gutter : hang}${wrapped[r]}`);
 	}
 	if (rows.length <= targetRows) return rows;
 	return anchor === "tail" ? rows.slice(rows.length - targetRows) : rows.slice(0, targetRows);
@@ -564,6 +566,15 @@ function formatStreamingContent(
 	// expanded preview could never scroll-append mid-stream.
 	const spinner = spinnerFrame !== undefined ? `${formatStatusIcon("running", uiTheme, spinnerFrame)} ` : "";
 	return `${bodyText}${spinner}${uiTheme.fg("dim", `… (streaming)`)}`;
+}
+
+function wrapWritePreviewRows(lines: string[], width: number): string[] {
+	return lines.flatMap(line => {
+		const gutter = /^(\x1b\[[0-9;]*m)( *\d+ )(\x1b\[[0-9;]*m)(.*)$/.exec(line);
+		if (!gutter) return line;
+		const prefix = `${gutter[1]}${gutter[2]}${gutter[3]}`;
+		return wrapPrefixedLine(prefix, " ".repeat(Bun.stringWidth(gutter[2]!)), gutter[4] ?? "", width);
+	});
 }
 
 function renderContentPreview(
@@ -868,7 +879,7 @@ export const writeToolRenderer = {
 				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 				return {
 					header,
-					sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
+					sections: bodyLines.length > 0 ? [{ content: wrapWritePreviewRows(bodyLines, contentWidth) }] : [],
 					phase: "pending",
 					borderColor: "borderMuted",
 				};
@@ -974,7 +985,7 @@ export const writeToolRenderer = {
 			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 			return {
 				header,
-				sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
+				sections: bodyLines.length > 0 ? [{ content: wrapWritePreviewRows(bodyLines, contentWidth) }] : [],
 				phase: isPartial ? "partial" : "success",
 				borderColor: "borderMuted",
 			};
