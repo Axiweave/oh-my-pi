@@ -8,7 +8,7 @@
  * over MCP would see.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import type { AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool, type AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -142,6 +142,8 @@ function makeHarness(): {
 		},
 		editorContainer,
 		session: {
+			// Approvals read and reorder the agent's steering queue.
+			agent: new Agent(),
 			extensionRunner: undefined,
 			setUsageFallbackConfirmer: vi.fn(),
 			isStreaming: true,

@@ -43,7 +43,7 @@ import {
 	readQueueChipText,
 	resolveAbortLabel,
 } from "../../session/messages";
-import { formatApprovalPrompt, resolveApproval } from "../../tools/approval";
+import { formatApprovalPrompt, resolveApproval, sessionApprovalScope } from "../../tools/approval";
 import { recoverAskQuestions } from "../../tools/ask";
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
@@ -1987,12 +1987,16 @@ export class EventController {
 			const questions = recoverAskQuestions(args)?.map(question => question.question);
 			return { state: "blocked", kind: "question", msg: questions?.join(" ") };
 		}
-		const tool = this.ctx.viewSession.getToolByName(toolName);
+		const session = this.ctx.viewSession;
+		const tool = session.getToolByName(toolName);
 		if (!tool) return undefined;
 		const mode = cfgToolsApprovalMode.get(settings);
 		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(settings);
 		const approval = resolveApproval(tool, args, mode, userPolicies);
 		if (approval.policy !== "prompt") return undefined;
+		// Approved for this session: the wrapper runs it without asking.
+		const scope = sessionApprovalScope(approval, tool.name);
+		if (scope && session.extensionRunner?.hasSessionApproval(scope.key)) return undefined;
 		return { state: "blocked", kind: "permission", msg: formatApprovalPrompt(tool, args, approval.reason) };
 	}
 
@@ -2276,7 +2280,18 @@ export class EventController {
 		// leaving "Working…" gone while the agent keeps running. The live turn owns
 		// the loader and finalizes it at its own agent_end (isStreaming === false by
 		// then). Mirrors the collab guest's !isStreaming loader reconciler.
-		if (this.ctx.session.isStreaming) return;
+		if (this.ctx.session.isStreaming) {
+			// A focused worker can end while the main session streams; its run is
+			// over even though main's is not. Tear down only what the viewed worker
+			// owns (its loader); main-owned work waits for main's own settle.
+			const view = this.ctx.viewSession;
+			if (view !== this.ctx.session && !view.isStreaming && this.ctx.loadingAnimation) {
+				this.ctx.loadingAnimation.stop();
+				this.ctx.loadingAnimation = undefined;
+				this.ctx.statusContainer.disposeChildren();
+			}
+			return;
+		}
 		// A non-terminal settle (`isTerminal: false`) is a scheduling pause, not the
 		// end of the run: the agent's own continuation (reminder, retry, queued
 		// steer/follow-up, IRC wake) follows, or background work may re-wake it.
@@ -2548,14 +2563,14 @@ export class EventController {
 				if (!event.skipped) {
 					this.ctx.rebuildChatFromMessages();
 					this.ctx.statusLine.invalidate();
-					this.ctx.ui.requestRender();
+					this.ctx.ui.requestRender(true, { clearScrollback: true });
 				}
 				this.ctx.showWarning(event.errorMessage);
 			} else if (!event.skipped) {
 				this.ctx.lastAssistantUsage = undefined;
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.statusLine.invalidate();
-				this.ctx.ui.requestRender();
+				this.ctx.ui.requestRender(true, { clearScrollback: true });
 				this.ctx.showStatus("Auto-shake completed");
 			}
 		} else if (event.result) {

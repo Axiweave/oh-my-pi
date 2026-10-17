@@ -3,18 +3,18 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.11.0` on 2026-10-14.
+**Reviewed against:** `v18.11.3` on 2026-10-16.
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.11.0`.
+The launcher targets this checkout and reports `18.11.3`.
 `bun check` stops at `check:tools`, because `oxfmt` flags `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. This merge does not change that file. `oxlint`, every other formatting target, all `check:types` packages, and `check:rs` pass.
-The merge had conflicts in 10 files. The resolutions preserve every fork decision and keep upstream behavior.
-Upstream catches a pool-blocked `MissingApiKeyError` in the retry fallback walk. The fork keeps its cyber-mode skip before that key lookup.
-Upstream adds `structured` agent frontmatter and dictation gating for native sends. The fork keeps `modelInheritsLiveThinkingLevel` and the public `nativeSendable` getter beside them.
-Upstream hangs wrapped tool-card rows under their prefix (#15677). The fork pre-wraps the collapsed write preview and the streaming edit diff for constant height. Those rows now hang under the code column and the diff rail at the same row count.
-Upstream's approval dialog reads the steering queue. The fork's `ide-state-approval` harness now stubs `getQueuedMessages` and `subscribe`.
-307 test files ran in separate processes: every divergence check, every test file that this merge changes, and the tests for each conflicted source file. `sixel-probe` and the recursive-submodule case in `task/worktree` also fail at bare `v18.11.0` on this host.
-`bun run test:rs` passed all 3504 tests, with 5 skipped.
+The merge had conflicts in 28 files. The resolutions preserve every fork decision and keep upstream behavior, except the chrome floor in the Pinned composer entry.
+Upstream adds auto-prewalk. The fork keeps `prewalk.into`, `@@`, silent disarm, and the arm-notice gate around it.
+Upstream's seance agent restricted `model` to seance. The fork keeps `model` valid for every agent.
+Upstream scopes auth-gateway client tokens to models and accounts. The fork's `withinTurn` and `strict` routing use the client's credential session.
+Upstream's plan-proposal handler runs as a wait for the user. The fork's handler context argument passes through that wrapper.
+1041 test files ran in separate processes: every divergence check, every test file that this merge changes, the tests that import each conflicted source file, and the auth-gateway suites. `sdk-tool-activation` and `eval/js-package-environment` also fail at the pre-merge commit. `update-cli` (`overrides ambient min-release-age`) also fails at bare `v18.11.3` on this host.
+`bun run test:rs` passed all 3564 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -137,10 +137,10 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Size filler from the current chrome and visible history. Let real content grow to full screen height and move older history into scrollback.
 - **Decision:** Use the current chrome height for history retirement. Save displaced command and tool rows before clipping the viewport.
 - **Decision:** Keep `RuntimeChildrenOptions.transient`. The report panel mounts as a transient root, so it clips the transcript without retiring rows.
-- **Upstream as of `v18.10.4`:** Upstream (`25d28798d9`) bills all chrome at its smallest height and removed `transient` and `pinInputToBottom`. The fork keeps current-chrome retirement and adopts upstream's `getFilledHistoryRows` top padding. That padding is off while a bottom overlay restore is active, so covered history stays on screen.
+- **Upstream as of `v18.11.3`:** Upstream (`25d28798d9`, then #15820) bills chrome at a floor. It promotes the floor after an idle settle and feeds run state through `Composer.setRunActive`. The fork keeps current-chrome retirement and `RuntimeChildrenOptions.transient`. It does not carry the floor, `setRunActive`, `transientChrome`, or `selfClearingChrome`. It adopts upstream's `getFilledHistoryRows` slack, parked below the live rows. That slack is off while a bottom overlay restore is active.
 - **Why:** A stable input position reduces visual movement in long sessions.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
-- **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/tui/test/composer-inline-shrink.test.ts`, `packages/tui/test/report-panel.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
+- **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/tui/test/composer-inline-shrink.test.ts`, `packages/tui/test/transcript-seam-loss.test.ts`, `packages/tui/test/report-panel.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
 
 ### Full assistant text during streaming
 
@@ -211,15 +211,17 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 ### Prewalk controls
 
 - **Decision:** Keep `prewalk.into`, including `@@` to keep the active model and `@@:<level>` to change only its thinking level.
-- **Decision:** Keep `/prewalk off` and the unbound-by-default `app.prewalk.toggle` action. The key preserves the editor draft. Upstream `v18.7.0` added its own `/prewalk off`. The fork keeps its wording and its silent disarm. Like upstream, `off` drops only the current session's handoff, and `/new` re-arms when `prewalk.enabled` is on.
-- **Decision:** Disarming is silent. `prewalk.armNotice` (default `true`) controls the arm notice and slash-command success output. `/prewalk off` prints `Prewalk: nothing armed.` only when nothing was armed.
+- **Decision:** Keep `/prewalk off` and the unbound-by-default `app.prewalk.toggle` action. The key preserves the editor draft. Upstream `v18.7.0` added its own `/prewalk off`. The fork keeps its wording and its silent disarm. Like upstream, `off` drops only the current session's handoff and keeps `prewalk.auto` from arming until `/new`, and `/new` re-arms when `prewalk.enabled` is on.
+- **Decision:** Disarming is silent. `prewalk.armNotice` (default `true`) controls the arm notice, including auto-prewalk arms, and slash-command success output. `/prewalk off` prints `Prewalk: nothing armed.` only when nothing was armed.
 - **Decision:** Upstream's `/new` re-arm resolves `prewalk.into`, not `@smol`. With `@@`, it keeps the model that is active after `/new`. A plain `@@` handoff records no handoff, so `/new` restores nothing.
+- **Upstream as of `v18.11.3`:** Upstream added auto-prewalk (`prewalk.auto`, `prewalk.autoTarget`). The fork adopts it. Auto arms use the fork's arm-notice gate. `prewalk.autoTarget` does not accept `@@`, which stays limited to `prewalk.into`, `--prewalk-into`, and subagent targets.
 - **Key paths:** `packages/coding-agent/src/session/prewalk.ts`, `packages/coding-agent/src/session/settings.ts`, `packages/coding-agent/src/slash-commands/builtin-modes.ts`, and `packages/coding-agent/src/modes/controllers/input-controller.ts`.
-- **Checks:** `packages/coding-agent/test/agent-session-prewalk.test.ts`, `packages/coding-agent/test/agent-session-prewalk-off.test.ts`, `packages/coding-agent/test/input-controller-keybindings.test.ts`, `packages/coding-agent/test/prewalk-discovery-provider.test.ts`, and `packages/coding-agent/test/task/executor-prewalk.test.ts`.
+- **Checks:** `packages/coding-agent/test/agent-session-prewalk.test.ts`, `packages/coding-agent/test/agent-session-prewalk-off.test.ts`, `packages/coding-agent/test/agent-session-prewalk-auto.test.ts`, `packages/coding-agent/test/input-controller-keybindings.test.ts`, `packages/coding-agent/test/prewalk-discovery-provider.test.ts`, and `packages/coding-agent/test/task/executor-prewalk.test.ts`.
 
 ### Per-call subagent model selection
 
 - **Decision:** Keep `model` on flat task calls, each batch item, eval `agent()`, and eval `workpool()`. Reject `model` on a batch container.
+- **Decision:** Upstream's seance agent also reads `model`, as its source-model override. Keep `model` valid for every agent. `validateSeanceFields` in `packages/coding-agent/src/task/seance.ts` rejects only `sourceSession` on other agents.
 - **Decision:** A model array is an ordered preference. Explicit selectors take precedence over agent defaults and parent inheritance.
 - **Decision:** Inherit the live model route and effective thinking level when no explicit selector applies. Preserve agent-level effort precedence.
 - **Decision:** Explicit selectors must not remove OAuth account pools or cyber restrictions. Configured retry chains remain separate from selector preferences.
@@ -365,7 +367,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 
 - **Decision:** Keep `auth.routing.<provider>` with `mode` (`smart`, `order`, `rotate`, `weight`, `usage`, `pace`), `stays` (`auto`, `session`, `turn`, `off`, `strict`), and `sink`. `auth.accountPolicies` uses `capPct` and `windowCapPct` instead of `reservePct`, plus `weight`, `disabled`, and `account.keySuffix`.
 - **Decision:** A `strict` session never moves to another account. After its account is removed, it fails until that account signs in again or the provider's set of accounts changes. The hold persists with the session pin, survives a restart, follows subagents, and respects session account pools.
-- **Decision:** `getApiKey(model, { withinTurn })` in the agent loop and the gateway keeps the account for a request whose last message is a tool result. Key checks do not move rotation, weight, sink, or learn-once state. `ModelRegistry.getApiKey` and `getApiKeyForProvider` throw unless the caller passes `{ skipMissing: true }`.
+- **Decision:** `getApiKey(model, { withinTurn })` in the agent loop and the gateway keeps the account for a request whose last message is a tool result. Key checks do not move rotation, weight, sink, or learn-once state. For an auth-gateway client scoped to accounts, the key lookups and the `strict` check use the client's credential session (`gatewayCredentialSessionId`). `ModelRegistry.getApiKey` and `getApiKeyForProvider` throw unless the caller passes `{ skipMissing: true }`.
 - **Why:** The fork ports magpie's account pool policies. Upstream has only the `smart` selection.
 - **Key paths:** `packages/ai/src/auth/` (`routing.ts`, `select.ts`, `affinity.ts`, `rank.ts`, `rotation.ts`, `health.ts`), `packages/ai/src/auth-storage.ts`, `packages/ai/src/auth-gateway/dispatch.ts`, `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, `packages/coding-agent/src/session/credential-pin.ts`, `packages/coding-agent/src/session/turn-recovery.ts`, and `packages/coding-agent/src/config/model-registry.ts`.
 - **Checks:** `packages/ai/test/auth-storage-routing-modes.test.ts`, `packages/ai/test/auth-gateway-account-routing.test.ts`, `packages/ai/test/auth-gateway-within-turn.test.ts`, `packages/ai/test/auth-storage-session-restriction.test.ts`, `packages/agent/test/agent.test.ts`, `packages/coding-agent/test/credential-pin.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, `packages/coding-agent/test/sdk-credential-disabled-bridge.test.ts`, `packages/coding-agent/test/agent-session-retry-cap.test.ts`, and `packages/coding-agent/test/advisor-toggle.test.ts`.

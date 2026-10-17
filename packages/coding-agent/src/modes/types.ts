@@ -9,6 +9,7 @@ import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import type { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { TrackSegment } from "@oh-my-pi/pi-tui/chrome/segment-track";
+import type { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import type { Settings } from "../config/settings";
 import type {
 	AutocompleteProviderFactory,
@@ -32,6 +33,7 @@ import type { SessionContext } from "../session/session-context";
 import type { SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
 import type { DictationTarget } from "../stt";
+import type { SessionInfo } from "../session/session-listing";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { LspStartupServerInfo } from "../tools";
@@ -48,7 +50,6 @@ import type { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-mark
 import type { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import type { ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import type { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import type { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import type { EventController } from "./controllers/event-controller";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
@@ -96,6 +97,8 @@ export interface InteractiveModeInitOptions {
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &
 	Pick<HookSelectorOptions, "disabledIndices" | "inline">;
 
+export type SessionPickHandler = (session: SessionInfo) => void | Promise<void>;
+
 export interface RenderSessionContextOptions {
 	updateFooter?: boolean;
 	reuseSettledComponents?: boolean;
@@ -109,6 +112,13 @@ export interface ShowStatusOptions {
 	dim?: boolean;
 	/** Toasts it on a native terminal (default true); false keeps it to the ANSI transcript. */
 	toast?: boolean;
+}
+
+export interface SelectOnlyModelSelectorOptions {
+	/** Use the selected `provider/id` for the caller's operation without mutating session defaults. */
+	onSelect: (selector: string) => void | Promise<void>;
+	/** `provider/id` initially highlighted in the picker. */
+	currentSelector?: string;
 }
 
 export interface AgentHubOpenOptions {
@@ -155,6 +165,8 @@ export interface InteractiveModeContext {
 	readonly viewSession: AgentSession;
 	/** Id of the focused agent, undefined when the main session is attached. */
 	readonly focusedAgentId: string | undefined;
+	/** Set while a tool-approval dialog owns the composer: its drafts steer the main session awaiting that approval, even from a focused agent's view. */
+	approvalOwnsComposer?: boolean;
 	/** Focus the main view on an agent's live session (delegates to SessionFocusController.focusAgent). */
 	focusAgentSession(id: string): Promise<void>;
 	/** Focus the focused agent's parent session, falling back to main (delegates to focusParent). */
@@ -311,6 +323,7 @@ export interface InteractiveModeContext {
 	setEditorComponent(
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void;
+	getEditorComponent(): ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined;
 
 	// UI helpers
 	/**
@@ -515,7 +528,7 @@ export interface InteractiveModeContext {
 	showAgentsDashboard(): void;
 	/** Open the fullscreen git UI, optionally pinned to a revision (`/git <rev>`). */
 	showGitUi(revision?: string): void;
-	showModelSelector(options?: { temporaryOnly?: boolean }): void;
+	showModelSelector(options?: { temporaryOnly?: boolean; selectOnly?: SelectOnlyModelSelectorOptions }): void;
 	showModelProfilePicker(): void;
 	/** Session-only switch to an already-resolved model (`/switch <selector>`); compacts first when over context. */
 	switchSessionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
@@ -525,7 +538,7 @@ export interface InteractiveModeContext {
 	showTreeSelector(): void;
 	/** Open the `/effort` picker over the levels the current model accepts. */
 	showThinkingSelector(): void;
-	showSessionSelector(source?: ForeignSessionSource): void;
+	showSessionSelector(source?: ForeignSessionSource, onSelect?: SessionPickHandler): void;
 	/** Settle side requests before replacing the session or deleting its artifacts. */
 	prepareSessionSwitch(): Promise<void>;
 	handleResumeSession(sessionPath: string): Promise<void>;

@@ -719,11 +719,12 @@ lsp:
 | `python.interpreter`              | string  | `""`      | Path to a Python interpreter; empty = auto-detect.                                                                                                          |
 | `lsp.enabled`                     | boolean | `true`    | Language-server integration. `--no-lsp` disables for the run.                                                                                               |
 | `lsp.lazy`                        | boolean | `true`    | Start servers on demand.                                                                                                                                    |
-| `lsp.shared`                      | boolean | `true`    | Share one language server per project across local `omp` processes through the daemon broker; falls back to private servers when the broker is unavailable. |
+| `lsp.shared`                      | boolean | `true`    | Start language servers through the broker-managed per-project LSP mux. Each connection gets its own server. A released server stays warm for up to 5 minutes for the next connection, but only while another omp process keeps the project's mux running; the mux stops a few seconds after the last one exits. Falls back to private servers when the broker is unavailable. |
 | `lsp.diagnosticsOnWrite`          | boolean | `true`    | Run diagnostics after a write.                                                                                                                              |
 | `lsp.diagnosticsOnEdit`           | boolean | `false`   | Run diagnostics after an edit.                                                                                                                              |
 | `lsp.formatOnWrite`               | boolean | `false`   | Format files on write.                                                                                                                                      |
 | `lsp.diagnosticsDeduplicate`      | boolean | `true`    | Collapse duplicate diagnostics.                                                                                                                             |
+| `lsp.requestTimeout`              | number  | `10`      | Seconds to wait for a language server's diagnostics, hover and other answers when the agent passes no `timeout` (the call deadline is at least 20 s); late post-edit diagnostics wait at least this long. The `lsp` tool's `timeout` raises or lowers it per call, within 5–300 s and `tools.maxTimeout`. |
 | `shellPath`                       | string  | _(unset)_ | External shell for services, terminals, and `!`; plain bash tool calls use embedded brush.                                                                  |
 
 ### Files: editing and reading
@@ -965,7 +966,9 @@ The `cost` segment shows recorded session costs. For an active provider/model wi
 | `plan.keybindingWorkflow` | enum | `parallel` | `parallel`, `debate`. Selects which workflow the plan shortcut enters from the off state. |
 | `prewalk.enabled` | boolean | `false` | Arm prewalk for new sessions. Live changes arm or disarm the current top-level session. See [Prewalk](./prewalk.md). |
 | `prewalk.into` | string | `"@smol"` | Target model or role. `@@` keeps the starting model. `@@:<level>` changes only its thinking level. |
-| `prewalk.armNotice` | boolean | `true` | Show the armed notice for `/prewalk`, `app.prewalk.toggle`, and live enable transitions. |
+| `prewalk.armNotice` | boolean | `true` | Show the armed notice for `/prewalk`, `app.prewalk.toggle`, live enable transitions, and auto-prewalk arms. |
+| `prewalk.auto` | enum | `off` | `off`, `suggest`, `on`. Ask the native judge per task whether to arm prewalk. See [Auto-prewalk](./prewalk.md#auto-prewalk). |
+| `prewalk.autoTarget` | string | `"@smol"` | Model or role that auto-prewalk hands off to. |
 | `ask.timeout`          | number  | `0`             | Auto-select the recommended ask option after this many seconds. `0` disables automatic selection. It also bounds `cfg://` approval prompts. An unanswered approval denies the write instead of auto-selecting. |
 | `ask.notify`           | enum    | `on`            | `on`, `off`.                                                                                            |
 | `input.bareExitOnEmptySession` | boolean | `true` | Submitting exactly `exit`, `quit`, or `q` (case-insensitive) before the first message quits. |

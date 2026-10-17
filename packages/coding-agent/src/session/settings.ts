@@ -103,7 +103,48 @@ export const cfgPrewalkArmNotice = register({
 		tab: "model",
 		group: "Prewalk",
 		label: "Prewalk Arm Notice",
-		description: "Show a notice when prewalk arms (/prewalk, its keybinding, or turning prewalk.enabled on).",
+		description:
+			"Show a notice when prewalk arms (/prewalk, its keybinding, turning prewalk.enabled on, or an auto-prewalk arm).",
+	},
+});
+
+export const cfgPrewalkAuto = register({
+	id: "prewalk.auto",
+	type: "enum",
+	values: ["off", "suggest", "on"] as const,
+	default: "off",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Auto Prewalk",
+		description:
+			"Ask the native judge resolved through the 'judge' role whether each new top-level user task front-loads its hard reasoning. Needs a native judge; without one nothing is classified. Independent of Enable Prewalk.",
+		options: [
+			{ value: "off", label: "Off", description: "Never classify prompts for prewalk" },
+			{
+				value: "suggest",
+				label: "Suggest",
+				description: "Classify each task and report the decision without arming prewalk",
+			},
+			{
+				value: "on",
+				label: "On",
+				description:
+					"For confidently front-loaded tasks, arm a handoff from the active model to the auto target; the next task starts back on the planning model",
+			},
+		],
+	},
+});
+
+export const cfgPrewalkAutoTarget = register({
+	id: "prewalk.autoTarget",
+	type: "string",
+	default: "@smol",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Auto-prewalk target",
+		description: "Model or role (default '@smol') auto-prewalk hands off to at the first edit/write.",
 	},
 });
 

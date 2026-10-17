@@ -482,7 +482,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// transcript is shorter than the available space. Skipped when this
 		// frame is itself offering history: `capacity` (and `historyTop`)
 		// describe the pre-offer geometry, not the anchor the writer will settle
-		// on after appending it; the top padding below covers that frame.
+		// on after appending it; the slack below covers that frame.
 		if (this.#preferences.pinBottom && history === undefined) {
 			// Account for anchored history so filler never forces another scroll.
 			const spareCapacity = Math.max(0, rows - before.length - after.length - historyTop);
@@ -492,32 +492,42 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const mutable = [...before, ...active, ...after].slice(drop);
 		// Once a paint reaches the bottom row over committed history, rows above
 		// it may already be in native scrollback, which no later frame can pull
-		// back down. Keep the input on the bottom row instead of stranding a
-		// band of blank rows under it whenever the frame shrinks — a closing
-		// dialog, report or HUD, or a live block collapsing. The band sits
-		// between the history still on screen and the live rows; replaying
-		// those rows would duplicate them, clearing history would lose them.
-		// Replays position themselves.
-		// Without native history the live viewport is the whole document and
-		// shrinks in place.
+		// back down. Keep the input on the bottom row whenever the frame shrinks
+		// — a closing dialog, report or HUD, or a live block collapsing. The
+		// slack that leaves has to sit somewhere: rows above the live area hold
+		// committed history still on screen, so the live rows cannot move up into
+		// them, and replaying those rows would duplicate them while clearing
+		// history would lose them. Replays position themselves. Without native
+		// history the live viewport is the whole document and shrinks in place.
 		const filledHistoryRows =
 			history?.kind === "replay" || !(history !== undefined || this.ui.hasProviderHistory())
 				? undefined
 				: this.ui.getFilledHistoryRows();
-		const topPadding =
+		const slack =
 			filledHistoryRows === undefined
 				? 0
 				: Math.max(0, rows - Math.min(rows, filledHistoryRows + (history?.rows.length ?? 0)) - mutable.length);
-		if (topPadding > 0) mutable.unshift(...Array<string>(topPadding).fill(""));
+		// Park the slack below the live rows rather than above them. Above, it
+		// splits the on-screen history from the live tail and reads as a hole
+		// punched into whatever was streaming — a table's rows included — and
+		// each slack row is written with no cells, so no repaint, mark or
+		// selection can cover it until something scrolls it away. Below, the
+		// transcript stays contiguous with the history, the slack reads as the
+		// empty tail of a short document, and growth consumes it before any row
+		// can scroll.
+		if (slack > 0) {
+			const at = Math.max(0, Math.min(mutable.length, before.length + active.length - drop));
+			mutable.splice(at, 0, ...Array<string>(slack).fill(""));
+		}
 		if (history !== undefined && this.#offeredHistory?.source === "header") {
 			const visibleHeaderRows = Math.max(0, rows - (mutable.length + drop));
 			this.#retiredHeaderStart = Math.max(0, history.rows.length - visibleHeaderRows);
 		}
 		const spans = this.#mapClickSpans(
 			activeSpans,
-			topPadding + before.length - drop,
+			before.length - drop,
 			afterSpans,
-			topPadding + before.length + active.length - drop,
+			slack + before.length + active.length - drop,
 			mutable.length,
 		);
 		return { history, viewport: this.#paintHoverBand(mutable, spans) };

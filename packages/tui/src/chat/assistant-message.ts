@@ -4,9 +4,11 @@ import { Image, type ImageBudget } from "../components/image";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
 import {
 	type DefaultTextStyle,
+	holdPartialTableRow,
 	Markdown,
 	type MarkdownTheme,
 	rewriteMarkdownLinkDestinations,
+	speculativeStreamingSource,
 	streamingMarkdownSource,
 } from "../components/markdown";
 import { Spacer } from "../components/spacer";
@@ -21,6 +23,7 @@ import { hasTranscriptActions, runTranscriptAction } from "./transcript-actions"
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { isNativeRendering } from "../native/state";
 import { NativeImageCache, nativeMediaNode } from "../native/blobs";
+import { linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
 import { EMPTY_LINK_TARGETS, resolveImageOptions } from "../render/render-utils";
 import { WidthAwareText } from "../render";
@@ -37,7 +40,7 @@ import { formatTurnUsage, type TurnUsageSummary } from "../overlays/usage-row";
 import { FigureMarkdown } from "./figure-markdown";
 import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
-import { describeTableChart, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
+import { chartFence, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
 
 /**
  * Max wrapped rows of a turn-ending provider error rendered inline in the
@@ -873,7 +876,13 @@ export class AssistantMessageComponent extends Container {
 					: {
 							text: source,
 							stream,
-							node: node("md", stream ? { text: source, stream: true } : { text: source }, undefined, key),
+							// A streaming node renders its open link or math span as already closed, as the TUI does.
+							node: node(
+								"md",
+								stream ? { text: speculativeStreamingSource(source), stream: true } : { text: source },
+								undefined,
+								key,
+							),
 						};
 			parts.set(slot, entry);
 			return entry.node;
@@ -897,7 +906,9 @@ export class AssistantMessageComponent extends Container {
 				const streaming = live && index === tailIndex;
 				if (content.type === "text" && canonicalizeMessage(content.text)) {
 					answered = true;
-					const source = content.text.trim();
+					// A native terminal sizes table columns by every row it gets: send a growing row once
+					// its line ends. Hold before trimming, which would drop the newline ending a finished row.
+					const source = (streaming ? holdPartialTableRow(content.text) : content.text).trim();
 					// The terminal renders this source itself and would resolve a relative
 					// link against its own idea of the cwd: hand it the session-resolved
 					// targets (resolved once the segment closes, so never while streaming).
@@ -914,7 +925,7 @@ export class AssistantMessageComponent extends Container {
 						children.push(markdown(`t${index}`, `t${index}`, linked(source, streaming), streaming));
 						continue;
 					}
-					// A chart follows its table as an SVG image node; the prose splits around it.
+					// A chart follows its table as an ```svg figure the terminal colors; the prose splits around it.
 					const segments = splitTableCharts(source, streaming);
 					segments.forEach((segment, part) => {
 						const slot = part === 0 ? `t${index}` : `t${index}.${part}`;
@@ -925,7 +936,7 @@ export class AssistantMessageComponent extends Container {
 						}
 						const chart = lookupTableChart(segment.table);
 						if (chart instanceof Promise) this.#awaitChart(chart);
-						else if (chart) children.push(describeTableChart(chart, slot));
+						else if (chart) children.push(markdown(slot, slot, chartFence(chart), false));
 					});
 				} else if (content.type === "thinking") {
 					const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
@@ -993,7 +1004,14 @@ export class AssistantMessageComponent extends Container {
 				for (const [toolCallId, images] of this.#toolImagesByCallId) {
 					if (media && this.#toolMediaPathByCallId.has(toolCallId)) continue;
 					images.forEach((image, index) => {
-						children.push(this.#nativeImages.get(`r${toolCallId}:${index}`, image.data, image.mimeType));
+						children.push(
+							this.#nativeImages.get(
+								`r${toolCallId}:${index}`,
+								image.data,
+								image.mimeType,
+								this.#toolMediaPathByCallId.get(toolCallId),
+							),
+						);
 					});
 				}
 			}
@@ -1608,12 +1626,15 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	#renderImageEntries(entries: Array<{ image: ImageContent; key: string }>, withLeadingSpacer: boolean): void {
+	#renderImageEntries(
+		entries: Array<{ image: ImageContent; key: string; sourcePath?: string }>,
+		withLeadingSpacer: boolean,
+	): void {
 		if (!this.#showImages || entries.length === 0) return;
 		this.#convertImagesForKitty(entries);
 
 		if (withLeadingSpacer) this.#contentContainer.addChild(new Spacer(1));
-		for (const { image, key } of entries) {
+		for (const { image, key, sourcePath } of entries) {
 			let displayImage: ImageContent | undefined = image;
 			if (TERMINAL.imageProtocol === ImageProtocol.Kitty && image.mimeType !== "image/png") {
 				displayImage = this.#kittyConversion(image);
@@ -1627,6 +1648,7 @@ export class AssistantMessageComponent extends Container {
 						{ fallbackColor: (text: string) => theme.fg("toolOutput", text) },
 						{
 							...resolveImageOptions(),
+							sourcePath,
 							budget: this.#imageBudget,
 							imageKey: key,
 							requestRender: this.#onImageUpdate,
@@ -1635,15 +1657,22 @@ export class AssistantMessageComponent extends Container {
 				);
 				continue;
 			}
-			this.#contentContainer.addChild(new Text(theme.fg("toolOutput", `[Image: ${image.mimeType}]`), 1, 0));
+			this.#contentContainer.addChild(
+				new Text(theme.fg("toolOutput", linkedImageText(`[Image: ${image.mimeType}]`, image, sourcePath)), 1, 0),
+			);
 		}
 	}
 
 	#renderToolImages(): void {
 		if (!this.#showToolResultImages) return;
-		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
-			images.map((image, index) => ({ image, key: `${toolCallId}:${index}:${imageContentTag(image)}` })),
-		);
+		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) => {
+			const sourcePath = this.#toolMediaPathByCallId.get(toolCallId);
+			return images.map((image, index) => ({
+				image,
+				key: `${toolCallId}:${index}:${imageContentTag(image)}`,
+				sourcePath,
+			}));
+		});
 		this.#renderImageEntries(entries, true);
 	}
 

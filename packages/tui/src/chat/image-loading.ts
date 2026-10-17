@@ -1,6 +1,6 @@
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { decodeTiffToPng, validateTiffImage } from "@oh-my-pi/pi-natives";
-import { formatBytes, parseImageMetadata, SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils";
+import { decodeBase64ImageData, formatBytes, parseImageMetadata, SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils";
 
 export const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 
@@ -97,11 +97,9 @@ export async function imageDecodeFailureReason(
 	image: ImageContent,
 	requireKnownFormat = false,
 ): Promise<string | null> {
-	if (!/^[A-Za-z0-9+/]*={0,2}$/.test(image.data)) return "invalid base64 image data";
-	const normalizedData = image.data.replace(/=+$/, "");
-	const bytes = Buffer.from(image.data, "base64");
-	if (bytes.length === 0) return "empty image data";
-	if (bytes.toString("base64").replace(/=+$/, "") !== normalizedData) return "invalid base64 image data";
+	const decoded = decodeBase64ImageData(image.data);
+	if (decoded.reason !== undefined) return decoded.reason;
+	const { bytes } = decoded;
 	const detectedMimeType =
 		parseImageMetadata(bytes)?.mimeType ?? (requireKnownFormat && hasTiffSignature(bytes) ? "image/tiff" : undefined);
 	if (requireKnownFormat && !detectedMimeType) {

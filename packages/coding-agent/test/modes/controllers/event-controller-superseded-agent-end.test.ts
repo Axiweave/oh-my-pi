@@ -12,7 +12,7 @@ import { createInteractiveModeContext } from "../../helpers/interactive-mode-con
  * streaming getter is backed by mutable flags the tests drive directly.
  */
 function createContext() {
-	const streamState = { isStreaming: false };
+	const streamState = { isStreaming: false, viewIsStreaming: false };
 	const ctx = createInteractiveModeContext({
 		session: {
 			get isStreaming() {
@@ -22,6 +22,9 @@ function createContext() {
 		viewSession: {
 			isCompacting: false,
 			getLastAssistantMessage: () => undefined,
+			get isStreaming() {
+				return streamState.viewIsStreaming;
+			},
 		},
 	});
 	const loader = new Loader(
@@ -68,6 +71,7 @@ describe("EventController superseded agent_end", () => {
 		// the agent is streaming again. The interrupted turn's agent_end is still in
 		// flight through the async event pipeline.
 		streamState.isStreaming = true;
+		streamState.viewIsStreaming = true;
 		await controller.handleEvent(AGENT_START);
 
 		// The interrupted turn's agent_end finally propagates. Because the agent is
@@ -92,6 +96,23 @@ describe("EventController superseded agent_end", () => {
 		streamState.isStreaming = false;
 		await controller.handleEvent(AGENT_END);
 
+		expect(loader.stop).toHaveBeenCalledTimes(1);
+		expect(ctx.loadingAnimation).toBeUndefined();
+	});
+
+	it("releases the worker's loader when a focused worker ends while the main session still streams", async () => {
+		const { ctx, streamState, loader } = createContext();
+		const controller = new EventController(ctx);
+
+		streamState.viewIsStreaming = true;
+		await controller.handleEvent(AGENT_START);
+
+		// The viewed worker finishes; the main session's run keeps going underneath.
+		streamState.isStreaming = true;
+		streamState.viewIsStreaming = false;
+		await controller.handleEvent(AGENT_END);
+
+		// A stale "Working…" row would otherwise stay under the finished worker.
 		expect(loader.stop).toHaveBeenCalledTimes(1);
 		expect(ctx.loadingAnimation).toBeUndefined();
 	});

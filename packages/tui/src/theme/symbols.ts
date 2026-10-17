@@ -374,6 +374,7 @@ export type SlashCommandIconName =
 	| "jobs"
 	| "gauge"
 	| "context"
+	| "ghost"
 	| "agents"
 	| "branch"
 	| "tree"

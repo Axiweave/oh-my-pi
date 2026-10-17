@@ -2205,13 +2205,15 @@ export interface TaskItem {
 	name?: string;
 	/** Agent type to run this item (e.g. "scout"). Defaults to the spawn policy's default agent. */
 	agent?: string;
+	/** Historical source session selected by the bundled consult agent. */
+	sourceSession?: string;
 	/** The work; required by the schema. */
 	task?: string;
 	/** How open-ended the work is; required by the schema and the child's sole `auto` thinking classification input. */
 	solutionSpace?: string;
 	/** Per-spawn thinking level on the auto ladder, mapped by position onto the resolved model's eligible levels. Overrides the agent's default selector (e.g. `auto`). */
 	effort?: TaskEffort;
-	/** Per-spawn model selector or ordered selector array; overrides agent and settings preferences. */
+	/** Per-spawn model selector or ordered selector array; overrides agent and settings preferences (for seance, the source's saved model). */
 	model?: string | string[];
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
@@ -2234,13 +2236,15 @@ export interface TaskParams {
 	name?: string;
 	/** Agent type to spawn (flat form); omitted values resolve from the session spawn policy. */
 	agent?: string;
+	/** Historical source session selected by the bundled consult agent. */
+	sourceSession?: string;
 	/** The work (flat form). */
 	task?: string;
 	/** How open-ended the work is (flat form); see {@link TaskItem.solutionSpace}. */
 	solutionSpace?: string;
 	/** Per-spawn thinking level (flat form); see {@link TaskItem.effort}. */
 	effort?: TaskEffort;
-	/** Per-spawn model selector or ordered selector array; overrides agent and settings preferences. */
+	/** Per-spawn model selector or ordered selector array; overrides agent and settings preferences (for seance, the source's saved model). */
 	model?: string | string[];
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
