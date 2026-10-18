@@ -1141,7 +1141,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			this.#loopModeStatus === next ||
 			(this.#loopModeStatus?.state === next?.state &&
 				this.#loopModeStatus?.limit === next?.limit &&
-				this.#loopModeStatus?.condition === next?.condition)
+				this.#loopModeStatus?.condition === next?.condition &&
+				this.#loopModeStatus?.intervalMs === next?.intervalMs &&
+				this.#loopModeStatus?.nextRunAt === next?.nextRunAt)
 		) {
 			return;
 		}

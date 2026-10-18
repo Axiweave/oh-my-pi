@@ -113,6 +113,10 @@ export interface SegmentContext {
 		state: "waiting" | "running" | "paused";
 		limit?: LoopLimitRuntime;
 		condition?: LoopConditionConfig;
+		/** Fixed time between run starts for `/loop every <duration>`. */
+		intervalMs?: number;
+		/** Epoch ms of the next armed run; set only while an interval loop waits. */
+		nextRunAt?: number;
 	} | null;
 	speckitAuto: SpeckitAutoStatus | null;
 	goalStatusInFooter?: boolean;

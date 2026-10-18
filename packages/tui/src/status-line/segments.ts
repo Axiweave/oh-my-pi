@@ -565,6 +565,25 @@ function formatLoopLimit(
 	return `${seconds}s left`;
 }
 
+/** Compact fixed-interval text, e.g. `15m`, `1h30m`, `1m30s`. */
+export function formatLoopInterval(ms: number): string {
+	const totalSeconds = Math.floor(ms / 1_000);
+	const hours = Math.floor(totalSeconds / 3_600);
+	const minutes = Math.floor((totalSeconds % 3_600) / 60);
+	const seconds = totalSeconds % 60;
+	return `${hours ? `${hours}h` : ""}${minutes ? `${minutes}m` : ""}${seconds ? `${seconds}s` : ""}` || "0s";
+}
+
+/** Loop label followed by the interval cadence and the next armed run. */
+function loopLabelParts(loop: NonNullable<SegmentContext["loopMode"]>, label: string): string[] {
+	const parts = [label];
+	if (loop.intervalMs) parts.push(`every ${formatLoopInterval(loop.intervalMs)}`);
+	if (loop.nextRunAt && loop.state !== "paused") {
+		parts.push(`next ${new Date(loop.nextRunAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+	}
+	return parts;
+}
+
 /** Running is the default state, so it shows no text. */
 const SPECKIT_AUTO_STATE_TEXT: Record<SpeckitAutoStatusState, string> = {
 	waiting: "on",
@@ -635,7 +654,7 @@ function renderMainMode(ctx: SegmentContext): RenderedSegment {
 		const color: ThemeColor = loop.state === "paused" ? "warning" : "customMessageLabel";
 		const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
 		const label = `Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`;
-		const parts = [withIcon(icon, label)];
+		const parts = loopLabelParts(loop, withIcon(icon, label));
 		const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
 		if (limit) parts.push(limit);
 		if (loop.condition) {
@@ -667,7 +686,7 @@ function describeMainMode(ctx: SegmentContext): SegmentView | null {
 	if (loop) {
 		const paused = loop.state === "paused";
 		const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
-		const parts = [`Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`];
+		const parts = loopLabelParts(loop, `Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`);
 		const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
 		if (limit) parts.push(limit);
 		if (loop.condition) parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
