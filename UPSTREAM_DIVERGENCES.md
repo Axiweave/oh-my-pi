@@ -3,18 +3,17 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.11.3` on 2026-10-16.
+**Reviewed against:** `v18.12.1` on 2026-10-17.
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.11.3`.
-`bun check` stops at `check:tools`, because `oxfmt` flags `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. This merge does not change that file. `oxlint`, every other formatting target, all `check:types` packages, and `check:rs` pass.
-The merge had conflicts in 28 files. The resolutions preserve every fork decision and keep upstream behavior, except the chrome floor in the Pinned composer entry.
-Upstream adds auto-prewalk. The fork keeps `prewalk.into`, `@@`, silent disarm, and the arm-notice gate around it.
-Upstream's seance agent restricted `model` to seance. The fork keeps `model` valid for every agent.
-Upstream scopes auth-gateway client tokens to models and accounts. The fork's `withinTurn` and `strict` routing use the client's credential session.
-Upstream's plan-proposal handler runs as a wait for the user. The fork's handler context argument passes through that wrapper.
-1041 test files ran in separate processes: every divergence check, every test file that this merge changes, the tests that import each conflicted source file, and the auth-gateway suites. `sdk-tool-activation` and `eval/js-package-environment` also fail at the pre-merge commit. `update-cli` (`overrides ambient min-release-age`) also fails at bare `v18.11.3` on this host.
-`bun run test:rs` passed all 3564 tests, with 5 skipped.
+The launcher targets this checkout and reports `18.12.1`.
+`bun check` stops at `check:tools`, because `oxfmt` flags `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. This merge does not change that file. All `check:types` packages and `check:rs` pass.
+The merge had conflicts in 6 files. The resolutions preserve every fork decision and keep upstream behavior.
+Upstream's sessionless selection scans stored credentials in order. The fork keeps that order and also keeps the round-robin cursor still outside `smart` routing.
+Upstream's typing hook calls `session.prewarmModelConnection()`. The fork's enhanced-paste test stub adds that method.
+Upstream moved the role default chains from `priority.json` to catalog KDL `role-defaults`.
+1821 test files ran in separate processes: every divergence check, every test file that this merge changes, and the tests that import each merged source file. `sdk-tool-activation` and `eval/js-package-environment` also fail at the pre-merge commit. `tui/terminal-background` (`repaints multiplexer viewports`) also fails at bare `v18.12.1` on this host.
+`bun run test:rs` passed all 3568 tests, with 5 skipped, in five of six runs. One run had 2 failures that did not come back in the next four runs, and their names were not captured.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -311,7 +310,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Checks:** `packages/coding-agent/test/cyber-mode.test.ts`, `packages/coding-agent/test/cyber-mode-session.test.ts`, `packages/coding-agent/test/cyber-mode-shared-settings.test.ts`, `packages/coding-agent/test/cyber-switch-guard.test.ts`, `packages/coding-agent/test/agent-session-retry-fallback.test.ts`, `packages/coding-agent/test/eval/completion-bridge.test.ts`, `packages/coding-agent/test/online-tiny-candidates.test.ts`, `packages/coding-agent/test/judgment/index.test.ts`, `packages/coding-agent/test/compaction-cyber-candidates.test.ts`, `packages/coding-agent/test/compaction-cyber-dispatch.test.ts`, `packages/coding-agent/test/main-cyber-warnings.test.ts`, `packages/coding-agent/test/status-line-cyber.test.ts`, and `packages/coding-agent/test/slash-commands/cyber.test.ts`.
 - **Decision:** Skip the session model's `imageModel` and `webSearchModel` companions when the allowlist excludes them.
 - **Companion key paths and checks:** `packages/coding-agent/src/tools/image-gen.ts` and `packages/coding-agent/src/web/search/index.ts`, checked by `packages/coding-agent/test/tools/image-gen.test.ts` and `packages/coding-agent/test/web/search/default-chain.test.ts`.
-- **Known gap:** `web_search` and `generate_image` still dispatch their default `priority.json` fallback entries and an explicit request `model` without a membership check. Those entries include non-LLM search engines, so a blanket filter would disable search under cyber mode. This predates `v18.4.3`.
+- **Known gap:** `web_search` and `generate_image` still dispatch their default fallback entries (the catalog `role-defaults` chains in `packages/catalog/src/compat/rules/runtime/behavior.kdl`, formerly `priority.json`) and an explicit request `model` without a membership check. Those entries include non-LLM search engines, so a blanket filter would disable search under cyber mode. This predates `v18.4.3`.
 
 - **Decision:** Headless "Did you mean" suggestions list only models that the launch scope (`--models`, else `enabledModels`) and the allowlist both admit.
 - **Suggestion key path and check:** `packages/coding-agent/src/main.ts`, checked by `packages/coding-agent/test/main-model-suggestions.test.ts`.

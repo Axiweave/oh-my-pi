@@ -8,6 +8,12 @@
 - `getApiKey(model, context)` in `AgentLoopConfig` and `AgentOptions` now gets `{ withinTurn }`. The loop sets `withinTurn: true` when the last message of the request is a tool result, so account routing can keep the turn's account.
 - Added `Agent.startNewTurn()`. The next request then gets `withinTurn: false`, so a retry after an error selects its account again under `stays: turn`.
 
+## [18.12.0] - 2026-10-17
+
+### Fixed
+
+- Fixed Cursor turns failing with `PROVIDER_ERROR` when a follow-up (a finished background job, a late diagnostic, a reminder) arrived while the previous turn was still streaming ([#15821](https://github.com/can1357/oh-my-pi/pull/15821) by [@robfeldmann](https://github.com/robfeldmann))
+
 ## [18.11.3] - 2026-10-16
 
 ### Added

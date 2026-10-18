@@ -137,6 +137,7 @@ async function createContext(options: CreateContextOptions = {}) {
 		retry,
 		getPlanModeState: () =>
 			options.activePlanWorkflow === undefined ? undefined : { workflow: options.activePlanWorkflow },
+		prewarmModelConnection: vi.fn(),
 	};
 	const updatePendingMessagesDisplay = vi.fn();
 	const handleBtwBranchKey = vi.fn(async () => true);

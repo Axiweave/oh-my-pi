@@ -8,6 +8,23 @@
 - Fixed `glob`, `grep`, `fuzzyFind`, and `listWorkspace` ignoring the main repository's `.git/info/exclude` in a linked git worktree. The walker now follows the worktree's `.git` file to the main repository's `info/exclude`, as git does. The same fix applies to submodules. A file excluded in the main checkout is now also excluded in each of its worktrees.
 - Fixed a finished `&` background process staying a zombie inside one bash tool call. Because of the zombie, `kill -0 $!` reported it as alive, and a `while kill -0 $pid` watcher loop never ended. The shell now collects finished background processes before each command, as bash does. `wait $pid` still returns the exit status of the process.
 
+## [18.12.1] - 2026-10-17
+
+### Fixed
+
+- Fixed native memory growing without bound, and eventually crashing the process, when files in a downloaded (WASM) grammar language such as C# were parsed repeatedly ([#16067](https://github.com/can1357/oh-my-pi/issues/16067))
+
+## [18.12.0] - 2026-10-17
+
+### Breaking Changes
+
+- `encodeSixel` and `encodeSixelAsync` now require a fourth terminal-background RGB argument packed as `0xRRGGBB` ([#15891](https://github.com/can1357/oh-my-pi/pull/15891) by [@Bouska](https://github.com/Bouska)).
+
+### Fixed
+
+- Fixed Windows file-lock contention returning permission errors when an existing lease allows synchronization but not full mutex access ([#15930](https://github.com/can1357/oh-my-pi/pull/15930) by [@jchanghong023](https://github.com/jchanghong023)).
+- Fixed SIXEL images dropping translucent details or showing dark, discolored edges when resized, while preserving fully transparent pixels ([#15891](https://github.com/can1357/oh-my-pi/pull/15891) by [@Bouska](https://github.com/Bouska)).
+
 ## [18.11.3] - 2026-10-16
 
 ### Changed

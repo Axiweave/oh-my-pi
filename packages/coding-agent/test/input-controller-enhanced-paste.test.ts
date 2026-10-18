@@ -164,6 +164,7 @@ function createHarness() {
 				sessionChanges.add(callback);
 				return () => sessionChanges.delete(callback);
 			},
+			prewarmModelConnection: vi.fn(),
 		},
 	});
 	const controller = new InputController(ctx, {

@@ -342,7 +342,11 @@ export class CredentialSelector {
 	/**
 	 * Selects a credential of the specified type for a provider.
 	 * Returns both the credential and its index in the original array (for updates/removal).
-	 * Uses deterministic hashing for session stickiness and skips blocked credentials when possible.
+	 * With `sessionId` the scan starts at the session's hashed index; without one it starts at the
+	 * first stored credential and never advances round-robin. Model discovery peeks through this,
+	 * and credential-scoped catalogs (e.g. GitHub Copilot) key their cache rows on the credential
+	 * picked, so a rotating pick would read another account's cache namespace on every pass.
+	 * Blocked credentials are skipped when possible.
 	 */
 	selectByType<T extends AuthCredential["type"]>(
 		provider: string,
@@ -370,9 +374,10 @@ export class CredentialSelector {
 		if (credentials.length === 1) return credentials[0];
 
 		const providerKey = providerTypeKey(provider, type);
-		// Outside `smart` the cursor is the `rotate` turn, which a peek must not spend.
+		// Without a session the scan starts at the first stored credential (stable discovery
+		// peeks). Outside `smart` the cursor is the `rotate` turn, which a peek must not spend.
 		const order =
-			this.#deps.policies.routingFor(provider).mode === "smart"
+			sessionId && this.#deps.policies.routingFor(provider).mode === "smart"
 				? this.#getCredentialOrder(providerKey, sessionId, credentials.length)
 				: credentials.map((_credential, index) => index);
 		const fallback = credentials[order[0]];
