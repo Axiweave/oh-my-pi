@@ -30,7 +30,7 @@ const TIME_UNITS_MS = new Map<string, number>([
 ]);
 
 const LOOP_USAGE =
-	"Usage: /loop [count|duration] [--while|--until '<command>'] [prompt]. Examples: /loop 10, /loop 10m, /loop 20 --until 'bun test' fix the failing tests.";
+	"Usage: /loop [count|duration] [every <duration>] [--while|--until '<command>'] [prompt]. Examples: /loop 10, /loop every 15m check CI, /loop 20 --until 'bun test' fix the failing tests. A bare /loop turns loop mode off.";
 
 /**
  * Flag → `until` polarity. `--while` continues while the command succeeds;
@@ -46,19 +46,23 @@ export interface ParsedLoopArgs {
 	limit?: LoopLimitConfig;
 	/** Continue-condition from `--while` / `--until`, re-evaluated before each iteration. */
 	condition?: LoopConditionConfig;
-	/** Inline loop prompt: text after the limit and flags, or the whole argument when neither was given. */
+	/** Inline loop prompt: text after the limit, interval, and flags, or the whole argument when none was given. */
 	prompt?: string;
+	/** Fixed time between the starts of two runs, from `every <duration>`. */
+	intervalMs?: number;
 }
 
 /**
  * Parse `/loop` arguments into an optional leading limit, an optional
- * continue-condition flag, and an optional inline prompt.
+ * `every <duration>` interval, an optional continue-condition flag, and an
+ * optional inline prompt.
  *
  * A leading token that *looks* like a limit (starts with a digit or sign) or
  * like a flag (starts with `--`) but fails to parse is a hard error, so a typo
- * surfaces instead of silently becoming prompt text. Anything else is prompt
- * text, so plain prose after `/loop` keeps starting an unbounded loop (the
- * pre-arg-parsing behavior). Returns the error message string on failure.
+ * surfaces instead of silently becoming prompt text. The same holds for the
+ * value after `every`. Anything else is prompt text, so plain prose after
+ * `/loop` keeps starting an unbounded loop (the pre-arg-parsing behavior).
+ * Returns the error message string on failure.
  */
 export function parseLoopArgs(args: string): ParsedLoopArgs | string {
 	const trimmed = args.trim();
@@ -67,51 +71,89 @@ export function parseLoopArgs(args: string): ParsedLoopArgs | string {
 	const limitResult = takeLoopLimit(trimmed);
 	if (typeof limitResult === "string") return limitResult;
 
-	const conditionResult = takeLoopCondition(limitResult.rest);
+	const intervalResult = takeLoopInterval(limitResult.rest);
+	if (typeof intervalResult === "string") return intervalResult;
+
+	const conditionResult = takeLoopCondition(intervalResult.rest);
 	if (typeof conditionResult === "string") return conditionResult;
 
 	return {
 		limit: limitResult.limit,
 		condition: conditionResult.condition,
 		prompt: conditionResult.rest || undefined,
+		intervalMs: intervalResult.intervalMs,
 	};
+}
+
+function splitFirstToken(input: string): { token: string; rest: string } {
+	const firstSpace = input.search(/\s/);
+	if (firstSpace === -1) return { token: input, rest: "" };
+	return { token: input.slice(0, firstSpace), rest: input.slice(firstSpace + 1).trim() };
 }
 
 /** Split an optional leading limit token off the argument string. */
 function takeLoopLimit(input: string): { limit?: LoopLimitConfig; rest: string } | string {
-	const firstSpace = input.search(/\s/);
-	const firstToken = firstSpace === -1 ? input : input.slice(0, firstSpace);
-	const rest = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
+	const { token: firstToken, rest } = splitFirstToken(input);
 	const token = firstToken.toLowerCase();
 
 	// Not a limit attempt (prose like "keep going", or a leading condition flag).
 	if (!/^[+-]?\d/.test(token)) return { rest: input };
 
-	// Bare integer: iteration count, unless the next token is a time unit ("10 minutes").
+	const duration = takeDuration(token, rest);
+	if (typeof duration === "string") return duration;
+	if (duration) return { limit: { kind: "duration", durationMs: duration.durationMs }, rest: duration.rest };
+
+	// Bare integer with no time unit after it: iteration count.
 	if (/^\d+$/.test(token)) {
-		if (rest) {
-			const unitToken = /^\S+/.exec(rest)?.[0] ?? "";
-			const unitMs = TIME_UNITS_MS.get(unitToken.toLowerCase());
-			if (unitMs !== undefined) {
-				const limit = makeDuration(token, unitMs);
-				if (typeof limit === "string") return limit;
-				return { limit, rest: rest.slice(unitToken.length).trim() };
-			}
-		}
 		const limit = makeIterations(token);
 		if (typeof limit === "string") return limit;
 		return { limit, rest };
 	}
 
-	// Compact / compound duration: "10m", "90s", "1h30m".
-	const duration = parseCompoundDuration(token);
-	if (duration !== undefined) {
-		if (typeof duration === "string") return duration;
-		return { limit: duration, rest };
-	}
-
 	// Limit-shaped but unparseable ("-1", "1.5h", "10x10").
 	return LOOP_USAGE;
+}
+
+/** Split an optional `every <duration>` clause off the argument string. */
+function takeLoopInterval(input: string): { intervalMs?: number; rest: string } | string {
+	const keyword = splitFirstToken(input);
+	if (keyword.token.toLowerCase() !== "every") return { rest: input };
+	const value = splitFirstToken(keyword.rest);
+	if (!value.token) return "every needs a duration, for example /loop every 15m.";
+	const token = value.token.toLowerCase();
+	// "every file has a test": prose, not an interval.
+	if (!/^[+-]?\d/.test(token)) return { rest: input };
+
+	const duration = takeDuration(token, value.rest);
+	if (typeof duration === "string") return duration;
+	// Interval-shaped but unparseable ("every 15", "every 1.5h").
+	if (!duration) return LOOP_USAGE;
+
+	const next = splitFirstToken(duration.rest);
+	if (next.token.toLowerCase() === "every" && /^[+-]?\d/.test(splitFirstToken(next.rest).token)) {
+		return "Use only one every.";
+	}
+	return { intervalMs: duration.durationMs, rest: duration.rest };
+}
+
+/**
+ * Duration grammar shared by the time limit and `every`: the spaced form
+ * (`10 minutes`) and the compact/compound form (`10m`, `1h30m`). `token` is
+ * lowercase. Returns `undefined` when the token is not a duration, or an error
+ * string when it is shaped like one but invalid.
+ */
+function takeDuration(token: string, rest: string): { durationMs: number; rest: string } | string | undefined {
+	if (/^\d+$/.test(token)) {
+		const unit = splitFirstToken(rest);
+		const unitMs = TIME_UNITS_MS.get(unit.token.toLowerCase());
+		if (unitMs === undefined) return undefined;
+		const durationMs = makeDuration(token, unitMs);
+		if (typeof durationMs === "string") return durationMs;
+		return { durationMs, rest: unit.rest };
+	}
+	const durationMs = parseCompoundDuration(token);
+	if (durationMs === undefined || typeof durationMs === "string") return durationMs;
+	return { durationMs, rest };
 }
 
 /** Split an optional leading `--while` / `--until` flag off the argument string. */
@@ -149,21 +191,21 @@ function makeIterations(amountText: string): LoopLimitConfig | string {
 	return { kind: "iterations", iterations: amount };
 }
 
-function makeDuration(amountText: string, unitMs: number): LoopLimitConfig | string {
+function makeDuration(amountText: string, unitMs: number): number | string {
 	const amount = Number(amountText);
 	if (!Number.isSafeInteger(amount) || amount <= 0) {
 		return "Loop duration must be positive.";
 	}
-	return { kind: "duration", durationMs: amount * unitMs };
+	return amount * unitMs;
 }
 
 /**
- * Parse a compact duration token such as `10m`, or a compound one like `1h30m`.
- * Returns `undefined` when the token is not duration-shaped, or an error string
- * when it is shaped like a duration but uses an unknown unit / non-positive
- * amount.
+ * Parse a compact duration token such as `10m`, or a compound one like `1h30m`,
+ * into milliseconds. Returns `undefined` when the token is not duration-shaped,
+ * or an error string when it is shaped like a duration but uses an unknown unit
+ * / non-positive amount.
  */
-function parseCompoundDuration(token: string): LoopLimitConfig | string | undefined {
+function parseCompoundDuration(token: string): number | string | undefined {
 	if (!/^(?:\d+[a-z]+)+$/.test(token)) return undefined;
 	const segments = token.match(/\d+[a-z]+/g);
 	if (!segments) return undefined;
@@ -182,7 +224,7 @@ function parseCompoundDuration(token: string): LoopLimitConfig | string | undefi
 		totalMs += amount * unitMs;
 	}
 	if (totalMs <= 0) return "Loop duration must be positive.";
-	return { kind: "duration", durationMs: totalMs };
+	return totalMs;
 }
 
 export function createLoopLimitRuntime(
@@ -221,6 +263,10 @@ export function isLoopLimitExhausted(limit: LoopLimitRuntime | undefined, nowMs 
 	if (!limit) return false;
 	if (limit.kind === "duration") return nowMs >= limit.deadlineMs;
 	return limit.remaining <= 0;
+}
+
+export function describeLoopInterval(intervalMs: number): string {
+	return `every ${formatLoopBudget(intervalMs)}`;
 }
 
 export function describeLoopLimit(config: LoopLimitConfig): string {

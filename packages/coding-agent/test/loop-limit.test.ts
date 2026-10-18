@@ -217,3 +217,102 @@ describe("loop limit runtime", () => {
 		expect(isLoopDurationExpired(limit, 601_000)).toBe(true);
 	});
 });
+
+describe("every clause", () => {
+	// The test's own unit table: every spelling the /loop grammar accepts.
+	const UNIT_MS: Record<string, number> = {
+		s: 1_000,
+		sec: 1_000,
+		secs: 1_000,
+		second: 1_000,
+		seconds: 1_000,
+		m: 60_000,
+		min: 60_000,
+		mins: 60_000,
+		minute: 60_000,
+		minutes: 60_000,
+		h: 3_600_000,
+		hr: 3_600_000,
+		hrs: 3_600_000,
+		hour: 3_600_000,
+		hours: 3_600_000,
+	};
+	const UNITS = Object.keys(UNIT_MS);
+	const SEED = 0x0e_7e_12;
+
+	test(`parses generated interval, limit, condition, and prompt combinations (seed ${SEED})`, () => {
+		let state = SEED;
+		const random = (n: number): number => {
+			state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+			return state % n;
+		};
+		for (let i = 0; i < 500; i++) {
+			const amount = 1 + random(999);
+			const unit = UNITS[random(UNITS.length)];
+			let intervalText: string;
+			let intervalMs: number;
+			switch (random(3)) {
+				case 0:
+					intervalText = `${amount}${unit}`;
+					intervalMs = amount * UNIT_MS[unit];
+					break;
+				case 1:
+					intervalText = `${amount} ${unit}`;
+					intervalMs = amount * UNIT_MS[unit];
+					break;
+				default: {
+					const second = 1 + random(59);
+					const secondUnit = UNITS[random(UNITS.length)];
+					intervalText = `${amount}${unit}${second}${secondUnit}`;
+					intervalMs = amount * UNIT_MS[unit] + second * UNIT_MS[secondUnit];
+				}
+			}
+			const limitAmount = 1 + random(50);
+			const limitKind = random(3);
+			const limitText = limitKind === 0 ? "" : limitKind === 1 ? `${limitAmount} ` : `${limitAmount}m `;
+			const limit =
+				limitKind === 0
+					? undefined
+					: limitKind === 1
+						? { kind: "iterations" as const, iterations: limitAmount }
+						: { kind: "duration" as const, durationMs: limitAmount * 60_000 };
+			const withCondition = random(2) === 1;
+			const input = `${limitText}every ${intervalText}${withCondition ? " --until 'x'" : ""} p`;
+
+			expect({ input, parsed: parseLoopArgs(input) }).toEqual({
+				input,
+				parsed: {
+					limit,
+					intervalMs,
+					condition: withCondition ? { command: "x", until: true } : undefined,
+					prompt: "p",
+				},
+			});
+		}
+	});
+
+	test.each([
+		["every", "every needs a duration, for example /loop every 15m."],
+		["every 15", "LOOP_USAGE"],
+		["every 1.5h", "LOOP_USAGE"],
+		["every 0m", "Loop duration must be positive."],
+		["every 10x", "Loop duration unit must be seconds, minutes, or hours."],
+		["every 15m every 5m", "Use only one every."],
+	])("%p is an error", (input, error) => {
+		const parsed = parseLoopArgs(input);
+		if (error === "LOOP_USAGE") expect(parsed).toStartWith("Usage: /loop [count|duration] [every <duration>]");
+		else expect(parsed).toBe(error);
+	});
+
+	test("every followed by a word is prompt text", () => {
+		expect(parseLoopArgs("every file has a test")).toEqual({ prompt: "every file has a test" });
+	});
+
+	test("only the first duration after every belongs to the interval", () => {
+		expect(parseLoopArgs("every 15m 2h go")).toEqual({ intervalMs: 900_000, prompt: "2h go" });
+	});
+
+	test("the keyword is case-insensitive", () => {
+		expect(parseLoopArgs("EVERY 15m")).toEqual({ intervalMs: 900_000 });
+	});
+});

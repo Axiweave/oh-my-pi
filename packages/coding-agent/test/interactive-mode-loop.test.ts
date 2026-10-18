@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-ag
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import * as loopCondition from "@oh-my-pi/pi-coding-agent/modes/loop-condition";
+import { createLoopLimitRuntime } from "@oh-my-pi/pi-coding-agent/modes/loop-limit";
 import type { LoopConditionVerdict } from "@oh-my-pi/pi-coding-agent/modes/loop-condition";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -518,5 +519,289 @@ describe("InteractiveMode loop auto-submit", () => {
 
 		expect(resolved).toHaveLength(1);
 		expect(mode.addMessageToChat).toHaveBeenCalledTimes(1);
+	});
+
+	describe("every interval", () => {
+		const MINUTE = 60_000;
+		let streaming = false;
+		let runs: { text: string; at: number }[] = [];
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			streaming = false;
+			runs = [];
+			Object.defineProperty(session, "isCompacting", { configurable: true, get: () => false });
+			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
+			Object.defineProperty(session, "hasPostPromptWork", { configurable: true, get: () => false });
+		});
+
+		afterEach(() => {
+			setSystemTime();
+			mode.editor.setText("");
+			mode.editor.pendingImages = [];
+		});
+
+		// The run loop calls getUserInput once each turn ends; record when each run is submitted.
+		function waitForRun(): void {
+			pendingInput = mode.getUserInput();
+			void pendingInput.then(input => runs.push({ text: input.text, at: Date.now() }));
+		}
+
+		async function advance(ms: number): Promise<void> {
+			vi.advanceTimersByTime(ms);
+			await flushMicrotasks();
+		}
+
+		function startIntervalLoop(intervalMs: number, prompt = "tick"): number {
+			mode.loopModeEnabled = true;
+			mode.loopIntervalMs = intervalMs;
+			mode.setLoopPrompt(prompt);
+			return Date.now();
+		}
+
+		const GAP_SEED = 0x6a9;
+		it(`starts each run exactly one interval after the previous run started (seed ${GAP_SEED})`, async () => {
+			let state = GAP_SEED;
+			let lastStart = startIntervalLoop(MINUTE);
+			for (let i = 0; i < 5; i++) {
+				state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+				const turnMs = state % 59_000;
+				streaming = true;
+				await advance(turnMs);
+				streaming = false;
+				waitForRun();
+				await advance(lastStart + MINUTE - Date.now() - 1);
+				expect({ turnMs, runs: runs.length }).toEqual({ turnMs, runs: i });
+				await advance(1);
+				expect({ turnMs, runs: runs.length, gap: runs[i]?.at - lastStart }).toEqual({
+					turnMs,
+					runs: i + 1,
+					gap: MINUTE,
+				});
+				lastStart = runs[i].at;
+			}
+		});
+
+		it("runs once, 800 ms after idle, when a turn outlasts the interval, and never while busy", async () => {
+			startIntervalLoop(MINUTE);
+			streaming = true;
+			await advance(90_000);
+			streaming = false;
+			waitForRun();
+			await advance(799);
+			expect(runs).toHaveLength(0);
+			await advance(1);
+			expect(runs).toHaveLength(1);
+
+			// Armed while the next turn still runs: due passes ten times over, nothing runs.
+			streaming = true;
+			waitForRun();
+			await advance(10 * MINUTE);
+			expect(runs).toHaveLength(1);
+			streaming = false;
+			await advance(800);
+			expect(runs).toHaveLength(2);
+			await advance(10 * MINUTE);
+			expect(runs).toHaveLength(2);
+		});
+
+		it("runs once right after a wall-clock jump past the due time (system sleep)", async () => {
+			startIntervalLoop(15 * MINUTE);
+			waitForRun();
+			setSystemTime(new Date(Date.now() + 20 * MINUTE));
+			await advance(1_000);
+			expect(runs).toHaveLength(1);
+		});
+
+		it.each([
+			["with", MINUTE],
+			["without", undefined],
+		])("keeps the draft text and images when a loop run starts %s an interval", async (_label, intervalMs) => {
+			const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+			mode.editor.setText("draft");
+			mode.editor.pendingImages = [image];
+			startIntervalLoop(intervalMs as number);
+			waitForRun();
+			await advance(MINUTE);
+			expect(runs).toHaveLength(1);
+			expect(mode.editor.getText()).toBe("draft");
+			expect(mode.editor.pendingImages).toEqual([image]);
+		});
+
+		it("keeps the 800 ms resubmit without an interval", async () => {
+			mode.loopModeEnabled = true;
+			mode.setLoopPrompt("tick");
+			waitForRun();
+			await advance(799);
+			expect(runs).toHaveLength(0);
+			await advance(1);
+			expect(runs).toHaveLength(1);
+		});
+
+		it("stops after the count limit, with every run on schedule and no extra wait", async () => {
+			const showStatus = vi.spyOn(mode, "showStatus");
+			mode.loopLimit = createLoopLimitRuntime({ kind: "iterations", iterations: 2 });
+			const start = startIntervalLoop(MINUTE);
+			for (let i = 0; i < 2; i++) {
+				waitForRun();
+				await advance(MINUTE);
+			}
+			expect(runs.map(run => run.at - start)).toEqual([MINUTE, 2 * MINUTE]);
+			// The budget is spent: the loop ends on the next tick, not one interval later.
+			waitForRun();
+			await advance(800);
+			expect(runs).toHaveLength(2);
+			expect(mode.loopModeEnabled).toBe(false);
+			expect(showStatus).toHaveBeenCalledWith("Loop limit reached. Loop mode disabled.");
+		});
+
+		it("stops at the time limit, with every run on schedule", async () => {
+			mode.loopLimit = createLoopLimitRuntime({ kind: "duration", durationMs: 60 * MINUTE });
+			const start = startIntervalLoop(15 * MINUTE);
+			for (let i = 0; i < 4; i++) {
+				waitForRun();
+				await advance(15 * MINUTE);
+			}
+			expect(runs.map(run => run.at - start)).toEqual([15 * MINUTE, 30 * MINUTE, 45 * MINUTE]);
+			expect(mode.loopModeEnabled).toBe(false);
+		});
+
+		it("checks the condition at each due time, not when the wait starts", async () => {
+			const checkedAt: number[] = [];
+			vi.spyOn(loopCondition, "evaluateLoopCondition").mockImplementation(async () => {
+				checkedAt.push(Date.now());
+				return { kind: "continue" };
+			});
+			mode.loopCondition = { command: "true", until: false };
+			const start = startIntervalLoop(MINUTE);
+			for (let i = 0; i < 3; i++) {
+				waitForRun();
+				await advance(MINUTE);
+			}
+			expect(checkedAt.map(at => at - start)).toEqual([MINUTE, 2 * MINUTE, 3 * MINUTE]);
+			expect(runs).toHaveLength(3);
+		});
+
+		it("compacts once for each due run and never during the wait", async () => {
+			cfgLoopMode.set(settings, "compact");
+			const compact = vi.spyOn(mode, "handleCompactCommand").mockResolvedValue("ok");
+			startIntervalLoop(MINUTE);
+			waitForRun();
+			await advance(MINUTE - 1);
+			expect(compact).not.toHaveBeenCalled();
+			await advance(1);
+			expect(compact).toHaveBeenCalledTimes(1);
+			expect(runs).toHaveLength(1);
+		});
+
+		describe("replace and status", () => {
+			it("keeps the prompt and moves the due time", async () => {
+				const start = startIntervalLoop(MINUTE);
+				waitForRun();
+				await advance(10_000);
+				expect(await mode.handleLoopCommand("every 120s")).toBeUndefined();
+				expect(mode.loopPrompt).toBe("tick");
+				await advance(start + 2 * MINUTE - Date.now() - 1);
+				expect(runs).toHaveLength(0);
+				await advance(1);
+				expect(runs).toEqual([{ text: "tick", at: start + 2 * MINUTE }]);
+			});
+
+			it("hands a new prompt back to the dispatcher", async () => {
+				startIntervalLoop(MINUTE);
+				expect(await mode.handleLoopCommand("every 30s other")).toBe("other");
+				expect(mode.loopIntervalMs).toBe(30_000);
+			});
+
+			it("changes nothing on an invalid replace", async () => {
+				vi.spyOn(mode, "showError").mockImplementation(() => {});
+				mode.loopLimit = createLoopLimitRuntime({ kind: "iterations", iterations: 5 });
+				const start = startIntervalLoop(MINUTE);
+				const limit = mode.loopLimit;
+				waitForRun();
+				expect(await mode.handleLoopCommand("every 1.5h")).toBeUndefined();
+				expect(mode.showError).toHaveBeenCalledTimes(1);
+				expect({ on: mode.loopModeEnabled, prompt: mode.loopPrompt, interval: mode.loopIntervalMs }).toEqual({
+					on: true,
+					prompt: "tick",
+					interval: MINUTE,
+				});
+				expect(mode.loopLimit).toBe(limit);
+				await advance(MINUTE);
+				expect(runs).toEqual([{ text: "tick", at: start + MINUTE }]);
+			});
+
+			it("clears the parts that the replace leaves out", async () => {
+				await mode.handleLoopCommand("3 every 60s --until 'x'");
+				expect(await mode.handleLoopCommand("every 60s")).toBeUndefined();
+				expect(mode.loopLimit).toBeUndefined();
+				expect(mode.loopCondition).toBeUndefined();
+				expect(mode.loopIntervalMs).toBe(MINUTE);
+			});
+
+			it("turns the loop off on a bare /loop", async () => {
+				startIntervalLoop(MINUTE);
+				await mode.handleLoopCommand("");
+				expect(mode.loopModeEnabled).toBe(false);
+				expect(mode.loopIntervalMs).toBeUndefined();
+			});
+
+			it("arms nothing for a replace during a turn; the turn end arms the new interval", async () => {
+				const setLoopModeStatus = vi.spyOn(mode.statusLine, "setLoopModeStatus");
+				const start = startIntervalLoop(MINUTE);
+				streaming = true;
+				await mode.handleLoopCommand("every 120s");
+				expect(setLoopModeStatus.mock.lastCall?.[0]?.nextRunAt).toBeUndefined();
+				await advance(30_000);
+				streaming = false;
+				waitForRun();
+				await advance(start + 2 * MINUTE - Date.now());
+				expect(runs).toEqual([{ text: "tick", at: start + 2 * MINUTE }]);
+			});
+
+			it("does not run after Esc pauses the wait", async () => {
+				startIntervalLoop(MINUTE);
+				waitForRun();
+				await advance(10_000);
+				mode.pauseLoop();
+				await advance(5 * MINUTE);
+				expect(runs).toHaveLength(0);
+			});
+
+			it("restarts the schedule from a prompt sent during the wait", async () => {
+				const start = startIntervalLoop(MINUTE);
+				waitForRun();
+				await advance(20_000);
+				mode.setLoopPrompt("new");
+				mode.onInputCallback?.({ text: "new", cancelled: false, started: false });
+				waitForRun();
+				await advance(MINUTE - 1);
+				expect(runs).toHaveLength(1);
+				await advance(1);
+				expect(runs[1]).toEqual({ text: "new", at: start + 20_000 + MINUTE });
+			});
+
+			it("shows the next run time only while the loop waits", async () => {
+				const setLoopModeStatus = vi.spyOn(mode.statusLine, "setLoopModeStatus");
+				const lastNextRunAt = () => setLoopModeStatus.mock.lastCall?.[0]?.nextRunAt;
+				const start = startIntervalLoop(MINUTE);
+				waitForRun();
+				expect(lastNextRunAt()).toBe(start + MINUTE);
+				await advance(MINUTE);
+				expect(runs).toHaveLength(1);
+				expect(lastNextRunAt()).toBeUndefined();
+
+				// Armed during a turn (as after a compaction-queued prompt): shown once idle.
+				streaming = true;
+				waitForRun();
+				expect(lastNextRunAt()).toBeUndefined();
+				streaming = false;
+				await advance(1_000);
+				expect(lastNextRunAt()).toBe(start + 2 * MINUTE);
+
+				mode.pauseLoop();
+				expect(lastNextRunAt()).toBeUndefined();
+			});
+		});
 	});
 });

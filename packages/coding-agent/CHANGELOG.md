@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added `/loop every <duration>`, for example `/loop every 15m check CI`. The prompt runs at once and then again 15 minutes after each run starts. A run never starts while a turn is busy. A run that comes due during a turn starts once, after the turn ends. While the loop waits, the status line shows `every 15m next HH:MM`. The interval combines with a count or time limit and with `--while`/`--until`: `/loop 2h every 15m --until 'gh pr checks' ...`.
 - Added `/goal edit [objective]`. It changes the objective of the current goal (active or paused) and keeps its id, status, token usage, time, and budget. With no text, it opens an "Edit goal" editor that shows the current objective. After a goal completes, `/goal edit` shows the last objective and starts a new goal from the edited text. The `/goal` menu also has an "Edit objective…" item. An active goal gets the new objective at once: as a steer while the agent runs, or as a continuation when it is idle.
 - Added the `auth.routing.<provider>` setting with `mode` (`smart`, `order`, `rotate`, `weight`, `usage`, `pace`), `stays` (`auto`, `session`, `turn`, `off`, `strict`), and `sink`. `auth.accountPolicies` entries also accept `weight` and `account.keySuffix` for API keys. A change through `omp config set` or the settings API applies on the next selection. An edit to `config.yml` applies after `/reload-config`, or at once with `config.hotReload: true`. `omp auth-gateway serve` reads them at start. See [Auth broker and gateway](../../docs/auth-broker-gateway.md#how-sessions-choose-and-keep-an-account).
 - With `stays: strict`, a usage-limit refusal ends the turn at once. Turn recovery does not wait for a reset (even with `retry.waitForUsageReset`), retry, or switch the account or model. `retry.usageAwareFallback` does not move a strict session to another account. A session with an explicit account pin keeps the earlier behavior.
@@ -50,6 +51,7 @@
 
 ### Changed
 
+- `/loop` with arguments while loop mode is on now replaces the running loop's limit, interval, and condition (a part you leave out is cleared). The current prompt stays unless you give a new one. Only a bare `/loop` turns loop mode off. Before, `/loop` with any arguments turned it off.
 - The task tool's per-spawn `effort` field (shown with `task.enableEffort=true`) now takes the `auto` mode ladder `low`, `medium`, `high`, `xhigh`, `max` instead of `lo`, `med`, `hi`. The tool description uses the same level criteria as the `auto` thinking classifier, so each level keeps its meaning on each model. Level i of 5 maps to the first eligible model level at position k/n ≥ i/5. Model levels below `low` are ignored, unless the model has no level at or above `low`. `task.maxEffort` still clamps the result. `lo`, `med`, and `hi` are no longer accepted.
 - Settings saves now keep comments, blank lines, key order, and quoting in `config.yml` and project `.omp/config.yml`. A save rewrites only the values that changed. This also applies to whole-record settings such as `modelProfiles`. The rewrite of `keybindings.yml` after a legacy key rename keeps them too. These files now load and save through the `yaml` package instead of Bun's built-in YAML. `<<` merge keys keep working. For a repeated key, the last value still wins, and a save that changes it writes the key once. The first save normalizes spacing before inline comments and empty `{}`/`[]` values that an older save split across two lines.
 - CLIProxyAPI discovery now enables GPT V2 server compaction and routes Claude models through Anthropic Messages with native compaction enabled. Provider and model `remoteCompaction.enabled: false` settings opt out. Current settings override discovery defaults after cache restoration.
@@ -65,6 +67,7 @@
 
 ### Fixed
 
+- A `/loop` run no longer clears the draft text or attachments in the input box.
 - Fixed speckit-auto doing nothing when you turned it on after a phase command started. This happened, for example, when goal mode blocked the mode, you ran `/goal drop`, and `/speckit.specify` was already running. `/speckit-auto-mode` now follows the latest user turn when it is a speckit phase command. A finished turn gets its check at once, and a running turn gets it when it ends. If the latest user turn is not a phase command, the mode still waits for one.
 - X-only web searches now check the cyber allowlist before adding xAI fallback models.
 - Shutdown and restart cancel pending speckit-auto checks before any worktree exit prompt can wait for input.

@@ -24,7 +24,7 @@ import {
 	saveModelPreset,
 } from "../config/model-presets";
 import { describeLoopCondition } from "../modes/loop-condition";
-import { describeLoopLimitRuntime } from "../modes/loop-limit";
+import { describeLoopInterval, describeLoopLimitRuntime } from "../modes/loop-limit";
 import type { InteractiveModeContext } from "../modes/types";
 import ratchetKickoffPrompt from "../prompts/ratchet-kickoff.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
@@ -602,9 +602,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "loop",
 		icon: "loop",
 		get description() {
-			return `Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Bound it with a count/duration, or gate it with \`--until '<cmd>'\` / \`--while '<cmd>'\` — the command's exit status decides whether the next iteration runs. ${formatKeyHint("escape")} suspends the ongoing loop; /loop again to disable.`;
+			return `Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Bound it with a count/duration, run it on a fixed schedule with \`every <duration>\` (it runs again that long after each run starts), or gate it with \`--until '<cmd>'\` / \`--while '<cmd>'\` — the command's exit status decides whether the next iteration runs. /loop with arguments replaces a running loop. ${formatKeyHint("escape")} suspends the ongoing loop; a bare /loop disables it.`;
 		},
-		inlineHint: "[count|duration] [--while|--until '<cmd>'] [prompt]",
+		inlineHint: "[count|duration] [every <duration>] [--while|--until '<cmd>'] [prompt]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.speckitAutoEnabled) return "Loop: blocked by speckit-auto mode";
@@ -612,6 +612,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (runtime.ctx.loopModePaused) return "Loop: paused";
 			const bounds = [
 				runtime.ctx.loopLimit ? describeLoopLimitRuntime(runtime.ctx.loopLimit) : undefined,
+				runtime.ctx.loopIntervalMs !== undefined ? describeLoopInterval(runtime.ctx.loopIntervalMs) : undefined,
 				runtime.ctx.loopCondition ? describeLoopCondition(runtime.ctx.loopCondition) : undefined,
 			].filter((part): part is string => part !== undefined);
 			if (bounds.length > 0) return `Loop: on (${bounds.join(", ")})`;

@@ -226,6 +226,8 @@ export interface InteractiveModeContext {
 	loopPrompt?: string;
 	loopLimit?: LoopLimitRuntime;
 	loopCondition?: LoopConditionConfig;
+	/** Fixed time between the starts of two `/loop every` runs. */
+	loopIntervalMs?: number;
 	speckitAutoEnabled: boolean;
 	/** A run is active, not paused, not held, and a run turn streams, a check runs, or a start is parked (Esc pauses). */
 	readonly speckitAutoActing: boolean;

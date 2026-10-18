@@ -305,6 +305,7 @@ import { describeLoopCondition, evaluateLoopCondition, type LoopConditionVerdict
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
+	describeLoopInterval,
 	describeLoopLimit,
 	describeLoopLimitRuntime,
 	isLoopDurationExpired,
@@ -1363,6 +1364,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	loopCondition: LoopConditionConfig | undefined = undefined;
+	/** Fixed time between the starts of two `/loop every` runs. */
+	loopIntervalMs: number | undefined = undefined;
 	speckitAutoEnabled = false;
 	speckitSubmitInFlight = 0;
 	#speckitRun: SpeckitRun | undefined;
@@ -1393,6 +1396,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#loopConditionAbort: AbortController | undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
+	/** Start of the latest loop run (user prompt or auto run); the interval counts from here. */
+	#loopRunStartedAt: number | undefined;
+	/** Due time of the armed interval run, shown in the status line only while the loop waits. */
+	#loopNextRunAt: number | undefined;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearGeneration = 0;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
@@ -3104,9 +3111,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		const prompt = this.loopPrompt;
 		const loopAction = cfgLoopMode.get(settings);
-		this.#deferLoopAutoSubmit(() => {
+		const run = () => {
 			void this.#runLoopIteration(loopAction, prompt);
-		});
+		};
+		// A spent budget ends the loop on the next tick instead of after one more interval.
+		if (
+			this.loopIntervalMs === undefined ||
+			this.#loopRunStartedAt === undefined ||
+			isLoopLimitExhausted(this.loopLimit)
+		) {
+			this.#deferLoopAutoSubmit(run);
+			return;
+		}
+		this.#armLoopDueTimer(Math.max(Date.now() + 800, this.#loopRunStartedAt + this.loopIntervalMs), run);
 	}
 
 	#deferLoopAutoSubmit(callback: () => void): void {
@@ -3118,10 +3135,41 @@ export class InteractiveMode implements InteractiveModeContext {
 		}, 800);
 	}
 
+	/**
+	 * Wait for an interval run in steps of at most 1 s against the wall clock: one
+	 * long timer can stall across a system sleep, and the run must start once the
+	 * machine wakes past its due time. The due time shows in the status line once
+	 * the session is idle; a timer armed during a turn picks that up on a later step.
+	 */
+	#armLoopDueTimer(dueAt: number, callback: () => void): void {
+		if (this.#loopNextRunAt !== dueAt && !this.#isAutoSubmitBlocked()) {
+			this.#loopNextRunAt = dueAt;
+			this.#syncLoopModeStatus();
+		}
+		this.#loopAutoSubmitTimer = setTimeout(
+			() => {
+				this.#loopAutoSubmitTimer = undefined;
+				if (!this.loopModeEnabled || !this.onInputCallback) return;
+				if (Date.now() < dueAt) {
+					this.#armLoopDueTimer(dueAt, callback);
+					return;
+				}
+				this.#loopNextRunAt = undefined;
+				this.#syncLoopModeStatus();
+				callback();
+			},
+			Math.min(1_000, Math.max(0, dueAt - Date.now())),
+		);
+	}
+
 	#cancelLoopAutoSubmit(): void {
 		if (this.#loopAutoSubmitTimer) {
 			clearTimeout(this.#loopAutoSubmitTimer);
 			this.#loopAutoSubmitTimer = undefined;
+		}
+		if (this.#loopNextRunAt !== undefined) {
+			this.#loopNextRunAt = undefined;
+			this.#syncLoopModeStatus();
 		}
 	}
 
@@ -3218,7 +3266,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#deferLoopAutoSubmit(() => this.#submitLoopPromptWhenReady(prompt));
 			return;
 		}
-		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
+		// A loop run is not the user's typing: keep the draft and attachments in the input box.
+		this.onInputCallback(this.startPendingSubmission({ text: prompt }, { preserveDraft: true }));
 	}
 
 	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
@@ -3271,6 +3320,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
 			return;
 		}
+		this.#loopRunStartedAt = Date.now();
 		this.#syncLoopModeStatus();
 
 		if (action === "compact") {
@@ -3332,7 +3382,15 @@ export class InteractiveMode implements InteractiveModeContext {
 				? "running"
 				: "waiting";
 		this.statusLine.setLoopModeStatus(
-			this.loopModeEnabled ? { state, limit: this.loopLimit, condition: this.loopCondition } : undefined,
+			this.loopModeEnabled
+				? {
+						state,
+						limit: this.loopLimit,
+						condition: this.loopCondition,
+						...(this.loopIntervalMs !== undefined && { intervalMs: this.loopIntervalMs }),
+						...(this.#loopNextRunAt !== undefined && { nextRunAt: this.#loopNextRunAt }),
+					}
+				: undefined,
 		);
 		this.ui.requestRender();
 	}
@@ -3344,6 +3402,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopPrompt = undefined;
 		this.loopLimit = undefined;
 		this.loopCondition = undefined;
+		this.loopIntervalMs = undefined;
+		this.#loopRunStartedAt = undefined;
 		this.#cancelLoopAutoSubmit();
 		this.#abortLoopCondition();
 		this.#syncLoopModeStatus();
@@ -3360,6 +3420,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		// way. Abort immediately instead of letting it run for up to the
 		// configured timeout in parallel with the turn it can no longer gate.
 		this.#abortLoopCondition();
+		// A user prompt replaces the armed run and restarts the interval.
+		this.#cancelLoopAutoSubmit();
+		this.#loopRunStartedAt = Date.now();
 		this.loopPrompt = prompt;
 		this.loopModePaused = false;
 		this.#syncLoopModeStatus();
@@ -3383,36 +3446,54 @@ export class InteractiveMode implements InteractiveModeContext {
 	pauseLoop(): void {
 		this.loopPrompt = undefined;
 		this.loopModePaused = true;
+		this.#loopRunStartedAt = undefined;
 		this.#cancelLoopAutoSubmit();
 		this.#abortLoopCondition();
 		this.#syncLoopModeStatus();
 	}
 
 	async handleLoopCommand(args = ""): Promise<string | undefined> {
-		if (this.loopModeEnabled) {
+		if (this.loopModeEnabled && !args.trim()) {
 			this.disableLoopMode();
 			return undefined;
 		}
-		if (this.#warnSpeckitAutoBlocks()) return undefined;
+		if (!this.loopModeEnabled && this.#warnSpeckitAutoBlocks()) return undefined;
 		const parsed = parseLoopArgs(args);
 		if (typeof parsed === "string") {
 			this.showError(parsed);
 			return undefined;
 		}
-		this.loopModeEnabled = true;
-		this.loopModePaused = false;
-		this.loopPrompt = undefined;
+		const replacing = this.loopModeEnabled;
+		if (!replacing) {
+			this.loopModeEnabled = true;
+			this.loopModePaused = false;
+			this.loopPrompt = undefined;
+		}
 		this.loopLimit = createLoopLimitRuntime(parsed.limit);
 		this.loopCondition = parsed.condition;
+		this.loopIntervalMs = parsed.intervalMs;
+		this.#abortLoopCondition();
+		this.#cancelLoopAutoSubmit();
 		this.#syncLoopModeStatus();
 		const limitSuffix = parsed.limit ? ` Limited to ${describeLoopLimit(parsed.limit)}.` : "";
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
+		const intervalText = parsed.intervalMs === undefined ? "" : describeLoopInterval(parsed.intervalMs);
+		const intervalSuffix = intervalText ? ` ${intervalText[0].toUpperCase()}${intervalText.slice(1)}.` : "";
 		// The condition is a *continuation* signal: the first iteration always
 		// runs, and it is re-evaluated before each subsequent one.
 		const conditionSuffix = parsed.condition ? ` Continuing ${describeLoopCondition(parsed.condition)}.` : "";
+		const settingsText = `${limitSuffix}${remainingSuffix}${intervalSuffix}${conditionSuffix}`;
+		if (replacing) {
+			this.showStatus(`Loop updated.${settingsText}`);
+			// A new prompt goes through the dispatcher and restarts the schedule.
+			// Otherwise re-arm the kept prompt (a no-op while paused). During a turn the
+			// due timer stays hidden and `getUserInput` re-arms it when the turn ends.
+			if (!parsed.prompt) this.#scheduleLoopAutoSubmit();
+			return parsed.prompt;
+		}
 		const tail = parsed.prompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`Loop mode enabled.${limitSuffix}${remainingSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /loop again to disable.`,
+			`Loop mode enabled.${settingsText} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; a bare /loop disables it.`,
 		);
 		// Hand any inline prompt back to the dispatcher so the normal submit flow
 		// runs the first iteration — it records the text as the loop prompt and
