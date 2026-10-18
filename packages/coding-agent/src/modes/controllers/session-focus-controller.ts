@@ -251,7 +251,7 @@ export class SessionFocusController {
 			if (target === this.ctx.session && !target.isStreaming) {
 				publishIdeSessionState(
 					this.ctx.mcpManager,
-					busy() ? "working" : ideTurnState(target.messages, this.ctx.goalInterviewActive),
+					busy() ? "working" : ideTurnState(target.messages, this.ctx.interviewActive),
 				);
 			}
 			this.ctx.updateEditorBorderColor();

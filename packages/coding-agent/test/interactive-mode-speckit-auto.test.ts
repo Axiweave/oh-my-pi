@@ -1100,9 +1100,13 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(await mode.handlePlanModeCommand(undefined, undefined, "debate")).toBe(false);
 			expect(await mode.handleGoalModeCommand()).toBe(false);
 			expect(await mode.handleGuidedGoalCommand()).toBe(false);
+			const prompt = vi.spyOn(session, "prompt");
+			expect(await mode.handleGuidedLoopCommand()).toBe(false);
 			expect(await mode.handleVibeModeCommand()).toBe(false);
 
-			expect(warn).toHaveBeenCalledTimes(6);
+			expect(warn).toHaveBeenCalledTimes(7);
+			expect(prompt).not.toHaveBeenCalled();
+			expect(mode.isGuidedLoopInterviewActive()).toBe(false);
 			expect([mode.loopModeEnabled, mode.planModeEnabled, mode.goalModeEnabled, mode.vibeModeEnabled]).toEqual([
 				false,
 				false,
@@ -1129,6 +1133,21 @@ describe("InteractiveMode speckit-auto mode", () => {
 				expect(warn).toHaveBeenCalledTimes(1);
 			});
 		}
+
+		it("refuses to turn on during a guided loop interview", async () => {
+			await start();
+			vi.spyOn(session, "prompt").mockResolvedValue(true);
+			vi.spyOn(session, "setActiveToolsByName").mockResolvedValue(undefined);
+			expect(await mode.handleGuidedLoopCommand("watch CI")).toBe(true);
+			expect(mode.isGuidedLoopInterviewActive()).toBe(true);
+			const warn = vi.spyOn(mode, "showWarning");
+
+			mode.toggleSpeckitAutoMode();
+
+			expect(mode.speckitAutoEnabled).toBe(false);
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(warn).toHaveBeenCalledWith("Finish the guided loop interview first.");
+		});
 
 		it("keeps the phase when the user steers a running implement turn", async () => {
 			await start();

@@ -1477,7 +1477,7 @@ export class EventController {
 			!this.ctx.speckitAutoActing &&
 			!this.ctx.session.hasPendingAsyncWork()
 		) {
-			publishIdeSessionState(this.ctx.mcpManager, ideTurnState([event.message], this.ctx.goalInterviewActive));
+			publishIdeSessionState(this.ctx.mcpManager, ideTurnState([event.message], this.ctx.interviewActive));
 		}
 		if (!cfgSpeechEnabled.get(settings)) return;
 		if (cfgSpeechMode.get(settings) !== "yield") {
@@ -2973,6 +2973,6 @@ export class EventController {
 		// `needs-input` already went out and must not be downgraded to `idle`.
 		if (this.ctx.planReviewActive) return;
 		if (this.ctx.speckitAutoActing) return;
-		publishIdeSessionState(this.ctx.mcpManager, ideTurnState(event.messages, this.ctx.goalInterviewActive));
+		publishIdeSessionState(this.ctx.mcpManager, ideTurnState(event.messages, this.ctx.interviewActive));
 	}
 }

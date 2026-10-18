@@ -630,6 +630,13 @@ export interface InteractiveModeContext {
 	): Promise<boolean>;
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
 	isGuidedGoalInterviewActive(): boolean;
+	handleGuidedLoopCommand(
+		rest?: string,
+		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		displayText?: string,
+	): Promise<boolean>;
+	/** True from `/guided-loop` until the user confirms or the interview ends. */
+	isGuidedLoopInterviewActive(): boolean;
 	handleLoopCommand(args?: string): Promise<string | undefined>;
 	setLoopPrompt(prompt: string): void;
 	armLoopAutoSubmit(): void;
@@ -649,8 +656,8 @@ export interface InteractiveModeContext {
 	openPlanReview(options?: { fromExtension?: boolean }): Promise<boolean>;
 	/** True while the plan review overlay is open; IDE turn-state publishes yield to `needs-input`. */
 	readonly planReviewActive: boolean;
-	/** True from `/guided-goal` until `goal create`; a clean stop is a question, so the IDE reads `needs-input`. */
-	readonly goalInterviewActive: boolean;
+	/** True while a `/guided-goal` or `/guided-loop` interview waits for an answer; a clean stop is a question, so the IDE reads `needs-input`. */
+	readonly interviewActive: boolean;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

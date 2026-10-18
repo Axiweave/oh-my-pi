@@ -130,6 +130,7 @@ import {
 	serializePlanModeState,
 } from "../plan-mode/state";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
+import guidedLoopInterviewPrompt from "../prompts/loop/guided-loop-interview.md" with { type: "text" };
 import planDebateConsensusInvalidatedPrompt from "../prompts/system/plan-debate-consensus-invalidated.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
@@ -182,6 +183,7 @@ import { isMCPToolName } from "../tools/builtin-names";
 import type { LspStartupServerInfo } from "../tools";
 import { resolvePlanFilePath } from "../plan-mode/plan-files";
 import { resolveToCwd } from "../tools/path-utils";
+import type { LoopStartRequest } from "../tools/loop";
 import { StreamPublisher } from "../stream/publisher";
 import { newRecordingPath, SessionRecorder } from "../stream/recording";
 import { StreamRedactor } from "../stream/redactor";
@@ -1354,8 +1356,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModeEnabled = false;
 	planModePaused = false;
 	goalModeEnabled = false;
-	/** ponytail: cleared only by a goal transition; an abandoned interview keeps reporting needs-input until then. */
-	goalInterviewActive = false;
+	/** ponytail: a guided-goal interview clears this only on a goal transition; until then an abandoned one keeps reporting needs-input. */
+	interviewActive = false;
 	goalModePaused = false;
 	vibeModeEnabled = false;
 	planModePlanFilePath: string | undefined = undefined;
@@ -1398,6 +1400,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	/** Start of the latest loop run (user prompt or auto run); the interval counts from here. */
 	#loopRunStartedAt: number | undefined;
+	/** The guided first run is queued behind the tool turn; its clock starts at its own message. */
+	#loopFirstRunQueued = false;
 	/** Due time of the armed interval run, shown in the status line only while the loop waits. */
 	#loopNextRunAt: number | undefined;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
@@ -1731,6 +1735,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	// session switches. While set, short replies like "c" are answers, not
 	// continue shortcuts.
 	#guidedGoalInterviewActive = false;
+	// True from `/guided-loop` kickoff until #endGuidedLoopInterview: the user
+	// confirms or cancels, a turn uses a tool other than `loop`, a typed `/loop`,
+	// the kickoff fails, or the session switches.
+	#guidedLoopInterviewActive = false;
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
 	// In-flight #enterVibeMode promise: set before the activateVibeTools await
@@ -2706,6 +2714,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (event.type === "config_warnings_changed") {
 					this.#syncConfigWarningHeader();
 				}
+				if (this.#loopFirstRunQueued && event.type === "message_start" && event.message.role === "user") {
+					this.#loopFirstRunQueued = false;
+					this.#loopRunStartedAt = Date.now();
+				}
 				void this.#handleGoalSessionEvent(event);
 				this.#handleSpeckitSessionEvent(event);
 			}),
@@ -3413,6 +3425,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	setLoopPrompt(prompt: string): void {
+		// Interview answers must not become the prompt of the loop paused for the interview.
+		if (this.#guidedLoopInterviewActive) return;
 		if (!this.loopModeEnabled) return;
 		// Any manual submit supersedes whatever gate is currently pending, even
 		// one resubmitting identical text: the gate was checking the *previous*
@@ -3453,6 +3467,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handleLoopCommand(args = ""): Promise<string | undefined> {
+		// A typed /loop takes manual control of the loop.
+		await this.#endGuidedLoopInterview();
 		if (this.loopModeEnabled && !args.trim()) {
 			this.disableLoopMode();
 			return undefined;
@@ -3555,7 +3571,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			!this.session.hasPendingAsyncWork() &&
 			!this.planReviewActive
 		) {
-			const ideState = ideTurnState(this.session.messages, this.goalInterviewActive || run?.hold !== undefined);
+			const ideState = ideTurnState(this.session.messages, this.interviewActive || run?.hold !== undefined);
 			// Same mapping as a settled turn: a finished reply (including a held question) reads `done`, keeping the title idle.
 			setRunStatus({ state: ideState === "failed" ? "error" : ideState === "idle" ? "idle" : "done" });
 			publishIdeSessionState(this.mcpManager, ideState);
@@ -3672,7 +3688,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** The mode that keeps speckit-auto mode off (research R10). */
 	#speckitAutoBlocker(): "loop" | "plan" | "goal" | "vibe" | undefined {
-		if (this.loopModeEnabled) return "loop";
+		if (this.loopModeEnabled || this.#guidedLoopInterviewActive) return "loop";
 		if (this.planModeEnabled || this.planModePaused) return "plan";
 		if (this.goalModeEnabled || this.goalModePaused || this.isGuidedGoalInterviewActive()) return "goal";
 		if (this.vibeModeEnabled || this.#vibeModeEntry) return "vibe";
@@ -3690,7 +3706,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		const blocker = this.#speckitAutoBlocker();
 		if (blocker) {
 			if (blocker === "plan") this.#warnPlanModeBlocks();
-			else if (blocker === "goal" && this.isGuidedGoalInterviewActive()) {
+			else if (blocker === "loop" && this.#guidedLoopInterviewActive) {
+				this.showWarning("Finish the guided loop interview first.");
+			} else if (blocker === "goal" && this.isGuidedGoalInterviewActive()) {
 				this.showWarning("Finish the guided goal interview first.");
 			} else this.showWarning(`Exit ${blocker} mode first.`);
 			return false;
@@ -5602,7 +5620,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 			this.goalModeEnabled = event.state?.enabled === true;
 			this.goalModePaused = event.state?.enabled !== true && event.state?.goal?.status === "paused";
-			this.goalInterviewActive = false;
+			// A goal event ends a guided-goal interview, not a guided-loop one.
+			this.interviewActive = this.#guidedLoopInterviewActive;
 			if (!event.state?.enabled) {
 				this.#cancelGoalContinuation();
 			}
@@ -5614,6 +5633,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.#guidedGoalInterviewActive && event.messages.some(hasAssistantToolCall)) {
 			this.#guidedGoalInterviewActive = false;
+		}
+		if (
+			this.#guidedLoopInterviewActive &&
+			event.messages.some(
+				message =>
+					message.role === "assistant" &&
+					message.content.some(block => block.type === "toolCall" && block.name !== "loop"),
+			)
+		) {
+			void this.#endGuidedLoopInterview();
 		}
 		if (this.#pendingGoalContinuationTurns > 0) {
 			this.#pendingGoalContinuationTurns--;
@@ -5778,7 +5807,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// A guided-goal interview that never reached `goal create` leaves this
 		// set; a session switch always ends that interview's relevance to the
 		// newly attached session, whether or not a goal was ever enabled here.
-		this.goalInterviewActive = false;
+		this.interviewActive = false;
 
 		if (this.session.getImplReviewState()) {
 			// In-memory backstop only. Never apply `restoreTools` here: this runs
@@ -5814,6 +5843,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const vibeScopeAlreadySuspended = this.#vibeScopeSuspendedForSwitch;
 		this.#vibeScopeSuspendedForSwitch = false;
 		this.#guidedGoalInterviewActive = false;
+		await this.#endGuidedLoopInterview();
 		const sessionContext = this.sessionManager.buildSessionContext();
 		const vibeSession = this.#vibeParentSession();
 		const targetVibeScope = VibeSessionRegistry.global().ownerScope(vibeSession);
@@ -6278,7 +6308,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.session.setActiveToolsByName(goalTools);
 		this.session.setGoalModeState(state);
 		this.goalModeEnabled = true;
-		this.goalInterviewActive = false;
+		this.interviewActive = this.#guidedLoopInterviewActive;
 		this.#resetGoalContinuationSuppression();
 		this.#updateGoalModeStatus();
 		if (this.session.isStreaming) {
@@ -6487,7 +6517,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.mcpManager,
 				this.session.isStreaming || this.session.hasPendingAsyncWork()
 					? "working"
-					: ideTurnState(this.session.messages, this.goalInterviewActive),
+					: ideTurnState(this.session.messages, this.interviewActive),
 			);
 		}
 		onHide?.();
@@ -7376,6 +7406,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	): Promise<boolean> {
 		try {
 			if (this.#warnSpeckitAutoBlocks()) return false;
+			if (this.#guidedLoopInterviewActive) {
+				this.showWarning("Finish the guided loop interview first.");
+				return false;
+			}
 			if (this.planModeEnabled || this.planModePaused) {
 				this.#warnPlanModeBlocks();
 				return false;
@@ -7406,7 +7440,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!enabledTools.includes("goal")) {
 				await this.session.setActiveToolsByName([...enabledTools, "goal"]);
 			}
-			this.goalInterviewActive = true;
+			this.interviewActive = true;
 			this.#guidedGoalInterviewActive = true;
 
 			// The interview is a normal conversation: the kickoff rides in as a
@@ -7438,6 +7472,92 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(error instanceof Error ? error.message : String(error));
 			return false;
 		}
+	}
+
+	async handleGuidedLoopCommand(
+		rest?: string,
+		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		displayText = rest?.trim() ? `/guided-loop ${rest.trim()}` : "/guided-loop",
+	): Promise<boolean> {
+		try {
+			if (this.#warnSpeckitAutoBlocks()) return false;
+			if (this.isGuidedGoalInterviewActive()) {
+				this.showWarning("Finish the guided goal interview first.");
+				return false;
+			}
+			if (this.loopModeEnabled && !this.loopModePaused) this.pauseLoop();
+			await this.#beginGuidedLoopInterview();
+			const kickoff = prompt.render(guidedLoopInterviewPrompt, { initial: rest?.trim() || undefined });
+			const images = input?.images?.length ? input.images : undefined;
+			if (this.session.isStreaming) {
+				await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
+			} else {
+				try {
+					await this.session.prompt(kickoff, { synthetic: true, images, displayText, userInitiated: true });
+				} catch (error) {
+					if (!(error instanceof AgentBusyError)) throw error;
+					await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
+				}
+			}
+			return true;
+		} catch (error) {
+			await this.#endGuidedLoopInterview();
+			this.showError(error instanceof Error ? error.message : String(error));
+			return false;
+		}
+	}
+
+	async #beginGuidedLoopInterview(): Promise<void> {
+		this.#guidedLoopInterviewActive = true;
+		this.interviewActive = true;
+		this.session.setLoopStartHandler(request => this.#handleLoopStartRequest(request));
+		const enabledTools = this.session.getEnabledToolNames();
+		if (!enabledTools.includes("loop")) await this.session.setActiveToolsByName([...enabledTools, "loop"]);
+	}
+
+	async #endGuidedLoopInterview(): Promise<void> {
+		if (!this.#guidedLoopInterviewActive) return;
+		this.#guidedLoopInterviewActive = false;
+		this.interviewActive = false;
+		this.session.setLoopStartHandler(null);
+		const enabledTools = this.session.getEnabledToolNames();
+		if (enabledTools.includes("loop")) {
+			await this.session.setActiveToolsByName(enabledTools.filter(name => name !== "loop"));
+		}
+	}
+
+	async #handleLoopStartRequest(request: LoopStartRequest): Promise<"started" | "declined" | "cancelled"> {
+		if (request.op === "cancel") {
+			await this.#endGuidedLoopInterview();
+			return "cancelled";
+		}
+		const line = `/loop ${request.args}`;
+		let message = line;
+		if (this.loopModeEnabled) {
+			const bounds = [
+				this.loopLimit && describeLoopLimitRuntime(this.loopLimit),
+				this.loopIntervalMs !== undefined && describeLoopInterval(this.loopIntervalMs),
+				this.loopCondition && describeLoopCondition(this.loopCondition),
+			].filter(Boolean);
+			message += `\n\nThis replaces the current loop (${bounds.length > 0 ? bounds.join(", ") : "no limit"}).`;
+		}
+		const confirmed = await this.showHookConfirm("Start this loop?", message, {
+			initialIndex: 1,
+			signal: request.signal,
+		});
+		if (!confirmed) return "declined";
+		await this.#endGuidedLoopInterview();
+		this.showStatus(line);
+		// Keep the copyable `/loop` line: the next status would otherwise overwrite it in place.
+		this.lastStatus = undefined;
+		const loopPrompt = await this.handleLoopCommand(request.args);
+		// The interview already ended; handleLoopCommand showed the error.
+		if (!loopPrompt) return "cancelled";
+		// Same first run as a typed `/loop … prompt`: a manual run once the tool turn ends.
+		this.setLoopPrompt(loopPrompt);
+		this.#loopFirstRunQueued = true;
+		void this.session.followUp(loopPrompt);
+		return "started";
 	}
 
 	async #dispatchGoalSubcommand(
@@ -9738,6 +9858,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	isGuidedGoalInterviewActive(): boolean {
 		return this.#guidedGoalInterviewActive && !this.goalModeEnabled && !this.goalModePaused;
+	}
+
+	isGuidedLoopInterviewActive(): boolean {
+		return this.#guidedLoopInterviewActive;
 	}
 
 	handleBtwCopyKey(): Promise<boolean> {

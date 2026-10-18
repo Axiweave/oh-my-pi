@@ -599,6 +599,20 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "guided-loop",
+		icon: "loop",
+		description: "Have the agent interview you in chat, then set up loop mode",
+		inlineHint: "[rough idea]",
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime =>
+			runtime.ctx.speckitAutoEnabled ? "Guided loop: blocked by speckit-auto mode" : undefined,
+		handleTui: async (command, runtime) => {
+			await runWithDetachedModeDraft(command, runtime, () =>
+				runtime.ctx.handleGuidedLoopCommand(command.args || undefined, runtime.input, command.text),
+			);
+		},
+	},
+	{
 		name: "loop",
 		icon: "loop",
 		get description() {

@@ -280,7 +280,7 @@ describe("guided goal setup", () => {
 
 	it("clears the interview flag on session switch, so a fresh session never inherits it", async () => {
 		// Regression: an interview abandoned before `goal create` left
-		// `goalInterviewActive` set. Switching to any session (even a plain
+		// `interviewActive` set. Switching to any session (even a plain
 		// reload) must not leak that flag onto the newly attached session's IDE
 		// state — `ideTurnState` reads it straight off `InteractiveMode`.
 		const harness = await createHarness();
@@ -290,14 +290,14 @@ describe("guided goal setup", () => {
 			vi.spyOn(harness.session, "prompt").mockResolvedValue(true);
 
 			await harness.mode.handleGuidedGoalCommand("ship it");
-			expect(harness.mode.goalInterviewActive).toBe(true);
+			expect(harness.mode.interviewActive).toBe(true);
 
 			await harness.session.sessionManager.ensureOnDisk();
 			const sessionFile = harness.session.sessionFile;
 			if (!sessionFile) throw new Error("Expected persisted session file");
 
 			expect(await harness.session.switchSession(sessionFile)).toBe(true);
-			expect(harness.mode.goalInterviewActive).toBe(false);
+			expect(harness.mode.interviewActive).toBe(false);
 		} finally {
 			await harness.cleanup();
 		}

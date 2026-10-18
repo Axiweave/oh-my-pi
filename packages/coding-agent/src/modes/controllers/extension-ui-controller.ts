@@ -1571,7 +1571,7 @@ export class ExtensionUiController {
 			this.ctx.mcpManager,
 			session?.isStreaming || session?.hasPendingAsyncWork()
 				? "working"
-				: ideTurnState(session?.messages, this.ctx.goalInterviewActive),
+				: ideTurnState(session?.messages, this.ctx.interviewActive),
 		);
 	}
 }

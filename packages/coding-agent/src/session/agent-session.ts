@@ -275,6 +275,7 @@ import {
 	type PlanProposalHandler,
 	writeDeviceDispatch,
 } from "../tools/resolve";
+import type { LoopStartHandler } from "../tools/loop";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
@@ -3234,6 +3235,18 @@ export class AgentSession implements SettingsScope {
 		this.#planProposalHandler = handler
 			? (title, context) => this.waitForUser(() => handler(title, context))
 			: undefined;
+	}
+
+	/** `/guided-loop` confirm handler consulted by the `loop` tool; set only while that interview runs. */
+	#loopStartHandler: LoopStartHandler | undefined;
+
+	peekLoopStartHandler(): LoopStartHandler | undefined {
+		return this.#loopStartHandler;
+	}
+
+	/** The handler shows a confirm dialog mid-turn, so it runs as a {@link waitForUser}. */
+	setLoopStartHandler(handler: LoopStartHandler | null): void {
+		this.#loopStartHandler = handler ? request => this.waitForUser(() => handler(request)) : undefined;
 	}
 
 	#sessionBeforeSwitchReconciler: (() => Promise<void>) | undefined;
@@ -7068,7 +7081,7 @@ export class AgentSession implements SettingsScope {
 
 	/** Selects enabled tools, ignoring names absent from the registry. */
 	setActiveToolsByName(toolNames: string[]): Promise<void> {
-		return this.#tools.setActiveToolsByName(toolNames);
+		return this.#tools.setActiveToolsByName(this.#withoutIdleLoopTool(toolNames));
 	}
 
 	/** Restores an exact top-level versus `xd://` tool partition. */
@@ -7078,12 +7091,25 @@ export class AgentSession implements SettingsScope {
 		forcePromptRefresh = false,
 		signal?: AbortSignal,
 	): Promise<void> {
-		return this.#tools.setActiveToolPresentation(toolNames, mountedToolNames, forcePromptRefresh, signal);
+		return this.#tools.setActiveToolPresentation(
+			this.#withoutIdleLoopTool(toolNames),
+			this.#withoutIdleLoopTool(mountedToolNames),
+			forcePromptRefresh,
+			signal,
+		);
 	}
 
 	/** Restores a non-MCP presentation snapshot while retaining the current MCP selection. */
 	restoreNonMCPToolPresentation(nonMCPToolNames: string[], nonMCPMountedToolNames: string[]): Promise<void> {
-		return this.#tools.restoreNonMCPToolPresentation(nonMCPToolNames, nonMCPMountedToolNames);
+		return this.#tools.restoreNonMCPToolPresentation(
+			this.#withoutIdleLoopTool(nonMCPToolNames),
+			this.#withoutIdleLoopTool(nonMCPMountedToolNames),
+		);
+	}
+
+	/** A tool snapshot taken during a `/guided-loop` interview must not revive `loop` after it ends. */
+	#withoutIdleLoopTool(toolNames: string[]): string[] {
+		return this.#loopStartHandler ? toolNames : toolNames.filter(name => name !== "loop");
 	}
 
 	/** Current enabled eval prelude definitions. */

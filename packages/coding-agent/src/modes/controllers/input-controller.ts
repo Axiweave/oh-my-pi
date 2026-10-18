@@ -1106,8 +1106,12 @@ export class InputController {
 			// developer directive (no visible user message) instead of an empty turn, so the
 			// model continues the prior intent rather than second-guessing the interrupt.
 			// During a /guided-goal interview "c" is a plausible answer (e.g. option C),
-			// so it is sent as a normal reply there.
-			if (text === "." || (text === "c" && !this.ctx.isGuidedGoalInterviewActive())) {
+			// and during a /guided-loop interview both are, so they are sent as normal replies there.
+			if (
+				(text === "." || text === "c") &&
+				!this.ctx.isGuidedLoopInterviewActive() &&
+				(text === "." || !this.ctx.isGuidedGoalInterviewActive())
+			) {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.clearDraft();
 					this.ctx.onInputCallback({
@@ -1146,7 +1150,8 @@ export class InputController {
 				submittedMode === "plan" ||
 				submittedMode === "vibe" ||
 				submittedMode === "goal" ||
-				submittedMode === "guided-goal";
+				submittedMode === "guided-goal" ||
+				submittedMode === "guided-loop";
 			if (
 				draftDetached &&
 				submittedImages?.length &&
@@ -1197,7 +1202,7 @@ export class InputController {
 						editorOrigin,
 					});
 				} catch (error) {
-					// Detached mode commands (plan/vibe/goal/guided-goal) rethrow so
+					// Detached mode commands (plan/vibe/goal/guided-goal/guided-loop) rethrow so
 					// this caller — the one that took the draft's images out of the
 					// editor before dispatch — restores the submission and reports
 					// the error, mirroring `handleFollowUp`'s Ctrl+Enter path.

@@ -69,6 +69,7 @@ import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
+import { type LoopStartHandler, LoopTool } from "./loop";
 import { SecurityScanTool } from "./security-scan";
 import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
@@ -505,6 +506,10 @@ export interface ToolSession {
 	peekPlanProposalHandler?(): PlanProposalHandler | undefined;
 	/** Register or clear the plan-proposal handler. Passing `null` clears it. */
 	setPlanProposalHandler?(handler: PlanProposalHandler | null): void;
+	/** The `/guided-loop` confirm handler; defined only while that interview runs, which gates the `loop` tool. */
+	peekLoopStartHandler?(): LoopStartHandler | undefined;
+	/** Register or clear the `/guided-loop` confirm handler. Passing `null` clears it. */
+	setLoopStartHandler?(handler: LoopStartHandler | null): void;
 	/** Get active checkpoint state if any. */
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
@@ -592,6 +597,7 @@ export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
 	think: () => new ThinkTool(),
 	yield: s => new YieldTool(s),
 	goal: s => new GoalTool(s),
+	loop: s => new LoopTool(s),
 };
 
 export type ToolName = BuiltinToolName;
@@ -743,6 +749,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			const goalState = session.getGoalModeState?.();
 			return goalState === undefined || goalState.enabled === true || goalState.goal.status === "dropped";
 		}
+		if (name === "loop") return !restrictToolNames && session.peekLoopStartHandler?.() !== undefined;
 		if (name === "lsp") return enableLsp && cfgLspEnabled.get(session.settings);
 		if (name === "bash") return cfgBashEnabled.get(session.settings);
 		if (name === "eval") return allowEval;

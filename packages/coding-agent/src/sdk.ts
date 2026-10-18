@@ -2508,6 +2508,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			clearPendingInvokers: () => session.clearPendingInvokers(),
 			peekPlanProposalHandler: () => session.peekPlanProposalHandler(),
 			setPlanProposalHandler: handler => session.setPlanProposalHandler(handler),
+			peekLoopStartHandler: () => session.peekLoopStartHandler(),
+			setLoopStartHandler: handler => session.setLoopStartHandler(handler),
 			allocateOutputArtifact: async toolType => {
 				try {
 					return await sessionManager.allocateArtifactPath(toolType);
@@ -3600,6 +3602,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				nativeToolsByName.set(goalTool.name, wrapped);
 			}
 		}
+		// Registered up front but gated by `isToolAllowed`: active only while a
+		// `/guided-loop` interview has installed its confirm handler.
+		if (!restrictToolNames && !toolRegistry.has("loop")) {
+			const loopTool = await HIDDEN_TOOLS.loop(toolSession);
+			if (loopTool) {
+				const wrapped = wrapToolWithMetaNotice(loopTool);
+				toolRegistry.set(loopTool.name, wrapped);
+				builtInRegistryToolNames.add(loopTool.name);
+				nativeToolsByName.set(loopTool.name, wrapped);
+			}
+		}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
 			builtInRegistryToolNames.delete(tool.name);
@@ -4208,7 +4221,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				return tool?.defaultInactive === true || tool?.hidden === true;
 			}),
 		);
-		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal");
+		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal" && name !== "loop");
 		const explicitlyRequestedToolNameSet = explicitlyRequestedToolNames
 			? new Set(explicitlyRequestedToolNames)
 			: undefined;

@@ -149,6 +149,7 @@ async function createContext(options: CreateContextOptions = {}) {
 	const hasActiveBtw = vi.fn(() => false);
 	const handlesBtwBranchKey = vi.fn(() => false);
 	const isGuidedGoalInterviewActive = vi.fn(() => false);
+	const isGuidedLoopInterviewActive = vi.fn(() => false);
 	const editor: FakeEditor = {
 		setText(text: string) {
 			editorText = text;
@@ -273,6 +274,7 @@ async function createContext(options: CreateContextOptions = {}) {
 		showError,
 		showStatus: vi.fn(),
 		isGuidedGoalInterviewActive,
+		isGuidedLoopInterviewActive,
 	} as unknown as InteractiveModeContext;
 
 	return {
@@ -313,6 +315,7 @@ async function createContext(options: CreateContextOptions = {}) {
 			handleBtwFollowUpKey,
 			showError,
 			isGuidedGoalInterviewActive,
+			isGuidedLoopInterviewActive,
 		},
 	};
 }
@@ -824,6 +827,46 @@ describe("InputController keybinding setup", () => {
 
 		expect(onInput).not.toHaveBeenCalled();
 		expect(spies.prompt).toHaveBeenCalledWith("c", { streamingBehavior: "steer", images: undefined });
+	});
+
+	it("sends bare '.' and 'c' as normal replies during a guided-loop interview", async () => {
+		for (const shortcut of [".", "c"]) {
+			const { InputController, ctx, editor, spies } = await createContext();
+			spies.isGuidedLoopInterviewActive.mockReturnValue(true);
+			const session: { isStreaming: boolean } = ctx.session;
+			session.isStreaming = true;
+			const onInput = vi.fn();
+			ctx.onInputCallback = onInput;
+			const controller = new InputController(ctx);
+
+			controller.setupEditorSubmitHandler();
+			await editor.onSubmit?.(shortcut);
+
+			expect(onInput, `shortcut ${shortcut}`).not.toHaveBeenCalled();
+			expect(spies.prompt, `shortcut ${shortcut}`).toHaveBeenCalledWith(shortcut, {
+				streamingBehavior: "steer",
+				images: undefined,
+			});
+		}
+	});
+
+	it("keeps '.' as the continue shortcut during a guided-goal interview", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		spies.isGuidedGoalInterviewActive.mockReturnValue(true);
+		const onInput = vi.fn();
+		ctx.onInputCallback = onInput;
+		const controller = new InputController(ctx);
+
+		controller.setupEditorSubmitHandler();
+		await editor.onSubmit?.(".");
+
+		expect(onInput).toHaveBeenCalledWith({
+			text: manualContinuePrompt,
+			cancelled: false,
+			started: true,
+			synthetic: true,
+			userInitiated: true,
+		});
 	});
 });
 
