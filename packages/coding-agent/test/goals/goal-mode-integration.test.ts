@@ -859,9 +859,7 @@ describe("InteractiveMode goal mode integration", () => {
 			await Promise.resolve();
 		}
 		expect(harness.session.getGoalModeState()).toBeUndefined();
-		const showHookEditor = vi
-			.spyOn(harness.mode, "showHookEditor")
-			.mockResolvedValue("Ship the release and tag it");
+		const showHookEditor = vi.spyOn(harness.mode, "showHookEditor").mockResolvedValue("Ship the release and tag it");
 
 		expect(await harness.mode.handleGoalModeCommand("edit")).toBe(true);
 

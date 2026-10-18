@@ -7,7 +7,7 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
 The launcher targets this checkout and reports `18.12.1`.
-`bun check` stops at `check:tools`, because `oxfmt` flags `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. This merge does not change that file. All `check:types` packages and `check:rs` pass.
+`bun check` passes after the follow-up format fix to `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. At the merge commit, `oxfmt` flagged only that file, which the merge does not change.
 The merge had conflicts in 6 files. The resolutions preserve every fork decision and keep upstream behavior.
 Upstream's sessionless selection scans stored credentials in order. The fork keeps that order and also keeps the round-robin cursor still outside `smart` routing.
 Upstream's typing hook calls `session.prewarmModelConnection()`. The fork's enhanced-paste test stub adds that method.
