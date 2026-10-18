@@ -1,28 +1,39 @@
 /**
- * Smart unexpected-stop detection: asks one yes/no judge question whether a
- * text-only assistant turn promised to act and then ended. The judge comes
- * from the live `judge` role chain resolved by {@link resolveJudge}.
+ * Yes/no judge questions about an assistant's final reply, answered by the
+ * live `judge` role chain resolved by {@link resolveJudge}:
+ * - `stopped`: a text-only turn promised to act and then ended.
+ * - `needsUser`: a reply that ends while the agent's own background jobs run
+ *   waits for the user, not only for the jobs.
  */
 import type { AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, type JudgmentState, judgeQuestions, type Model } from "@oh-my-pi/pi-ai";
+import {
+	type AssistantMessage,
+	type JudgmentState,
+	judgeQuestions,
+	type Model,
+	type NoulQuestion,
+} from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { type JudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
+import needsUserFile from "../prompts/judge/needs-user.json" with { type: "json" };
 import questionFile from "../prompts/judge/unexpected-stop.json" with { type: "json" };
 
 /**
- * Yes-probability at or above which a turn counts as an unexpected stop.
+ * Yes-probability at or above which a question counts as yes.
  * Keyword judges answer exactly 0 or 1; TypeSafe's calibrated probability
- * lands in between, and a coin-flip message must not trigger a retry.
+ * lands in between, and a coin-flip message must not trigger a retry or a
+ * needs-input notification.
  */
-const UNEXPECTED_STOP_THRESHOLD = 0.5;
+const YES_THRESHOLD = 0.5;
 
 /**
  * The yes/no `stopped` question. Criteria stay bulleted examples: on
  * lfm2-1.2b / qwen2.5-1.5b, prose criteria cost ~3 points of recall.
  */
 const QUESTIONS = judgeQuestions(questionFile);
+const NEEDS_USER_QUESTIONS = judgeQuestions(needsUserFile);
 
 /**
  * Leading characters of the user's request shown to the judge: enough for the
@@ -80,8 +91,31 @@ export function isUnexpectedStopCandidate(message: AssistantMessage): boolean {
 }
 
 /** `true` for an unexpected stop, `false` for a normal end of turn, `undefined` when no judge could answer. */
-export async function classifyUnexpectedStop(
+export function classifyUnexpectedStop(
 	stop: UnexpectedStopTurn,
+	deps: ClassifyUnexpectedStopDeps,
+): Promise<boolean | undefined> {
+	return judgeYes("unexpected-stop", "stopped", QUESTIONS.stopped, stop, deps);
+}
+
+/**
+ * `true` when a reply that ends while the agent's own background jobs run
+ * needs the user (a question, a decision, an approval), `false` when it only
+ * waits for the jobs, `undefined` when no judge could answer.
+ */
+export function classifyNeedsUser(
+	turn: UnexpectedStopTurn,
+	deps: ClassifyUnexpectedStopDeps,
+): Promise<boolean | undefined> {
+	return judgeYes("needs-user", "needsUser", NEEDS_USER_QUESTIONS.needsUser, turn, deps);
+}
+
+/** One yes/no judge question `id` about `turn`; `purpose` labels the ledger and telemetry. Never throws. */
+async function judgeYes(
+	purpose: string,
+	id: string,
+	question: NoulQuestion,
+	turn: UnexpectedStopTurn,
 	deps: ClassifyUnexpectedStopDeps,
 ): Promise<boolean | undefined> {
 	try {
@@ -91,20 +125,17 @@ export async function classifyUnexpectedStop(
 			sessionModel: deps.model,
 			sessionId: deps.sessionId,
 			metadataResolver: deps.metadataResolver,
-			purpose: "unexpected-stop",
+			purpose,
 			onUsage: deps.onUsage,
 			telemetry: deps.telemetry,
 			cache: sharedJudgmentCache(),
 		});
-		const request = stop.request?.trim().slice(0, REQUEST_CHARS);
-		const state: JudgmentState = request ? { request, message: stop.message } : { message: stop.message };
-		const { answers } = await judge.judge(
-			{ state, questions: { stopped: QUESTIONS.stopped } },
-			{ signal: deps.signal },
-		);
-		return answers.stopped.noul >= UNEXPECTED_STOP_THRESHOLD;
+		const request = turn.request?.trim().slice(0, REQUEST_CHARS);
+		const state: JudgmentState = request ? { request, message: turn.message } : { message: turn.message };
+		const { answers } = await judge.judge({ state, questions: { [id]: question } }, { signal: deps.signal });
+		return answers[id].noul >= YES_THRESHOLD;
 	} catch (error) {
-		logger.debug("unexpected-stop: classification failed", {
+		logger.debug(`${purpose}: classification failed`, {
 			error: error instanceof Error ? error.message : String(error),
 		});
 		return undefined;

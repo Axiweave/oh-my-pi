@@ -5,6 +5,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
+	classifyNeedsUser,
 	classifyUnexpectedStop,
 	isUnexpectedStopCandidate,
 } from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
@@ -207,5 +208,38 @@ describe("classifyUnexpectedStop", () => {
 		expect(
 			await classifyUnexpectedStop({ message: "Doing that now." }, { settings, registry, sessionId: "s" }),
 		).toBeUndefined();
+	});
+});
+
+describe("classifyNeedsUser", () => {
+	it("maps the judge's yes, no, and failure to true, false, and undefined", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const settings = Settings.isolated({ modelRoles: { judge: `${model.provider}/${model.id}` } });
+		const registry = makeRegistry([model], { [model.provider]: "test-key" });
+		// Distinct messages: the shared judgment cache must not answer one case from another.
+		const cases: Array<[string, () => Promise<never>, boolean | undefined]> = [
+			[
+				"Approve the two sha256 values?",
+				async () => ({ stopReason: "stop", content: [{ type: "text", text: "YES" }] }) as never,
+				true,
+			],
+			[
+				"I will report when the tests finish.",
+				async () => ({ stopReason: "stop", content: [{ type: "text", text: "NO" }] }) as never,
+				false,
+			],
+			["Which branch should I deploy?", async () => Promise.reject(new Error("provider down")), undefined],
+		];
+		for (const [message, reply, expected] of cases) {
+			const complete = vi.spyOn(ai, "completeSimple").mockImplementation(reply);
+			const verdict = await classifyNeedsUser({ message }, { settings, registry, sessionId: "s" });
+			expect({ message, verdict, calls: complete.mock.calls.length }).toEqual({
+				message,
+				verdict: expected,
+				calls: 1,
+			});
+			complete.mockRestore();
+		}
 	});
 });

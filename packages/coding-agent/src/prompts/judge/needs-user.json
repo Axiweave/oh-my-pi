@@ -1,0 +1,9 @@
+{
+	"needsUser": {
+		"instructions": "The state holds an assistant's final `message` for this turn and, when known, the user's `request` it replies to. The assistant's own background jobs (commands, watchers, subagents) are still running. Classify whether the message needs the user before the assistant can go on: it asks the user a question, asks for a decision or an approval, or asks the user to do something. A request at the end of a long status report still needs the user. A message that only reports status, promises to report later, or states the assistant's own next step after the jobs finish does not need the user. A running job or watcher does not change the answer.",
+		"criteria": {
+			"true": "Needs the user:\n- \"Status: the luna campaigns are still running, and the watcher bg_4 is waiting for the first campaign to end. To start the E6 E7 pair, reply with approval of the two sha256 values above. I will then write approved_by into each frozen file, add a LEDGER line, and run launch.sh for each protocol.\"\n- \"The server is up. Must I run the migration now?\"\n- \"The build runs in the background. Which branch should I deploy when it finishes?\"\n- \"Please log in to the dashboard and paste the token here.\"",
+			"false": "Does not need the user:\n- \"Next action: when the first E6 Runs finish, I will check their cost and their errors.\"\n- \"Tests run in the background. I will report when they finish.\"\n- \"The watcher bg_2 is waiting for the deploy. I will continue when it reports.\"\n- \"Benchmarks started. Results in about 20 minutes.\""
+		}
+	}
+}

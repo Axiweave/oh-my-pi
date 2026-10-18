@@ -3563,12 +3563,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		this.ui.requestRender();
 		// The title and the IDE stay `working` while the mode acts between phases (event-controller); show the
-		// settled state once it stops. An own submission waiting for its turn still acts. A hold waits for the user.
+		// settled state once it stops. An own submission waiting for its turn still acts. A hold waits for the user,
+		// even while the agent's own background jobs still run.
 		if (
 			!this.speckitAutoActing &&
 			!this.#speckitOwnTurn &&
 			!this.session.isStreaming &&
-			!this.session.hasPendingAsyncWork() &&
+			(!this.session.hasPendingAsyncWork() || run?.hold !== undefined) &&
 			!this.planReviewActive
 		) {
 			const ideState = ideTurnState(this.session.messages, this.interviewActive || run?.hold !== undefined);
@@ -3932,6 +3933,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!current || this.#speckitRun !== run) return;
 		const action = decideSpeckitStep(run, verdict);
 		// An unfinished reply while a job this phase started still runs: the agent waits to be woken, not the user.
+		// A `user` hold (the judge's `waits` answer) holds at once, even while the job runs.
 		if (
 			action.kind === "hold" &&
 			action.hold.kind === "needs-you" &&
@@ -6513,11 +6515,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#planReviewOwner = undefined;
 		// Only a review that was on screen re-announces the settled state.
 		if (handle) {
+			const awaitingReply = this.eventController.jobWaitNeedsInput;
 			publishIdeSessionState(
 				this.mcpManager,
-				this.session.isStreaming || this.session.hasPendingAsyncWork()
+				this.session.isStreaming || (this.session.hasPendingAsyncWork() && !awaitingReply)
 					? "working"
-					: ideTurnState(this.session.messages, this.interviewActive),
+					: ideTurnState(this.session.messages, this.interviewActive || awaitingReply),
 			);
 		}
 		onHide?.();

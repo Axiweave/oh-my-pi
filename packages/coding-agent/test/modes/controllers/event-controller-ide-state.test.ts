@@ -19,6 +19,7 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import * as unexpectedStopClassifier from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 
 import { cfgCompletionNotify, cfgErrorNotify } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -131,6 +132,8 @@ function makeTurnEndContext(
 		messages: [] as AssistantMessage[],
 		getLastAssistantMessage: () => options.lastAssistantMessage,
 		hasPendingAsyncWork: () => false,
+		hasRunningAsyncJobs: () => false,
+		hasPendingAsyncDelivery: () => false,
 		getContextUsage: () => undefined,
 		agent: { getPendingToolResults: () => [] },
 	};
@@ -343,5 +346,212 @@ describe("EventController IDE session-state publishing", () => {
 		await controller.handleEvent({ type: "turn_start" } as Extract<AgentSessionEvent, { type: "turn_start" }>);
 		await flushMicrotasks();
 		expect(fake.sent).toEqual(["working", "done", "working"]);
+	});
+});
+
+describe("EventController background-job settle judge", () => {
+	type AgentEnd = Extract<AgentSessionEvent, { type: "agent_end" }>;
+
+	/** A main session whose own jobs run until `drain()`; the final reply settles with `awaitingAsyncWork`. */
+	function jobWaitHarness() {
+		const fake = fakeIdeManager();
+		const ctx = makeTurnEndContext(fake.manager);
+		const drained = Promise.withResolvers<void>();
+		let running = true;
+		let lastReply: AssistantMessage | undefined;
+		Object.assign(ctx.session, {
+			hasPendingAsyncWork: () => running,
+			hasRunningAsyncJobs: () => running,
+			settleAsyncWork: () => drained.promise,
+			getLastAssistantMessage: () => lastReply,
+		});
+		const controller = new EventController(ctx);
+		const notify = vi.spyOn(controller, "sendCompletionNotification").mockImplementation(() => {});
+		const settle = (message: AssistantMessage = makeAssistantMessage("stop")): AgentEnd => {
+			lastReply = message;
+			return { ...makeAgentEndEvent([message]), isTerminal: false, awaitingAsyncWork: true };
+		};
+		/** The session's last reply changes, as `/new` (none) or `/resume` (another session's) makes it. */
+		const replaceLastReply = (message: AssistantMessage | undefined) => {
+			lastReply = message;
+		};
+		const drain = async () => {
+			running = false;
+			drained.resolve();
+			await flushMicrotasks();
+		};
+		return { fake, ctx, controller, notify, settle, drain, replaceLastReply };
+	}
+
+	it("settles a reply that needs the user as needs-input once, and the job drain keeps it", async () => {
+		vi.spyOn(unexpectedStopClassifier, "classifyNeedsUser").mockResolvedValue(true);
+		const h = jobWaitHarness();
+
+		await h.controller.handleEvent({ type: "agent_start" });
+		await h.controller.handleEvent(h.settle());
+		await flushMicrotasks();
+		expect(h.fake.sent).toEqual(["working", "needs-input"]);
+		expect(h.controller.jobWaitNeedsInput).toBe(true);
+		expect(h.notify).toHaveBeenCalledTimes(1);
+
+		// The jobs end with no wake: the settled state is not demoted and not announced twice.
+		await h.drain();
+		expect(h.fake.sent).toEqual(["working", "needs-input"]);
+		expect(h.notify).toHaveBeenCalledTimes(1);
+
+		// The user replies: the verdict ends with the new run.
+		await h.controller.handleEvent({ type: "agent_start" });
+		await flushMicrotasks();
+		expect(h.controller.jobWaitNeedsInput).toBe(false);
+		expect(h.fake.sent).toEqual(["working", "needs-input", "working"]);
+	});
+
+	it("keeps the job wait for a no or a missing verdict", async () => {
+		for (const verdict of [false, undefined]) {
+			vi.spyOn(unexpectedStopClassifier, "classifyNeedsUser").mockResolvedValue(verdict);
+			const h = jobWaitHarness();
+
+			await h.controller.handleEvent({ type: "agent_start" });
+			await h.controller.handleEvent(h.settle());
+			await flushMicrotasks();
+			expect(h.fake.sent).toEqual(["working"]);
+			expect(h.notify).not.toHaveBeenCalled();
+
+			await h.drain();
+			expect(h.fake.sent).toEqual(["working", "done"]);
+			expect(h.notify).toHaveBeenCalledTimes(1);
+		}
+	});
+
+	it("drops a yes verdict that lands after a new run started", async () => {
+		const verdict = Promise.withResolvers<boolean | undefined>();
+		vi.spyOn(unexpectedStopClassifier, "classifyNeedsUser").mockReturnValue(verdict.promise);
+		const h = jobWaitHarness();
+
+		await h.controller.handleEvent({ type: "agent_start" });
+		await h.controller.handleEvent(h.settle());
+		await h.controller.handleEvent({ type: "agent_start" });
+		verdict.resolve(true);
+		await flushMicrotasks();
+
+		expect(h.fake.sent).toEqual(["working"]);
+		expect(h.controller.jobWaitNeedsInput).toBe(false);
+		expect(h.notify).not.toHaveBeenCalled();
+	});
+
+	it("ends the verdict when the session's last reply changes, as after /new or /resume", async () => {
+		const other = { ...makeAssistantMessage("stop"), timestamp: Date.now() + 60_000 } as AssistantMessage;
+		for (const [label, nextReply] of [
+			["new session", undefined],
+			["resumed session", other],
+		] as const) {
+			vi.spyOn(unexpectedStopClassifier, "classifyNeedsUser").mockResolvedValue(true);
+			const h = jobWaitHarness();
+			await h.controller.handleEvent({ type: "agent_start" });
+			await h.controller.handleEvent(h.settle());
+			await flushMicrotasks();
+			expect({ label, before: h.controller.jobWaitNeedsInput }).toEqual({ label, before: true });
+
+			h.replaceLastReply(nextReply);
+			expect({ label, after: h.controller.jobWaitNeedsInput }).toEqual({ label, after: false });
+		}
+	});
+
+	it("drops a yes verdict that lands after the session changed", async () => {
+		const verdict = Promise.withResolvers<boolean | undefined>();
+		vi.spyOn(unexpectedStopClassifier, "classifyNeedsUser").mockReturnValue(verdict.promise);
+		const h = jobWaitHarness();
+
+		await h.controller.handleEvent({ type: "agent_start" });
+		await h.controller.handleEvent(h.settle());
+		h.replaceLastReply(undefined);
+		verdict.resolve(true);
+		await flushMicrotasks();
+
+		expect(h.fake.sent).toEqual(["working"]);
+		expect(h.notify).not.toHaveBeenCalled();
+	});
+
+	it("drops a yes verdict while a queued message waits for its turn", async () => {
+		const verdict = Promise.withResolvers<boolean | undefined>();
+		vi.spyOn(unexpectedStopClassifier, "classifyNeedsUser").mockReturnValue(verdict.promise);
+		const h = jobWaitHarness();
+
+		await h.controller.handleEvent({ type: "agent_start" });
+		await h.controller.handleEvent(h.settle());
+		Object.assign(h.ctx.session, { queuedMessageCount: 1 });
+		verdict.resolve(true);
+		await flushMicrotasks();
+
+		expect(h.fake.sent).toEqual(["working"]);
+		expect(h.controller.jobWaitNeedsInput).toBe(false);
+	});
+
+	it("keeps the verdict while the user views a running subagent and comes back", async () => {
+		vi.spyOn(unexpectedStopClassifier, "classifyNeedsUser").mockResolvedValue(true);
+		const h = jobWaitHarness();
+		await h.controller.handleEvent({ type: "agent_start" });
+		await h.controller.handleEvent(h.settle());
+		await flushMicrotasks();
+
+		// Focusing a streaming subagent replays its `agent_start` into the same controller.
+		const main = h.ctx.viewSession;
+		Object.assign(h.ctx, { viewSession: { ...h.ctx.session } });
+		await h.controller.handleEvent({ type: "agent_start" });
+		Object.assign(h.ctx, { viewSession: main });
+
+		expect(h.controller.jobWaitNeedsInput).toBe(true);
+	});
+
+	it("asks no judge for a settle outside the trigger rules", async () => {
+		const toolCall = {
+			...makeAssistantMessage("stop"),
+			content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }],
+		} as unknown as AssistantMessage;
+		// Each case breaks one rule of an otherwise judged settle `event`.
+		const cases: Array<[string, (ctx: InteractiveModeContext, event: AgentEnd) => AgentEnd]> = [
+			["no awaited async work", (_ctx, event) => ({ ...event, awaitingAsyncWork: false })],
+			["aborted reply", (_ctx, event) => ({ ...event, messages: [makeAssistantMessage("aborted")] })],
+			["error reply", (_ctx, event) => ({ ...event, messages: [makeAssistantMessage("error")] })],
+			["reply with a tool call", (_ctx, event) => ({ ...event, messages: [toolCall] })],
+			[
+				"subagent view focused",
+				(ctx, event) => {
+					Object.assign(ctx, { viewSession: { ...ctx.session } });
+					return event;
+				},
+			],
+			[
+				"speckit-auto run active",
+				(ctx, event) => {
+					Object.assign(ctx, { speckitAutoRunActive: true });
+					return event;
+				},
+			],
+			[
+				"finished job result about to wake",
+				(ctx, event) => {
+					Object.assign(ctx.session, { hasPendingAsyncDelivery: () => true });
+					return event;
+				},
+			],
+			[
+				"only another owner's work pending",
+				(ctx, event) => {
+					Object.assign(ctx.session, { hasRunningAsyncJobs: () => false });
+					return event;
+				},
+			],
+		];
+		for (const [label, breakRule] of cases) {
+			const judge = vi.spyOn(unexpectedStopClassifier, "classifyNeedsUser").mockResolvedValue(true);
+			const h = jobWaitHarness();
+			await h.controller.handleEvent({ type: "agent_start" });
+			await h.controller.handleEvent(breakRule(h.ctx, h.settle()));
+			await flushMicrotasks();
+			expect({ label, calls: judge.mock.calls.length }).toEqual({ label, calls: 0 });
+			expect(h.controller.jobWaitNeedsInput).toBe(false);
+			judge.mockRestore();
+		}
 	});
 });

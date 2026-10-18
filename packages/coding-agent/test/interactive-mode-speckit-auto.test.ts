@@ -536,6 +536,20 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(submitted).toHaveLength(0);
 		});
 
+		it("shows needs-input for a hold on the user while the phase's job still runs", async () => {
+			const ide = vi.spyOn(ideState, "publishIdeSessionState").mockImplementation(() => {});
+			Object.defineProperty(session, "messages", { configurable: true, get: () => (reply ? [reply] : []) });
+			await start();
+			await startRun("/speckit.clarify");
+			backgroundJobRuns();
+			turnSettles({ completed: true, waits: true, routine: false, ready: false });
+			await tick(3);
+
+			expect(session.hasPendingAsyncWork()).toBe(true);
+			expect(saved()?.run?.hold?.kind).toBe("user");
+			expect(ide.mock.calls.at(-1)?.[1]).toBe("needs-input");
+		});
+
 		it("counts a settled turn that waits for its check as acting, so a pause stops the check", async () => {
 			await start();
 			await startRun("/speckit.plan");

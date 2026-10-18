@@ -1567,11 +1567,13 @@ export class ExtensionUiController {
 		// context carries no session view. Read it as optional so a dismissal
 		// never throws here; a context without a transcript is idle anyway.
 		const session: InteractiveModeContext["session"] | undefined = this.ctx.session;
+		// A background-job settle that the judge read as a question waits for the user, not for its jobs.
+		const awaitingReply = this.ctx.eventController?.jobWaitNeedsInput === true;
 		publishIdeSessionState(
 			this.ctx.mcpManager,
-			session?.isStreaming || session?.hasPendingAsyncWork()
+			session?.isStreaming || (session?.hasPendingAsyncWork() && !awaitingReply)
 				? "working"
-				: ideTurnState(session?.messages, this.ctx.interviewActive),
+				: ideTurnState(session?.messages, this.ctx.interviewActive || awaitingReply),
 		);
 	}
 }

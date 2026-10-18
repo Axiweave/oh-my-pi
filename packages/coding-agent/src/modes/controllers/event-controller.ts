@@ -34,15 +34,18 @@ import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { getSymbolTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { journalJudgmentUsage } from "../../judgment";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
 import type { AgentSessionEvent } from "../../session/agent-session";
 import {
 	isSilentAbort,
 	isUserInvokedSkillPrompt,
 	isUserTurnInitiator,
+	operatorTitleText,
 	readQueueChipText,
 	resolveAbortLabel,
 } from "../../session/messages";
+import { classifyNeedsUser } from "../../session/unexpected-stop-classifier";
 import { formatApprovalPrompt, resolveApproval, sessionApprovalScope } from "../../tools/approval";
 import { recoverAskQuestions } from "../../tools/ask";
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -99,6 +102,8 @@ const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 const MAX_LIVE_IRC_CARDS = 4;
 const IDLE_RECAP_MIN_SECONDS = 1;
 const IDLE_RECAP_MAX_SECONDS = 3600;
+/** Deadline of the "does this reply need the user" check at a settle that waits for background jobs. */
+const JOB_WAIT_JUDGE_TIMEOUT_MS = 15_000;
 
 const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
 
@@ -303,6 +308,24 @@ export class EventController {
 	#runEpoch = 0;
 	/** Epoch of the in-flight {@link #finishWhenRunSettles} watch, if any. */
 	#settleWatchEpoch: number | undefined = undefined;
+	/**
+	 * Bumped at every `agent_start` of the main session in view. A focused
+	 * subagent's replayed `agent_start` bumps only {@link #runEpoch}, so it
+	 * does not end the main session's settle verdict.
+	 */
+	#mainRunEpoch = 0;
+	/**
+	 * A background-job settle that the judge read as waiting for the user. That
+	 * settle already ran the settled teardown, so the job drain of `runEpoch`
+	 * must not run it again or demote `needs-input`. It holds while no main run
+	 * started and `replyAt` is still the session's last reply: a `/new`,
+	 * `/resume`, fork, or branch changes that reply.
+	 */
+	#needsInput:
+		| { session: InteractiveModeContext["session"]; replyAt: number; mainEpoch: number; runEpoch: number }
+		| undefined = undefined;
+	/** The in-flight background-job settle check; a main-session run aborts it. */
+	#jobWaitJudgeAbort: AbortController | undefined = undefined;
 	// Coalescing window for `message_update` events at the subscription boundary.
 	// `message_update` carries the CUMULATIVE assistant message (every update
 	// re-lists all content blocks), so when a burst of deltas arrives faster than
@@ -1060,6 +1083,11 @@ export class EventController {
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		this.#runEpoch += 1;
+		if (this.ctx.viewSession === this.ctx.session) {
+			this.#mainRunEpoch += 1;
+			this.#jobWaitJudgeAbort?.abort();
+			this.#jobWaitJudgeAbort = undefined;
+		}
 		// A run with no user prompt in it (synthetic-only: `/goal` kickoff,
 		// approved-plan execution) must not measure prompt→yield from an unrelated
 		// earlier prompt. Normal user turns reseed via message_start before
@@ -2310,6 +2338,9 @@ export class EventController {
 				this.#publishIdeTurnStart();
 			}
 			void this.#finishWhenRunSettles(event);
+			void this.#judgeJobWait(event).catch(error => {
+				logger.warn("Background-job settle check failed", { error: String(error) });
+			});
 			await this.ctx.flushPendingModelSwitch();
 			// Reaching here means the first guard passed, so `isStreaming` is already
 			// false: a command issued from now on mounts immediately. Leaving earlier
@@ -2359,7 +2390,9 @@ export class EventController {
 					superseded() ||
 					session.hasPendingAsyncWork() ||
 					session.hasPostPromptWork ||
-					session.queuedMessageCount > 0
+					session.queuedMessageCount > 0 ||
+					// The judge already settled this run as waiting for the user.
+					this.#needsInput?.runEpoch === epoch
 				) {
 					return;
 				}
@@ -2375,6 +2408,96 @@ export class EventController {
 		} finally {
 			if (this.#settleWatchEpoch === epoch) this.#settleWatchEpoch = undefined;
 		}
+	}
+
+	/** True while the main session's last settle waits for the user: no main run started and its reply is still the last one. */
+	get jobWaitNeedsInput(): boolean {
+		const verdict = this.#needsInput;
+		return (
+			verdict !== undefined &&
+			verdict.mainEpoch === this.#mainRunEpoch &&
+			verdict.session === this.ctx.session &&
+			verdict.session.getLastAssistantMessage()?.timestamp === verdict.replyAt
+		);
+	}
+
+	/**
+	 * A clean stop while the agent's own background jobs run shows `working`
+	 * until they drain. Ask the judge whether the reply waits for the user
+	 * instead (a question, a decision, an approval); on yes, run the settled
+	 * teardown now so the loader stops, the IDE reads `needs-input`, and the
+	 * completion notification fires. The jobs keep running and still wake the
+	 * session. A no, a failed check, or a newer run leaves today's wait.
+	 */
+	async #judgeJobWait(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		const session = this.ctx.session;
+		const last = event.messages.findLast((message): message is AssistantMessage => message.role === "assistant");
+		if (
+			event.awaitingAsyncWork !== true ||
+			last?.stopReason !== "stop" ||
+			last.content.some(content => content.type === "toolCall") ||
+			// ponytail: a settle that lands while a subagent view is focused keeps the plain wait.
+			this.ctx.viewSession !== session ||
+			// Speckit-auto decides holds with its own phase judge.
+			this.ctx.speckitAutoRunActive ||
+			// A finished job's result is about to wake the session: that turn decides.
+			session.hasPendingAsyncDelivery() ||
+			!session.hasRunningAsyncJobs()
+		) {
+			return;
+		}
+		const runEpoch = this.#runEpoch;
+		const mainEpoch = this.#mainRunEpoch;
+		// ponytail: a session change does not abort the call; it runs to its 15 s limit and `current()` drops the answer.
+		const current = () =>
+			this.#mainRunEpoch === mainEpoch &&
+			this.ctx.session === session &&
+			!session.isStreaming &&
+			// A queued message starts the next turn: the user already answered.
+			session.queuedMessageCount === 0 &&
+			session.getLastAssistantMessage()?.timestamp === last.timestamp;
+		this.#jobWaitJudgeAbort?.abort();
+		const abort = new AbortController();
+		this.#jobWaitJudgeAbort = abort;
+		const timeout = setTimeout(() => abort.abort(), JOB_WAIT_JUDGE_TIMEOUT_MS);
+		// The operator's latest typed request, as the unexpected-stop judge reads it.
+		let request: string | undefined;
+		for (let i = session.messages.length - 1; i >= 0 && request === undefined; i--) {
+			request = operatorTitleText(session.messages[i]!);
+		}
+		let needsUser: boolean | undefined;
+		try {
+			needsUser = await classifyNeedsUser(
+				{
+					message: last.content
+						.filter(content => content.type === "text")
+						.map(content => content.text)
+						.join("\n"),
+					request,
+				},
+				{
+					settings: this.ctx.settings,
+					registry: session.modelRegistry,
+					sessionId: session.sessionId,
+					model: session.model,
+					metadataResolver: provider => session.agent.metadataForProvider(provider),
+					onUsage: journalJudgmentUsage(this.ctx.sessionManager),
+					telemetry: session.agent.telemetry,
+					signal: abort.signal,
+				},
+			);
+		} finally {
+			clearTimeout(timeout);
+			if (this.#jobWaitJudgeAbort === abort) this.#jobWaitJudgeAbort = undefined;
+		}
+		if (needsUser !== true || !current()) return;
+		await this.#runSerialized(async () => {
+			if (!current() || this.jobWaitNeedsInput) return;
+			this.#needsInput = { session, replyAt: last.timestamp, mainEpoch, runEpoch };
+			setRunStatus(this.#settledRunStatus(event));
+			await this.#finishAgentEnd({ ...event, isTerminal: true });
+			if (this.ctx.shutdownRequested) this.ctx.requestShutdown();
+		});
 	}
 
 	/**
@@ -2972,7 +3095,11 @@ export class EventController {
 		// The plan-approval silent abort ends the turn under the review overlay;
 		// `needs-input` already went out and must not be downgraded to `idle`.
 		if (this.ctx.planReviewActive) return;
-		if (this.ctx.speckitAutoActing) return;
-		publishIdeSessionState(this.ctx.mcpManager, ideTurnState(event.messages, this.ctx.interviewActive));
+		// Speckit-auto publishes its own state while it acts and while it holds for the user.
+		if (this.ctx.speckitAutoRunActive) return;
+		publishIdeSessionState(
+			this.ctx.mcpManager,
+			ideTurnState(event.messages, this.ctx.interviewActive || this.jobWaitNeedsInput),
+		);
 	}
 }
