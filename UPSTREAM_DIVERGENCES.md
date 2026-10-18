@@ -57,6 +57,14 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Key paths:** `README.md`, `AGENTS.md`, `packages/coding-agent/README.md`, `scripts/setup.ts`, and `scripts/link-omp.sh`.
 - **Checks:** Follow the command-target and runtime checks in `README.md` under Install.
 
+### Host-only Rust toolchain
+
+- **Decision:** `rust-toolchain.toml` lists no extra `targets`. Rustup installs only the host standard library.
+- **Why:** This fork builds from source on the maintainer's machine and ships no release artifacts. The upstream list adds three cross-target standard libraries to every pinned toolchain.
+- **Key path:** `rust-toolchain.toml`.
+- **Check:** `bun run setup` and `bun run check:rs` pass.
+- **Merge note:** Upstream changes `channel` in this file on toolchain bumps. Take the new `channel` and keep the `targets` line out.
+
 ### Move into an existing worktree
 
 - **Decision:** Keep `/wtmove` to move the current session into an existing worktree without creating a branch or carrying source changes.
