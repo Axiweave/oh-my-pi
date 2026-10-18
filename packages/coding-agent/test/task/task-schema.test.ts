@@ -229,7 +229,8 @@ describe("task spawn validation", () => {
 			model: "anthropic/claude-sonnet-4-5",
 		};
 		expect(schema(params) instanceof type.errors).toBe(false);
-		expect(await executeText(params, [bundledSeance])).not.toContain("is only accepted for the `seance` agent.");
+		// Field validation passes, so the call reaches agent lookup, where no `scout` is discovered.
+		expect(await executeText(params, [bundledSeance])).toContain('Unknown agent "scout"');
 	});
 });
 
