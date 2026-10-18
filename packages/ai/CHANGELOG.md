@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- In `smart`, a key check without a session (`keys.get`, `getApiKey`, `keys.peek`) no longer moves the round-robin turn. The next sessionless request gets the same account or key that the check picked.
 - Anthropic server compaction now accepts custom endpoints when `remoteCompaction.enabled` is true. Model capability checks and explicit opt-outs still apply.
 
 ## [18.12.1] - 2026-10-17

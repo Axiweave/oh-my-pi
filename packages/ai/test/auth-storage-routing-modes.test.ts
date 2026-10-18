@@ -1275,7 +1275,7 @@ describe("rotate and weight", () => {
 
 	it("key checks (`keys.get`, `keys.peek`) before and between requests never change which account or key the requests get", async () => {
 		await forAll(CASES, async g => {
-			const mode = g.pick(["rotate", "weight", "usage", "pace"] as const);
+			const mode = g.pick(["smart", "rotate", "weight", "usage", "pace"] as const);
 			// A check before a session's first request pins it; that request still counts as a new pick.
 			const stays = g.pick(STAYS);
 			const count = g.int(2, 4);

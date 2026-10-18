@@ -9,11 +9,12 @@ It is not a changelog. Each entry describes a current decision that upstream mer
 The launcher targets this checkout and reports `18.12.1`.
 `bun check` passes after the follow-up format fix to `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. At the merge commit, `oxfmt` flagged only that file, which the merge does not change.
 The merge had conflicts in 6 files. The resolutions preserve every fork decision and keep upstream behavior.
-Upstream's sessionless selection scans stored credentials in order. The fork keeps that order and also keeps the round-robin cursor still outside `smart` routing.
+Upstream's sessionless peek scans stored credentials in order. With the fork's resolution, a peek never moves the round-robin cursor in any routing mode, and `smart` peeks for a session start at the session's hashed index.
+After the merge, a sessionless key check (`advance: false`) in `smart` mode still moved the round-robin cursor in `selectApiKey` and `resolveOAuth`. That gap existed before this merge. The follow-up fix passes `advance` to `#getCredentialOrder`, and the key-check invariant in `packages/ai/test/auth-storage-routing-modes.test.ts` now draws `smart` too.
 Upstream's typing hook calls `session.prewarmModelConnection()`. The fork's enhanced-paste test stub adds that method.
 Upstream moved the role default chains from `priority.json` to catalog KDL `role-defaults`.
-1821 test files ran in separate processes: every divergence check, every test file that this merge changes, and the tests that import each merged source file. `sdk-tool-activation` and `eval/js-package-environment` also fail at the pre-merge commit. `tui/terminal-background` (`repaints multiplexer viewports`) also fails at bare `v18.12.1` on this host.
-`bun run test:rs` passed all 3568 tests, with 5 skipped, in five of six runs. One run had 2 failures that did not come back in the next four runs, and their names were not captured.
+1821 test files ran in separate processes, and 1817 passed. The set covered every divergence check, every test file that this merge changes, and the tests that import each merged source file. `input-controller-enhanced-paste` failed from the missing stub method and passes after the stub fix. `sdk-tool-activation` and `eval/js-package-environment` also fail at the pre-merge commit. `tui/terminal-background` (`repaints multiplexer viewports`) also fails at bare `v18.12.1` on this host.
+`bun run test:rs` passed all 3568 tests, with 5 skipped, in four of five runs that printed a summary. One run had 2 failures that did not come back in the next four runs, and their names were not captured.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 

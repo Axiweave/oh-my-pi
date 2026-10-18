@@ -324,14 +324,17 @@ export class CredentialSelector {
 	/**
 	 * Returns credential indices in priority order for selection.
 	 * With sessionId: starts from hashed index (consistent per session).
-	 * Without sessionId: starts from round-robin index (load balancing).
+	 * Without sessionId: starts from round-robin index (load balancing). `advance: false`
+	 * (a key check) reads the next turn without spending it.
 	 * Order wraps around so all credentials are tried if earlier ones are blocked.
 	 */
-	#getCredentialOrder(providerKey: string, sessionId: string | undefined, total: number): number[] {
+	#getCredentialOrder(providerKey: string, sessionId: string | undefined, total: number, advance = true): number[] {
 		if (total <= 1) return [0];
 		const start = sessionId
 			? this.#getHashedIndex(sessionId, total)
-			: this.#getNextRoundRobinIndex(providerKey, total);
+			: advance
+				? this.#getNextRoundRobinIndex(providerKey, total)
+				: ((this.#providerRoundRobinIndex.get(providerKey) ?? -1) + 1) % total;
 		const order: number[] = [];
 		for (let i = 0; i < total; i++) {
 			order.push((start + i) % total);
@@ -473,7 +476,7 @@ export class CredentialSelector {
 		// Every mode but smart ranks the whole pool from sign-in order, with or without a usage strategy.
 		const order =
 			mode === "smart"
-				? this.#getCredentialOrder(providerKey, sessionId, credentials.length)
+				? this.#getCredentialOrder(providerKey, sessionId, credentials.length, advance)
 				: credentials.map((_credential, index) => index);
 		const fallback = credentials[order[0]];
 		const strategy = this.#deps.strategies(provider);
@@ -928,7 +931,7 @@ export class CredentialSelector {
 		const rankAll = mode !== "smart" && credentials.length > 1;
 		const order = rankAll
 			? credentials.map((_credential, index) => index)
-			: this.#getCredentialOrder(providerKey, sessionId, credentials.length);
+			: this.#getCredentialOrder(providerKey, sessionId, credentials.length, advance);
 		const strategy = this.#deps.strategies(provider);
 		const rankingContext: CredentialRankingContext = {
 			modelId: options?.modelId,
