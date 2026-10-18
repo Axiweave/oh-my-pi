@@ -32,3 +32,9 @@ This message ends the /speckit.{{phase}} step of a spec-kit workflow. Answer yes
 
 ## fixed
 This message ends a user turn in the /speckit.analyze step of a spec-kit workflow. The state field `request` is the user's text that started the turn. Answer yes only if `request` asks the agent to fix findings from the analyze report, and the message reports that the agent changed the feature documents to fix them, with no open question and no error.
+
+## converge
+This is the /speckit.converge step of a spec-kit workflow. The state field `report` holds the agent text of the whole step turn, in order. Converge compares the implementation with spec.md, plan.md, and tasks.md. If it finds gaps, it appends new tasks to tasks.md for the next implement pass. Pick the outcome that the report states. Read the meaning, not the words: the report can use any heading, wording, emoji, or markdown.
+- complete: the report says that the implementation meets the spec, plan, and tasks, or that it found no gap, and it added no task to tasks.md. A zero findings count, an accepted difference that gets no task, or an offer to commit, push, review, or open a pull request does not change this.
+- added: the report says that it appended or added one or more tasks to tasks.md for remaining gaps, for example under a "Convergence" phase, so another implement pass must do them.
+- none: the report states neither outcome or states both, stops early, reports an error, asks a blocking question, or is about other work, such as a commit.

@@ -17,6 +17,7 @@ import {
 	type SpeckitPhase,
 	type SpeckitRun,
 	speckitEarlierText,
+	type SpeckitConverge,
 	type SpeckitVerdict,
 } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -307,33 +308,17 @@ describe("readSpeckitTextVerdict", () => {
 		});
 	});
 
-	describe("converge result", () => {
-		it.each([
-			["✅ Converged — the implementation satisfies the spec, plan, and tasks.", "complete"],
-			["✅ **Converged — the implementation satisfies the spec, plan, and tasks.**", "complete"],
-			["Outcome: `tasks_appended`. Run /speckit.implement next.", "added"],
-			["Appended 3 tasks under ## Phase 4: Convergence.", "added"],
-			["I will add a ## Phase 4: Convergence section if needed.", "none"],
-			["## Convergence Findings\n\n| ID | Finding |\n|---|---|\n| C1 | missing test |", "none"],
-			["✅ Converged\nOutcome: tasks_appended", "none"],
-		])("%s → %s", (text, converge) => {
-			expect(readSpeckitTextVerdict("converge", message(text)).converge).toBe(
-				converge as SpeckitVerdict["converge"],
-			);
-		});
-
-		it("reads the outcome that an earlier message of the converge turn reported", () => {
+	describe("speckitEarlierText", () => {
+		it("reads only the assistant messages after the turn opener", () => {
 			const previous = message("Outcome: `tasks_appended`.");
 			const opener: UserMessage = { role: "user", content: "/speckit.converge", timestamp: 1 };
-			const outcome = message("**Outcome: `tasks_appended`.** Added T027–T029 under Phase 7.");
-			const summary = message("Only Phase 7 was appended.\n\n**Status: partial—not converged.**");
-			const earlier = speckitEarlierText([previous, opener, outcome, summary], summary);
+			const outcome = message("Added T027–T029 under Phase 7.");
+			const summary = message("Only Phase 7 was appended.");
 
-			expect(readSpeckitTextVerdict("converge", summary, earlier).converge).toBe("added");
-			expect(readSpeckitTextVerdict("converge", summary).converge).toBe("none");
-			// The turn before the opener never counts, and two different outcomes in one turn hold.
+			expect(speckitEarlierText([previous, opener, outcome, summary], summary)).toBe(
+				"Added T027–T029 under Phase 7.",
+			);
 			expect(speckitEarlierText([previous, opener, summary], summary)).toBe("");
-			expect(readSpeckitTextVerdict("converge", message("✅ **Converged**"), earlier).converge).toBe("none");
 		});
 	});
 
@@ -610,13 +595,67 @@ describe("classifySpeckitTurn", () => {
 		expect(decideSpeckitStep(newSpeckitRun("implement", 3), verdict)).toMatchObject({ kind: "hold" });
 	});
 
-	const judgeSays = (completed: number, seen: string[] = []) =>
+	const judgeSays = (completed: number, seen: string[] = [], converge: SpeckitConverge = "none") =>
 		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
 			judge: async (input: { state: { message: string } }) => {
 				seen.push(input.state.message);
-				return { answers: { completed: { noul: completed }, waits: { noul: 0.1 }, routine: { noul: 0.1 } } };
+				return {
+					answers: {
+						completed: { noul: completed },
+						waits: { noul: 0.1 },
+						routine: { noul: 0.1 },
+						converge: { type: "choice", choice: converge },
+					},
+				};
 			},
 		} as unknown as judgment.ChainJudge);
+
+	it("takes the converge result from the judge, which reads the whole turn", async () => {
+		const reports: unknown[] = [];
+		const judgeConverges = (converge: SpeckitConverge) =>
+			vi.spyOn(judgment, "resolveJudge").mockReturnValue({
+				judge: async (input: { state: { report?: string }; questions: Record<string, unknown> }) => {
+					reports.push(input.state.report);
+					expect(input.questions.converge).toMatchObject({ type: "choice" });
+					return {
+						answers: {
+							completed: { noul: 0.1 },
+							waits: { noul: 0.1 },
+							routine: { noul: 0.1 },
+							converge: { type: "choice", choice: converge },
+						},
+					};
+				},
+			} as unknown as judgment.ChainJudge);
+		const run = newSpeckitRun("converge", 3);
+		const reply = message("✅ The implementation meets the spec, plan, and tasks. I did not change `tasks.md`.");
+
+		judgeConverges("complete");
+		const complete = await classifySpeckitTurn("converge", reply, deps, { earlier: "Checked 14 FRs." });
+		expect(reports.at(-1)).toContain("Checked 14 FRs.");
+		expect(reports.at(-1)).toContain("meets the spec");
+		expect(decideSpeckitStep(run, complete)).toEqual({ kind: "end", result: "complete" });
+
+		judgeConverges("added");
+		const added = await classifySpeckitTurn("converge", reply, deps);
+		expect(added.completed).toBe(true);
+		expect(decideSpeckitStep(run, added)).toEqual({ kind: "start", phase: "implement" });
+
+		// Other phases never ask for a converge result.
+		judgeConverges("added");
+		expect((await classifySpeckitTurn("implement", reply, deps)).converge).toBeUndefined();
+		expect(reports.at(-1)).toBeUndefined();
+
+		// No judge, no converge result: the run holds.
+		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
+			judge: async () => {
+				throw new Error("no judge model");
+			},
+		} as unknown as judgment.ChainJudge);
+		expect(decideSpeckitStep(run, await classifySpeckitTurn("converge", reply, deps))).toMatchObject({
+			kind: "hold",
+		});
+	});
 
 	it("hides a 'Reply remediate' analyze offer from the judge and keeps an approval request", async () => {
 		const seen: string[] = [];
@@ -646,7 +685,7 @@ describe("classifySpeckitTurn", () => {
 		);
 		expect(side.completed).toBeUndefined();
 		expect(decideSpeckitStep(run, side)).toMatchObject({ kind: "hold" });
-		// Converge advances only on its text outcome, never on the judge.
+		// Converge advances only on its judged outcome, and the judge reads this side request as no outcome.
 		const sideConverge = await classifySpeckitTurn(
 			"converge",
 			message("The index is empty. No commits were pushed."),
@@ -666,15 +705,15 @@ describe("classifySpeckitTurn", () => {
 	});
 
 	it("keeps a readable analyze report or converge result completed when the judge reads it as a failure", async () => {
-		judgeSays(0.1);
-		const appended = "Outcome: tasks_appended. Appended 1 task under ## Phase 3: Convergence.";
+		judgeSays(0.1, [], "added");
 		expect((await classifySpeckitTurn("analyze", message(text), deps)).completed).toBe(true);
-		expect((await classifySpeckitTurn("converge", message(appended), deps)).completed).toBe(true);
+		expect((await classifySpeckitTurn("converge", message("Appended 1 task."), deps)).completed).toBe(true);
 		// An error cue, an unreadable report, or no converge result still holds.
 		expect((await classifySpeckitTurn("analyze", message(`${text}\nERROR: script failed.`), deps)).completed).toBe(
 			false,
 		);
 		expect((await classifySpeckitTurn("analyze", message("I looked around."), deps)).completed).toBe(false);
+		judgeSays(0.1);
 		expect((await classifySpeckitTurn("converge", message("Nothing to report."), deps)).completed).toBe(false);
 	});
 

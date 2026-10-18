@@ -4,7 +4,7 @@
  * module reads a settled turn and decides the next step.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, NoulQuestion, StopReason } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ChoiceAnswer, NoulAnswer, Question, StopReason } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { resolveJudge, sharedJudgmentCache } from "../judgment";
 import answerPrompt from "../prompts/speckit-auto/answer.md" with { type: "text" };
@@ -65,9 +65,12 @@ export interface SpeckitVerdict {
 	analyze?: { critical: number; high: number } | "unreadable";
 	/** Analyze only, judge only: the user asked to fix the analyze findings and the reply reports the fixes. */
 	fixed?: boolean;
-	/** Converge only. */
-	converge?: "complete" | "added" | "none";
+	/** Converge only, judge only. */
+	converge?: SpeckitConverge;
 }
+
+export type SpeckitConverge = "complete" | "added" | "none";
+const CONVERGE_OUTCOMES: Record<SpeckitConverge, null> = { complete: null, added: null, none: null };
 
 export type SpeckitEndResult = "complete" | "open-tasks" | "stopped";
 
@@ -330,7 +333,6 @@ const DEFERRED_BLOCKS = /\bhigh[- ]impact\b|\bunresolved\b|\bmust\b|\bbefore\b/i
 /** Any readiness evidence: a final message with it is read alone, so an older blocking row cannot override it. */
 const READY_EVIDENCE =
 	/No critical ambiguities detected|\/speckit\.(?:plan|clarify)\b|^[ \t]*\|.*\|[ \t]*\**Deferred\**[ \t]*\|/im;
-const APPENDED_COUNT = /\bappended\s+\d+\b[^\n]*\btasks?\b|\b\d+\s+(?:\w+\s+)?tasks?\b[^\n]*\bappended\b/i;
 const ANALYZE_HEADING = /^#{1,6}[ \t]*Specification Analysis Report\b/m;
 
 function readAnalyzeReport(text: string): SpeckitVerdict["analyze"] {
@@ -366,13 +368,6 @@ function readTurnAnalyzeReport(text: string, earlier: string): SpeckitVerdict["a
 	if (report !== "unreadable") return report;
 	const last = Array.from(earlier.matchAll(new RegExp(ANALYZE_HEADING.source, "gm"))).at(-1)?.index;
 	return last === undefined ? "unreadable" : readAnalyzeReport(earlier.slice(last));
-}
-
-function readConverge(tail: string): SpeckitVerdict["converge"] {
-	const complete = /✅[\s*_]*Converged/.test(tail);
-	const added = /\btasks_appended\b/.test(tail) || (APPENDED_COUNT.test(tail) && /Phase \d+: Convergence/.test(tail));
-	if (complete === added) return "none";
-	return complete ? "complete" : "added";
 }
 
 function readReady(tail: string): boolean | undefined {
@@ -418,7 +413,7 @@ const askedText = (phase: SpeckitPhase, tail: string): string =>
 
 /**
  * Deterministic parts of the verdict plus the text-only fallback for the judged parts (research R6).
- * `earlier` is the text of the turn's earlier assistant messages; the converge result and the analyze report read it.
+ * `earlier` is the text of the turn's earlier assistant messages; the clarify readiness and the analyze report read it.
  */
 export function readSpeckitTextVerdict(phase: SpeckitPhase, message: AssistantMessage, earlier = ""): SpeckitVerdict {
 	const text = assistantText(message);
@@ -446,18 +441,18 @@ export function readSpeckitTextVerdict(phase: SpeckitPhase, message: AssistantMe
 			!offersOtherPhase(phase, tail),
 		ready,
 		analyze: phase === "analyze" ? readTurnAnalyzeReport(text, earlier) : undefined,
-		converge: phase === "converge" ? readConverge(`${earlier}\n${tail}`) : undefined,
 	};
 }
 
 export type SpeckitJudgeDeps = ClassifyUnexpectedStopDeps;
 
 /**
- * Verdict for a settled phase turn: failure, analyze counts, and converge
- * result from the text; completed, waits, routine, ready, and fixed from one
- * judge call, or from the text fallback when the judge cannot answer. `turn.request`
- * is the user's own text that opened the turn, if the user started it. `turn.earlier`
- * is the text of the turn's earlier assistant messages. Never throws.
+ * Verdict for a settled phase turn: failure and analyze counts from the text;
+ * completed, waits, routine, ready, fixed, and the converge result from one
+ * judge call, or from the text fallback when the judge cannot answer. The
+ * fallback has no converge result. `turn.request` is the user's own text that
+ * opened the turn, if the user started it. `turn.earlier` is the text of the
+ * turn's earlier assistant messages. Never throws.
  */
 export async function classifySpeckitTurn(
 	phase: SpeckitPhase,
@@ -482,9 +477,12 @@ export async function classifySpeckitTurn(
 			telemetry: deps.telemetry,
 			cache: sharedJudgmentCache(),
 		});
-		const questions: Record<string, NoulQuestion> = {};
+		const questions: Record<string, Question> = {};
 		for (const [id, template] of Object.entries(JUDGE_SECTIONS)) {
-			if ((id !== "ready" || phase === "clarify") && (id !== "fixed" || askFixed)) {
+			if (id === "converge") {
+				if (phase === "converge")
+					questions[id] = { type: "choice", instructions: template, criteria: CONVERGE_OUTCOMES };
+			} else if ((id !== "ready" || phase === "clarify") && (id !== "fixed" || askFixed)) {
 				questions[id] = {
 					type: "noul",
 					instructions: prompt.render(template, { phase, blocking: JUDGE_BLOCKING }),
@@ -493,15 +491,26 @@ export async function classifySpeckitTurn(
 		}
 		const tail = assistantText(message).slice(-TAIL_CHARS);
 		const text = askedText(phase, tail);
+		// Converge can report its outcome in an earlier message and end with a short summary.
+		const report = phase === "converge" ? `${earlier ?? ""}\n${tail}`.slice(-TAIL_CHARS) : undefined;
 		const { answers } = await judge.judge(
-			{ state: askFixed ? { phase, request, message: text } : { phase, message: text }, questions },
+			{
+				state: {
+					phase,
+					message: text,
+					...(askFixed ? { request } : {}),
+					...(report !== undefined ? { report } : {}),
+				},
+				questions,
+			},
 			{ signal: deps.signal },
 		);
-		const yes = (id: string): boolean => answers[id].noul >= JUDGE_THRESHOLD;
+		const yes = (id: string): boolean => (answers[id] as NoulAnswer).noul >= JUDGE_THRESHOLD;
+		const converge = report === undefined ? undefined : (answers.converge as ChoiceAnswer<SpeckitConverge>).choice;
 		// The judge reads analyze findings and converge gaps as failures; a readable outcome with no error cue is the step's result.
 		const outcome =
 			(verdict.analyze !== undefined && verdict.analyze !== "unreadable") ||
-			(verdict.converge !== undefined && verdict.converge !== "none");
+			(converge !== undefined && converge !== "none");
 		const completed = yes("completed") || (outcome && verdict.completed !== false);
 		return {
 			...verdict,
@@ -517,6 +526,7 @@ export async function classifySpeckitTurn(
 			routine: yes("routine") && verdict.completed !== false && !offersOtherPhase(phase, tail),
 			ready: phase === "clarify" ? yes("ready") : undefined,
 			...(askFixed ? { fixed: yes("fixed") } : {}),
+			...(converge !== undefined ? { converge } : {}),
 		};
 	} catch (error) {
 		logger.debug("speckit-auto: turn check failed", {
