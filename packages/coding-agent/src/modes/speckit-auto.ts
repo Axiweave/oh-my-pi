@@ -113,15 +113,15 @@ export const SPECKIT_ANSWER_TEXT = prompt.render(answerPrompt);
 export const SPECKIT_REMEDIATION_TEXT = prompt.render(remediationPrompt);
 export const renderSpeckitContinue = (phase: SpeckitPhase): string => prompt.render(continuePrompt, { phase });
 
+const [judgeRule, ...judgeSections] = judgePrompt.split(/^## /m);
+/** The blocking-versus-auxiliary rule before the first section; sections embed it as `{{blocking}}`. */
+const JUDGE_BLOCKING = judgeRule.trim();
 /** Judge question templates by answer id, one `## <id>` section each. */
 const JUDGE_SECTIONS: Record<string, string> = Object.fromEntries(
-	judgePrompt
-		.split(/^## /m)
-		.slice(1)
-		.map(section => {
-			const newline = section.indexOf("\n");
-			return [section.slice(0, newline).trim(), section.slice(newline + 1)];
-		}),
+	judgeSections.map(section => {
+		const newline = section.indexOf("\n");
+		return [section.slice(0, newline).trim(), section.slice(newline + 1)];
+	}),
 );
 
 const isPhase = (value: unknown): value is SpeckitPhase => typeof value === "string" && value in SPECKIT_SUCCESSOR;
@@ -485,7 +485,10 @@ export async function classifySpeckitTurn(
 		const questions: Record<string, NoulQuestion> = {};
 		for (const [id, template] of Object.entries(JUDGE_SECTIONS)) {
 			if ((id !== "ready" || phase === "clarify") && (id !== "fixed" || askFixed)) {
-				questions[id] = { type: "noul", instructions: prompt.render(template, { phase }) };
+				questions[id] = {
+					type: "noul",
+					instructions: prompt.render(template, { phase, blocking: JUDGE_BLOCKING }),
+				};
 			}
 		}
 		const tail = assistantText(message).slice(-TAIL_CHARS);
