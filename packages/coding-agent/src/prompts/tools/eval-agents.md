@@ -8,6 +8,8 @@ workpool(agent?=None, name?=None, context?=None{{#if evalTools}}, tools?=None{{/
     `model` selects each worker on its first turn. Follow-up turns reuse that worker's session.
 ```
 
+The cell `timeout` counts only the cell's own work, not waits on `agent()`/`wait()`/`tool.task(...)`, so a subagent can outlast it.
+
 <dag>
 Acyclic waves of handles:
 - **Name nodes.** `h = agent(…)` returns at once; `h.handle` is `agent://<id>`.

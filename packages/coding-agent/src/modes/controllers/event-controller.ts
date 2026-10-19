@@ -83,6 +83,7 @@ import {
 	cfgTerminalShowImages,
 	cfgTerminalShowProgress,
 } from "../settings";
+import { getCacheWarmingDelayMs } from "../../session/cache-warmer";
 import { cfgCompaction } from "../../session/context-settings";
 import { cfgReadToolResultPreview, cfgToolsApproval, cfgToolsApprovalMode } from "../../tools/settings";
 import { cfgSpeechEnabled, cfgSpeechMode } from "../../tts/settings";
@@ -104,6 +105,11 @@ const IDLE_RECAP_MIN_SECONDS = 1;
 const IDLE_RECAP_MAX_SECONDS = 3600;
 /** Deadline of the "does this reply need the user" check at a settle that waits for background jobs. */
 const JOB_WAIT_JUDGE_TIMEOUT_MS = 15_000;
+/**
+ * Idle compaction fires this long before the warmer's own refresh point, so the
+ * compaction request (not a one-token warm replay) reads the still-warm prefix.
+ */
+const IDLE_COMPACTION_CACHE_LEAD_MS = 5_000;
 
 const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
 
@@ -2921,7 +2927,25 @@ export class EventController {
 		if (threshold <= 0) return;
 		if (this.#currentContextTokens() < threshold) return;
 
-		const timeoutMs = Math.max(60, Math.min(3600, idleSettings.idleTimeoutSeconds)) * 1000;
+		// Compact just before a 1h (long-tier) prompt cache entry expires, while
+		// the summary request can still read the cached prefix; a turn that settles
+		// past that point but before expiry compacts right away. A 5-minute entry
+		// lapses too soon after a turn for compaction to be worth starting on its
+		// schedule, so it, an unknown lifetime, and an expired entry all fall back
+		// to the configured delay.
+		// Deliberate cost: the delay counts from agent_end while the entry's TTL
+		// counts from the request send (`touchedAt`), so with the default 300s
+		// delay a short-tier idle summary always runs after the 5-minute entry
+		// expired and pays a cold full-prefix read. That is the price of never
+		// compacting after a short break; do not re-time short entries to dodge it.
+		const promptCacheEntry = this.ctx.viewSession.promptCacheEntry;
+		const cacheEntry = promptCacheEntry?.tier === "long" ? promptCacheEntry : undefined;
+		const refreshDelayMs = cacheEntry ? getCacheWarmingDelayMs(cacheEntry.ttlMs) : undefined;
+		const now = Date.now();
+		const timeoutMs =
+			cacheEntry && refreshDelayMs !== undefined && cacheEntry.touchedAt + cacheEntry.ttlMs > now
+				? Math.max(0, cacheEntry.touchedAt + refreshDelayMs - IDLE_COMPACTION_CACHE_LEAD_MS - now)
+				: Math.max(60, Math.min(3600, idleSettings.idleTimeoutSeconds)) * 1000;
 		this.#idleCompactionTimer = setTimeout(() => {
 			this.#idleCompactionTimer = undefined;
 			// Re-check conditions before firing. Pruning may have run between arming

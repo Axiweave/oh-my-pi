@@ -404,6 +404,19 @@ export const cfgTuiResizeScrollback = register({
 	},
 });
 
+export const cfgTuiCompleteScrollback = register({
+	id: "tui.completeScrollback",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Complete Scrollback",
+		description:
+			"Send transcript rows that a command report covers straight to scrollback (other chrome always does); when the report closes, blank rows sit between the transcript and the input until new output fills them",
+	},
+});
+
 export const cfgTerminalShowProgress = register({
 	id: "terminal.showProgress",
 	type: "boolean",

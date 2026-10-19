@@ -3,18 +3,18 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.12.1` on 2026-10-17.
+**Reviewed against:** `v18.12.2` on 2026-10-18.
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.12.1`.
-`bun check` passes after the follow-up format fix to `packages/coding-agent/test/goals/goal-mode-integration.test.ts`. At the merge commit, `oxfmt` flagged only that file, which the merge does not change.
-The merge had conflicts in 6 files. The resolutions preserve every fork decision and keep upstream behavior.
-Upstream's sessionless peek scans stored credentials in order. With the fork's resolution, a peek never moves the round-robin cursor in any routing mode, and `smart` peeks for a session start at the session's hashed index.
-After the merge, a sessionless key check (`advance: false`) in `smart` mode still moved the round-robin cursor in `selectApiKey` and `resolveOAuth`. That gap existed before this merge. The follow-up fix passes `advance` to `#getCredentialOrder`, and the key-check invariant in `packages/ai/test/auth-storage-routing-modes.test.ts` now draws `smart` too.
-Upstream's typing hook calls `session.prewarmModelConnection()`. The fork's enhanced-paste test stub adds that method.
-Upstream moved the role default chains from `priority.json` to catalog KDL `role-defaults`.
-1821 test files ran in separate processes, and 1817 passed. The set covered every divergence check, every test file that this merge changes, and the tests that import each merged source file. `input-controller-enhanced-paste` failed from the missing stub method and passes after the stub fix. `sdk-tool-activation` and `eval/js-package-environment` also fail at the pre-merge commit. `tui/terminal-background` (`repaints multiplexer viewports`) also fails at bare `v18.12.1` on this host.
-`bun run test:rs` passed all 3568 tests, with 5 skipped, in four of five runs that printed a summary. One run had 2 failures that did not come back in the next four runs, and their names were not captured.
+The launcher targets this checkout and reports `18.12.2`.
+`bun check` passes. `rustfmt` first flagged one indentation change in the merged `input.rs`, which is now formatted.
+The merge had conflicts in 11 files. The resolutions preserve every fork decision and keep upstream behavior.
+Upstream's grammar-based string resolution in `StdinBuffer` covers the fork's 10-second kitty hold, so the merge retires that decision and removes `stringHoldTimeout`.
+The fork extends upstream's new `history.db` salvage so it also copies project-local locations. Upstream's `tui.completeScrollback` controls only transient report rows in the fork.
+1030 test files ran in separate processes, and 1026 passed. The set covered every divergence check, every test file that upstream changed, and the tests that import each source file that both sides changed.
+`sdk-tool-activation` and `eval/js-package-environment` also fail at the pre-merge commit. `tools/browser-freeze-settle` timed out on a Chromium launch under load and passes alone.
+`model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`) also fails at the pre-merge commit. Fork commit `454748ffa5` started it: that test expects a sessionless key lookup to rotate, and the fork's `smart` key checks do not rotate.
+`bun run test:rs` passed all 3881 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -33,8 +33,8 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Verify OSC 5522 request identity, framing, byte count, SHA-256, expiry, and image decoding before one guarded editor commit.
 - **Decision:** Cancel pending receipt when the session, editor, or terminal lifecycle changes. Require a known image container only for verified receipt.
 - **Decision:** Use the Rust image library for classic TIFF in either byte order. Preserve original TIFF bytes during transfer and storage. Normalize the model attachment to PNG, and prefer PNG when both clipboard formats are available.
-- **Decision:** Under the kitty keyboard protocol, hold a split OSC/DCS/APC packet for up to 10 seconds, not 150ms. SSH links stall mid-packet for over a second, and the short hold dropped verified paste data.
 - **Runtime:** Rebuild the native addon with `bun run setup`. Existing OMP processes must restart to load the portable TIFF decoder.
+- **Upstream as of `v18.12.2`:** Upstream resolves stalled OSC/DCS/APC strings by grammar (`091f36ca41` and follow-ups). A pending string head never takes the key flush timer, it is abandoned only after 5s without a read, and it then stays dormant for 10s so a late tail still completes it. This covers the fork's former 10-second kitty hold, so the fork dropped `stringHoldTimeout` and its interrupted-OSC filter. The fork keeps its torn-string discard exit on a fresh ESC.
 - **Why:** Incomplete or stale transfers must not alter a draft or attach an image to the wrong destination. Local and legacy image routes stay unchanged.
 - **Key paths:** `packages/coding-agent/src/utils/enhanced-paste.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/tui/src/chat/image-loading.ts`, `packages/tui/src/stdin-buffer.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/utils/enhanced-paste.test.ts`, `packages/coding-agent/test/input-controller-enhanced-paste.test.ts`, `packages/coding-agent/test/image-input.test.ts`, `packages/tui/test/image-loading.test.ts`, `packages/tui/test/start-listener.test.ts`, and `packages/tui/test/stdin-buffer.test.ts`.
@@ -80,6 +80,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Start Ctrl-R history in the active working directory and let Tab switch to all projects without changing the query.
 - **Decision:** Keep each prompt unique globally while preserving its membership and latest metadata in every recorded working directory.
 - **Decision:** Omit transient lifecycle commands and non-interactive `/mcp add` arguments from persisted prompt history.
+- **Decision:** Upstream `v18.12.2` quarantines a damaged `history.db` and salvages its readable rows. The salvage also copies `history_locations` and each salvaged prompt's own directory, so project-local recall survives it. Every recall query, scoped or global, skips rows whose prompt, timestamp, or use count decodes with a foreign column type. A scoped query checks the timestamp of the location row it returns.
 - **Why:** Local-first results remove unrelated project prompts. The filter also removes stale actions and protects credentials in MCP command arguments.
 - **Key paths:** `packages/coding-agent/src/session/history-storage.ts`, `packages/tui/src/overlays/history-search.ts`, `packages/coding-agent/src/modes/controllers/selector-controller.ts`, and `packages/coding-agent/src/modes/controllers/input-controller.ts`.
 - **Checks:** `packages/coding-agent/test/history-storage-search.test.ts`, `packages/coding-agent/test/history-storage-sqlite-compat.test.ts`, `packages/coding-agent/test/modes/components/history-search.test.ts`, `packages/coding-agent/test/keybindings-selector-navigation.test.ts`, `packages/coding-agent/test/slash-commands/history-security.test.ts`, and `packages/coding-agent/test/input-controller-slash-history.test.ts`.
@@ -146,6 +147,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Use the current chrome height for history retirement. Save displaced command and tool rows before clipping the viewport.
 - **Decision:** Keep `RuntimeChildrenOptions.transient`. The report panel mounts as a transient root, so it clips the transcript without retiring rows.
 - **Upstream as of `v18.11.3`:** Upstream (`25d28798d9`, then #15820) bills chrome at a floor. It promotes the floor after an idle settle and feeds run state through `Composer.setRunActive`. The fork keeps current-chrome retirement and `RuntimeChildrenOptions.transient`. It does not carry the floor, `setRunActive`, `transientChrome`, or `selfClearingChrome`. It adopts upstream's `getFilledHistoryRows` slack, parked below the live rows. That slack is off while a bottom overlay restore is active.
+- **Upstream as of `v18.12.2`:** Upstream added `tui.completeScrollback` (default `false`), which bills all chrome at its current height instead of the floor. The fork already bills current chrome, so in the fork the setting only decides whether a transient root (a command report) also retires the rows it covers. Off keeps the clip-without-retire decision above.
 - **Why:** A stable input position reduces visual movement in long sessions.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-pin-bottom.test.ts`, `packages/tui/test/composer-inline-shrink.test.ts`, `packages/tui/test/transcript-seam-loss.test.ts`, `packages/tui/test/report-panel.test.ts`, and `packages/coding-agent/test/startup-composer.test.ts`.
@@ -346,6 +348,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 ### Background pointer input on the macOS desktop root
 
 - **Decision:** With `delivery: "background"`, pointer input on the `desktop` target, or on a `Display` target, hit-tests the frontmost listed window at the pointer origin. The input then goes through that window's background path. Foreground delivery keeps the global HID tap. Keyboard input on the desktop root is unchanged.
+- **Decision:** A `menu` on a desktop-root click is refused for every delivery mode, as upstream does. A background desktop-root click goes through upstream's window background path (`background_window_pointer`) with its focus, overlay, intervention, and iPhone Mirroring guards.
 - **Decision:** Fail closed with `BackgroundUnavailable` when no application window is under the point or a macOS system surface (Window Server, Dock, Control Center, ...) is on top.
 - **Why:** Upstream posts all desktop-root pointer input through the global tap, which moves the user's cursor even when background delivery was requested.
 - **Retire when:** Upstream routes background desktop-root pointer input without the global tap.
@@ -377,6 +380,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Keep `auth.routing.<provider>` with `mode` (`smart`, `order`, `rotate`, `weight`, `usage`, `pace`), `stays` (`auto`, `session`, `turn`, `off`, `strict`), and `sink`. `auth.accountPolicies` uses `capPct` and `windowCapPct` instead of `reservePct`, plus `weight`, `disabled`, and `account.keySuffix`.
 - **Decision:** A `strict` session never moves to another account. After its account is removed, it fails until that account signs in again or the provider's set of accounts changes. The hold persists with the session pin, survives a restart, follows subagents, and respects session account pools.
 - **Decision:** `getApiKey(model, { withinTurn })` in the agent loop and the gateway keeps the account for a request whose last message is a tool result. Key checks do not move rotation, weight, sink, or learn-once state. For an auth-gateway client scoped to accounts, the key lookups and the `strict` check use the client's credential session (`gatewayCredentialSessionId`), so all conversations on that client share one `stays` pin and one `strict` hold. This is upstream's client scope. `ModelRegistry.getApiKey` and `getApiKeyForProvider` throw unless the caller passes `{ skipMissing: true }`.
+- **Decision:** A credential peek never moves the round-robin cursor in any routing mode. Upstream scans stored credentials in order. In `smart` mode, a peek for a session starts at that session's hashed index.
 - **Why:** The fork ports magpie's account pool policies. Upstream has only the `smart` selection.
 - **Key paths:** `packages/ai/src/auth/` (`routing.ts`, `select.ts`, `affinity.ts`, `rank.ts`, `rotation.ts`, `health.ts`), `packages/ai/src/auth-storage.ts`, `packages/ai/src/auth-gateway/dispatch.ts`, `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, `packages/coding-agent/src/session/credential-pin.ts`, `packages/coding-agent/src/session/turn-recovery.ts`, and `packages/coding-agent/src/config/model-registry.ts`.
 - **Checks:** `packages/ai/test/auth-storage-routing-modes.test.ts`, `packages/ai/test/auth-gateway-account-routing.test.ts`, `packages/ai/test/auth-gateway-within-turn.test.ts`, `packages/ai/test/auth-storage-session-restriction.test.ts`, `packages/agent/test/agent.test.ts`, `packages/coding-agent/test/credential-pin.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, `packages/coding-agent/test/sdk-credential-disabled-bridge.test.ts`, `packages/coding-agent/test/agent-session-retry-cap.test.ts`, and `packages/coding-agent/test/advisor-toggle.test.ts`.

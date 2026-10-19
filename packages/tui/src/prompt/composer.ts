@@ -44,6 +44,8 @@ export interface ComposerPreferences {
 	readonly showHardwareCursor: boolean;
 	readonly maxInlineImages: number;
 	readonly resizeScrollback: ResizeScrollbackMode;
+	/** Bill transient roots (command reports) at full height, so rows they cover reach scrollback instead of reappearing when they close. */
+	readonly completeScrollback: boolean;
 	readonly imeSafeCursor: boolean;
 	readonly autocompleteMaxVisible: number;
 	readonly spellingTypoDetection: boolean;
@@ -63,6 +65,7 @@ export const COMPOSER_DEFAULTS: ComposerPreferences = {
 	showHardwareCursor: true,
 	maxInlineImages: 8,
 	resizeScrollback: "rebuild",
+	completeScrollback: false,
 	imeSafeCursor: false,
 	autocompleteMaxVisible: 10,
 	spellingTypoDetection: true,
@@ -430,7 +433,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			const start = after.length;
 			this.#renderBelowRoot(root, width, after, afterSpans);
 			ends.push({ root, end: after.length });
-			if (this.#transientChrome.has(root)) transientRows += after.length - start;
+			// `completeScrollback` retires the rows a transient root covers like any other chrome.
+			if (!this.#preferences.completeScrollback && this.#transientChrome.has(root)) {
+				transientRows += after.length - start;
+			}
 		}
 		this.#rowsBelow = new Map(ends.map(({ root, end }) => [root, after.length - end]));
 		if (this.#preferences.streamingScrollback) {
