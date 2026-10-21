@@ -13,13 +13,15 @@ import {
 	matchesAppToolsExpand,
 	matchesSelectCancel,
 	matchesSelectDown,
+	matchesSelectPageDown,
+	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../keybinding-matchers";
 import { matchesKey } from "../keys";
 import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { collapseCommand } from "../apps/ps-data";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, selectList } from "../native/overlay";
 import { theme } from "../theme/theme";
 import { buildJobTree, type JobTreeAgent, type JobTreeRow, jobTreeGuide } from "./job-tree";
@@ -119,8 +121,9 @@ const FALLBACK_TAIL_LINES = 8;
  * Cancel job, its command or task, facts (agent, cwd, live pids, exit code,
  * artifact) and a tail-following output pane. With no jobs it shows an empty
  * state. It re-reads the session every frame, so the caller re-renders it on
- * a timer while it is open. ↑/↓ select, X cancels the selected running job,
- * the expand key shows the full or cut command, Esc or Close dismisses;
+ * a timer while it is open. ↑/↓ select, PgUp/PgDn scroll the detail, X
+ * cancels the selected running job, the expand key shows the full or cut
+ * command, Esc or Close dismisses;
  * nothing enters the transcript. A source without
  * `cancel` renders read-only, and a subagent's job never offers Cancel: only
  * the root's own jobs can be stopped here.
@@ -135,6 +138,8 @@ export class JobsSheet implements Component {
 	readonly #source: JobsSheetSource;
 	#selectedId: string | undefined;
 	#native: { key: string; output: string | undefined; node: NativeNode } | undefined;
+	/** PgUp/PgDn forwarded to the terminal: a full command can outgrow the sheet. */
+	#scroll: NativeScroll | undefined;
 	/** Fallback output tail, reused while the selected job's output is unchanged. */
 	#tail: { id: string; output: string; lines: readonly string[] } | undefined;
 
@@ -163,6 +168,7 @@ export class JobsSheet implements Component {
 			detail?.artifactId,
 			jobs.some(job => job.status === "running") ? Math.floor(now / 1000) : "",
 			expanded,
+			this.#scroll?.n,
 		].join("|");
 		const output = detail?.output;
 		if (this.#native?.key === key && this.#native.output === output) return this.#native.node;
@@ -174,7 +180,7 @@ export class JobsSheet implements Component {
 						{ role: "omp.jobs.split" },
 						[
 							node("col", { role: "omp.jobs.master" }, [describeJobList(rows, selected, now)], "master"),
-							describeDetail(selected, detail, now, cancellable, expanded),
+							{ ...describeDetail(selected, detail, now, cancellable, expanded), scroll: this.#scroll },
 						],
 						"split",
 					),
@@ -244,6 +250,9 @@ export class JobsSheet implements Component {
 		else if (matchesSelectDown(data)) this.#move(1);
 		else if (matchesKey(data, "x")) this.#cancelSelected();
 		else if (matchesAppToolsExpand(data)) this.#source.toggleExpanded();
+		else if (matchesSelectPageUp(data) || matchesSelectPageDown(data)) {
+			this.#scroll = { by: matchesSelectPageUp(data) ? "page-up" : "page-down", n: (this.#scroll?.n ?? 0) + 1 };
+		}
 	}
 
 	/** Clicks select a row; Close, Cancel job and the command toggle run what Esc, X and the expand key run. */

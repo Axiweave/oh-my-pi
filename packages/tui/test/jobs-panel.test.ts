@@ -190,6 +190,16 @@ describe("JobsSheet", () => {
 		expect(source.toggleExpanded).toHaveBeenCalledTimes(2);
 	});
 
+	it("forwards each PgUp/PgDn press to the scroller around the detail pane", () => {
+		const { sheet } = setup();
+		const detail = () => byRole(sheet.describe(CX), "omp.jobs.detail")[0]!;
+		expect(detail().scroll).toBeUndefined();
+		sheet.handleInput("\x1b[6~");
+		expect(detail().scroll).toEqual({ by: "page-down", n: 1 });
+		sheet.handleInput("\x1b[5~");
+		expect(detail().scroll).toEqual({ by: "page-up", n: 2 });
+	});
+
 	it("prints the selected job's whole command in the terminal fallback only while expanded", () => {
 		const command = Array.from({ length: 20 }, (_, i) => `echo line-${i + 1}`).join("\n");
 		const { sheet } = setup(JOBS, { ...DETAILS, "task-1": { command, pids: [] } });
