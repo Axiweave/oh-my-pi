@@ -8877,6 +8877,8 @@ export class InteractiveMode implements InteractiveModeContext {
 						this.ui.requestRender();
 					},
 			close: () => this.#hideJobsSheet(),
+			expanded: () => this.toolOutputExpanded,
+			toggleExpanded: () => this.toggleToolOutputExpansion(),
 		});
 		this.#jobsSheetHandle = this.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
 		this.#jobsSheetTimer = setInterval(() => this.ui.requestRender(), JOBS_SHEET_REFRESH_MS);
@@ -9943,6 +9945,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	commandReportRows(): number | undefined {
 		const below = this.composer.rowsBelow(this.reportContainer);
 		return below === undefined ? undefined : this.ui.terminal.rows - below;
+	}
+
+	refreshJobsReport(): void {
+		this.#commandController.refreshJobsReport();
+	}
+
+	get jobsViewOpen(): boolean {
+		return this.#jobsSheetHandle !== undefined || this.#commandController.jobsReportOpen;
 	}
 
 	cycleThinkingLevel(): void {

@@ -8,9 +8,15 @@
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import {
+	appToolsExpandKey,
+	matchesAppToolsExpand,
+	matchesSelectCancel,
+	matchesSelectDown,
+	matchesSelectUp,
+} from "../keybinding-matchers";
 import { matchesKey } from "../keys";
-import { truncateToWidth } from "../utils";
+import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { collapseCommand } from "../apps/ps-data";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
@@ -70,6 +76,10 @@ export interface JobsSheetSource {
 	cancel?(id: string): void;
 	/** Dismiss the sheet. */
 	close(): void;
+	/** Whether the selected job's command shows in full rather than cut. */
+	expanded(): boolean;
+	/** Flip {@link expanded}. */
+	toggleExpanded(): void;
 }
 
 /** A job's status as the sheet names it. */
@@ -110,7 +120,8 @@ const FALLBACK_TAIL_LINES = 8;
  * artifact) and a tail-following output pane. With no jobs it shows an empty
  * state. It re-reads the session every frame, so the caller re-renders it on
  * a timer while it is open. ↑/↓ select, X cancels the selected running job,
- * Esc or Close dismisses; nothing enters the transcript. A source without
+ * the expand key shows the full or cut command, Esc or Close dismisses;
+ * nothing enters the transcript. A source without
  * `cancel` renders read-only, and a subagent's job never offers Cancel: only
  * the root's own jobs can be stopped here.
  */
@@ -134,6 +145,7 @@ export class JobsSheet implements Component {
 	describe(_cx: DescribeContext): NativeNode {
 		const { rows, jobs, selected, cancellable } = this.#current();
 		const detail = selected && this.#source.inspect(selected.id);
+		const expanded = this.#source.expanded();
 		const now = Date.now();
 		// Elapsed nodes tick on their own; list values and the output pane redraw
 		// when a job starts, settles, leaves or moves in the tree, its process
@@ -150,6 +162,7 @@ export class JobsSheet implements Component {
 			detail?.exitCode,
 			detail?.artifactId,
 			jobs.some(job => job.status === "running") ? Math.floor(now / 1000) : "",
+			expanded,
 		].join("|");
 		const output = detail?.output;
 		if (this.#native?.key === key && this.#native.output === output) return this.#native.node;
@@ -161,11 +174,16 @@ export class JobsSheet implements Component {
 						{ role: "omp.jobs.split" },
 						[
 							node("col", { role: "omp.jobs.master" }, [describeJobList(rows, selected, now)], "master"),
-							describeDetail(selected, detail, now, cancellable),
+							describeDetail(selected, detail, now, cancellable, expanded),
 						],
 						"split",
 					),
-					actionBar([describeSummary(jobs), null, close]),
+					actionBar([
+						describeSummary(jobs),
+						null,
+						actionButton(expanded ? "Short command" : "Full command", "expand", { keys: appToolsExpandKey() }),
+						close,
+					]),
 				])
 			: col([describeEmpty(), actionBar([null, close])]);
 		this.#native = { key, output, node: described };
@@ -197,6 +215,10 @@ export class JobsSheet implements Component {
 			);
 		}
 		const detail = selected && this.#source.inspect(selected.id);
+		const command = selected && (detail?.command ?? (selected.type === "task" ? undefined : selected.label));
+		if (command && this.#source.expanded()) {
+			for (const line of wrapTextWithAnsi(replaceTabs(command), Math.max(1, width - 3))) lines.push(`   ${line}`);
+		}
 		if (detail) {
 			const facts = compact([
 				detail.cwd && `cwd ${detail.cwd}`,
@@ -221,13 +243,15 @@ export class JobsSheet implements Component {
 		else if (matchesSelectUp(data)) this.#move(-1);
 		else if (matchesSelectDown(data)) this.#move(1);
 		else if (matchesKey(data, "x")) this.#cancelSelected();
+		else if (matchesAppToolsExpand(data)) this.#source.toggleExpanded();
 	}
 
-	/** Clicks select a row; Close and Cancel job run what Esc and X run. */
+	/** Clicks select a row; Close, Cancel job and the command toggle run what Esc, X and the expand key run. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "select" || event.type === "activate") this.#selectedId = event.item;
 		else if (event.type === "action" && event.act === "close") this.#source.close();
 		else if (event.type === "action" && event.act === "cancel") this.#cancelSelected();
+		else if (event.type === "action" && event.act === "expand") this.#source.toggleExpanded();
 	}
 
 	/**
@@ -367,14 +391,15 @@ function describeEmpty(): NativeNode {
 
 /**
  * The selected job: a status line (pill, live elapsed, type · id, Cancel job
- * when `cancellable`), its task or full command, facts and the output pane (or
- * its empty state).
+ * when `cancellable`), its task or command (cut to a preview unless
+ * `expanded`), facts and the output pane (or its empty state).
  */
 function describeDetail(
 	job: JobsPanelJob,
 	detail: JobsPanelDetail | undefined,
 	nowMs: number,
 	cancellable: boolean,
+	expanded: boolean,
 ): NativeNode {
 	const settled = job.status !== "running";
 	const exit = detail?.exitCode;
@@ -410,7 +435,12 @@ function describeDetail(
 			{ role: "omp.jobs.status", gap: "sm", align: "center" },
 		),
 		command
-			? code(command, { lang: "bash", wrap: true, preview: { lines: 4 }, role: "omp.jobs.command" })
+			? code(command, {
+					lang: "bash",
+					wrap: true,
+					...(expanded ? {} : { preview: { lines: 4 } }),
+					role: "omp.jobs.command",
+				})
 			: text(job.label, { role: "omp.jobs.title", wrap: "word" }),
 		facts.length > 0 && node("kv", { items: facts, role: "omp.jobs.facts" }),
 		node(

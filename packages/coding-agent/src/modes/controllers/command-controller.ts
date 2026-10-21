@@ -195,6 +195,8 @@ function hasForkApiKeyOverride(argv: string[]): boolean {
 export class CommandController {
 	/** The open native report sheet. */
 	#reportSheet: OverlayHandle | undefined;
+	/** The shown report (above the editor or as a sheet) is the `/jobs` report. */
+	#jobsReportOpen = false;
 	#forkTerminalDependencies: ForkTerminalDependencies;
 
 	constructor(
@@ -230,6 +232,7 @@ export class CommandController {
 	#clearReport(): boolean {
 		const docked = this.ctx.reportContainer;
 		if (docked.children.length === 0) return false;
+		this.#jobsReportOpen = false;
 		docked.dispose();
 		docked.clear();
 		this.ctx.ui.requestRender();
@@ -239,6 +242,7 @@ export class CommandController {
 	#closeReportSheet(): void {
 		const sheet = this.#reportSheet;
 		if (!sheet) return;
+		this.#jobsReportOpen = false;
 		this.#reportSheet = undefined;
 		sheet.hide();
 		this.ctx.ui.setFocus(this.ctx.editorContainer.children[0] ?? this.ctx.editor);
@@ -255,7 +259,12 @@ export class CommandController {
 	 * `/usage`, its body scrolled by the terminal once it is long, closed by
 	 * Esc or Close.
 	 */
-	showCommandReport(options: { title: string; head?: TspText; body: Component }): void {
+	showCommandReport(options: {
+		title: string;
+		head?: TspText;
+		body: Component;
+		expand?: { label: string; run(): void };
+	}): void {
 		this.#clearReport();
 		this.#closeReportSheet();
 		const terminal = this.ctx.ui.terminal;
@@ -834,22 +843,51 @@ export class CommandController {
 	 */
 	async handleJobsCommand(options?: { full?: boolean }): Promise<void> {
 		const full = options?.full === true;
-		const tree = this.ctx.viewSession.getAsyncJobTree();
-		if (!tree) {
+		if (!this.ctx.viewSession.getAsyncJobTree()) {
 			this.ctx.showWarning("Async background jobs are unavailable in this session.");
 			return;
 		}
+		// The report form is the session expansion state: `/jobs full` turns it on,
+		// so the expand key flips a visible form from the first press.
+		if (full) this.ctx.setToolsExpanded(true);
 		if (isNativeRendering() && !full) {
 			this.ctx.showJobsSheet();
 			return;
 		}
+		this.#showJobsReport();
+	}
+
+	get jobsReportOpen(): boolean {
+		return this.#jobsReportOpen;
+	}
+
+	/** Rebuild the open `/jobs` report in the current expansion form; it may move between the dock and full screen. */
+	refreshJobsReport(): void {
+		if (this.#jobsReportOpen) this.#showJobsReport();
+	}
+
+	#showJobsReport(): void {
+		const tree = this.ctx.viewSession.getAsyncJobTree();
+		if (!tree) return;
+		const full = this.ctx.toolOutputExpanded;
+		const report = (body: Component) => {
+			this.showCommandReport({
+				title: "Background Jobs",
+				body,
+				expand: {
+					label: full ? "short commands" : "full commands",
+					run: () => this.ctx.toggleToolOutputExpansion(),
+				},
+			});
+			this.#jobsReportOpen = true;
+		};
 
 		const now = Date.now();
 		const columns = this.ctx.ui.terminal.columns ?? 100;
 		let info = `${theme.fg("dim", "Running:")} ${tree.running.length}\n`;
 		if (tree.running.length === 0 && tree.recent.length === 0) {
 			info += `\n${theme.fg("dim", "No async jobs yet.")}`;
-			this.showCommandReport({ title: "Background Jobs", body: new Text(info, 0, 0) });
+			report(new Text(info, 0, 0));
 			return;
 		}
 
@@ -884,7 +922,7 @@ export class CommandController {
 			}
 		}
 
-		this.showCommandReport({ title: "Background Jobs", body: new Text(info.trimEnd(), 0, 0) });
+		report(new Text(info.trimEnd(), 0, 0));
 	}
 
 	async handleUsageCommand(reports?: UsageReport[] | null): Promise<void> {

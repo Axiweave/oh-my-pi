@@ -248,6 +248,7 @@ async function createContext(options: CreateContextOptions = {}) {
 		isPythonMode: false,
 		hideToolActivity: false,
 		toolOutputExpanded: false,
+		refreshJobsReport: vi.fn(),
 		settings,
 		chatContainer: { children: [], setToolActivityVisible: vi.fn() },
 		handleHotkeysCommand: vi.fn(),

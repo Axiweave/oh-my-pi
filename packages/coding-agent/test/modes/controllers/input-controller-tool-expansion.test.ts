@@ -16,6 +16,7 @@ describe("InputController tool output expansion", () => {
 			chatContainer: { children: [expandable, inert] },
 			ui: { requestRender },
 			showStatus,
+			refreshJobsReport: vi.fn(),
 		} as unknown as InteractiveModeContext;
 
 		new InputController(ctx).toggleToolOutputExpansion();
@@ -48,6 +49,28 @@ describe("InputController tool output expansion", () => {
 		expect(expandable.setExpanded).not.toHaveBeenCalled();
 		expect(requestRender).not.toHaveBeenCalled();
 		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("/settings"));
+	});
+
+	it("still toggles while tool activity is hidden when a job view is open, rebuilding the jobs report", () => {
+		const refreshJobsReport = vi.fn();
+		const ctx = {
+			hideToolActivity: true,
+			jobsViewOpen: true,
+			toolOutputExpanded: false,
+			chatContainer: { children: [] },
+			showStatus: vi.fn(),
+			ui: { requestRender: vi.fn() },
+			refreshJobsReport,
+		} as unknown as InteractiveModeContext;
+		const controller = new InputController(ctx);
+
+		controller.toggleToolOutputExpansion();
+		expect(ctx.toolOutputExpanded).toBe(true);
+		expect(refreshJobsReport).toHaveBeenCalledTimes(1);
+
+		controller.toggleToolOutputExpansion();
+		expect(ctx.toolOutputExpanded).toBe(false);
+		expect(refreshJobsReport).toHaveBeenCalledTimes(2);
 	});
 });
 

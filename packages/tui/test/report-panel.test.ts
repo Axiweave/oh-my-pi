@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { ReportPanel } from "@oh-my-pi/pi-tui/overlays/report-panel";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -215,5 +216,41 @@ describe("ReportPanel natively", () => {
 		expect((panel.describe() as Described).c?.[0]?.scroll).toEqual({ by: "page-down", n: 1 });
 		panel.handleNativeEvent({ type: "action", key: "actions/close", act: "close", mods: [] });
 		expect(closed).toBe(1);
+	});
+
+	/** Keys of the described action buttons. */
+	function buttons(root: NativeNode): string[] {
+		const own = root.p && Reflect.get(root.p, "role") === "omp.btn" ? [root.key ?? ""] : [];
+		return [...own, ...(root.c ?? []).flatMap(child => ("k" in child ? buttons(child) : []))];
+	}
+
+	it("runs its expand toggle on the expand key and on its button", () => {
+		let runs = 0;
+		const panel = new ReportPanel({
+			title: "Report",
+			body: new Text("body", 0, 0),
+			closeKey: "Esc",
+			onClose: () => {},
+			expand: { label: "expand", run: () => runs++ },
+		});
+		expect(buttons(panel.describe())).toEqual(["expand", "close"]);
+		panel.handleInput("\x0f");
+		expect(runs).toBe(1);
+		panel.handleNativeEvent({ type: "action", key: "actions/expand", act: "expand", mods: [] });
+		expect(runs).toBe(2);
+	});
+
+	it("without an expand toggle ignores the expand key and offers Close alone", () => {
+		let closed = 0;
+		const panel = new ReportPanel({
+			title: "Report",
+			body: new Text("body", 0, 0),
+			closeKey: "Esc",
+			onClose: () => closed++,
+		});
+		panel.handleInput("\x0f");
+		expect(closed).toBe(0);
+		panel.handleNativeEvent({ type: "action", key: "actions/expand", act: "expand", mods: [] });
+		expect(buttons(panel.describe())).toEqual(["close"]);
 	});
 });

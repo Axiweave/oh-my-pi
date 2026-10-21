@@ -13,7 +13,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import { Container } from "@oh-my-pi/pi-tui";
+import { Container, Text } from "@oh-my-pi/pi-tui";
 import { isNativeRendering, setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { JobsSheet } from "@oh-my-pi/pi-tui/overlays/jobs-panel";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -21,24 +21,54 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 const WIDTH = 60;
 
+/**
+ * A text-mode `/jobs` harness over a mock context whose expansion state, like
+ * the real one, rebuilds the open jobs report on every change.
+ */
+function jobsHarness(running: AsyncJobSnapshotItem[], options: { columns?: number; reportRows?: number } = {}) {
+	const columns = options.columns ?? WIDTH;
+	const reportContainer = new Container();
+	const overlays: { component: { render(width: number): readonly string[] }; hide: () => void }[] = [];
+	const ctx = {
+		ui: {
+			terminal: { columns, rows: 400 },
+			requestRender: () => {},
+			setFocus: () => {},
+			showOverlay: (component: { render(width: number): readonly string[] }) => {
+				const handle = { component, hide: vi.fn() };
+				overlays.push(handle);
+				return handle;
+			},
+		},
+		keybindings: { getKeys: () => ["escape"] },
+		editorContainer: { children: [] },
+		editor: {},
+		reportContainer,
+		commandReportRows: () => options.reportRows ?? 400,
+		viewSession: { getAsyncJobTree: () => ({ running, recent: [], agents: [] }) },
+		toolOutputExpanded: false,
+		setToolsExpanded: (expanded: boolean) => {
+			ctx.toolOutputExpanded = expanded;
+			controller.refreshJobsReport();
+		},
+		toggleToolOutputExpansion: () => ctx.setToolsExpanded(!ctx.toolOutputExpanded),
+	};
+	const controller = new CommandController(ctx as unknown as InteractiveModeContext);
+	const docked = () => reportContainer.children.length > 0;
+	/** Content rows of the shown report, borders stripped. */
+	const rows = () =>
+		(docked() ? reportContainer.render(columns) : (overlays.at(-1)?.component.render(columns) ?? []))
+			.map(line => Bun.stripANSI(line))
+			.filter(line => line.startsWith("│"))
+			.map(line => line.slice(2, -2).trimEnd());
+	return { ctx, controller, overlays, docked, rows };
+}
+
 /** `/jobs full` in text mode, as the report box above the editor shows it: its content rows, borders stripped. */
 async function renderFullJobs(running: AsyncJobSnapshotItem[]): Promise<string[]> {
-	const reportContainer = new Container();
-	const ctx = {
-		ui: { terminal: { columns: WIDTH, rows: 200 }, requestRender: () => {} },
-		keybindings: { getKeys: () => ["escape"] },
-		reportContainer,
-		commandReportRows: () => 200,
-		viewSession: {
-			getAsyncJobTree: () => ({ running, recent: [], agents: [] }),
-		},
-	} as unknown as InteractiveModeContext;
-	await new CommandController(ctx).handleJobsCommand({ full: true });
-	return reportContainer
-		.render(WIDTH)
-		.map(line => Bun.stripANSI(line))
-		.filter(line => line.startsWith("│"))
-		.map(line => line.slice(2, -2).trimEnd());
+	const { controller, rows } = jobsHarness(running, { columns: WIDTH });
+	await controller.handleJobsCommand({ full: true });
+	return rows();
 }
 
 describe("CommandController /jobs full", () => {
@@ -65,6 +95,92 @@ describe("CommandController /jobs full", () => {
 		expect(commandLines.map(line => line.trim()).join(" ")).toContain("import sys EOF python /tmp/x.py --flag");
 		expect(commandLines.at(-1)).toEndWith("END");
 		expect(lines[second + 1]).toBe("  sleep 5");
+	});
+});
+
+describe("CommandController /jobs expand toggle", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
+
+	/** Deterministic command of `n` lines; 0 means a label-only job. */
+	const commandOf = (n: number) =>
+		n === 0
+			? undefined
+			: Array.from({ length: n }, (_, i) => `step-${i} --opt=${"x".repeat(i % 7)} tail${i}`).join("\n");
+	const jobWith = (command: string | undefined): AsyncJobSnapshotItem => ({
+		id: "bash-1",
+		type: "bash",
+		// Settled with fixed times so the elapsed column cannot tick between renders.
+		status: "completed",
+		label: command ? `${command.split("\n")[0]}...` : "sleep 5",
+		command,
+		startTime: 1_000,
+		endTime: 6_000,
+	});
+
+	for (const lines of [0, 1, 20]) {
+		for (const columns of [40, 60, 120]) {
+			it(`shows the whole command in full form and round-trips (lines=${lines}, columns=${columns})`, async () => {
+				const command = commandOf(lines);
+				const { ctx, controller, rows } = jobsHarness([jobWith(command)], { columns });
+				await controller.handleJobsCommand();
+				const short = rows();
+
+				ctx.toggleToolOutputExpansion();
+				const full = rows();
+				expect(full.join("").replace(/\s+/g, "")).toContain((command ?? "sleep 5").replace(/\s+/g, ""));
+				expect(full.join("\n")).not.toContain("…");
+				if (lines > 1) expect(short.join("\n")).not.toContain("tail1");
+
+				ctx.toggleToolOutputExpansion();
+				expect(rows()).toEqual(short);
+			});
+		}
+	}
+
+	it("moves a full form too tall for the dock to full screen, and back to the dock when short", async () => {
+		const { ctx, controller, overlays, docked } = jobsHarness([jobWith(commandOf(20))], { reportRows: 12 });
+		await controller.handleJobsCommand();
+		expect(docked()).toBe(true);
+		expect(overlays).toHaveLength(0);
+
+		ctx.toggleToolOutputExpansion();
+		expect(docked()).toBe(false);
+		expect(overlays).toHaveLength(1);
+		expect(controller.jobsReportOpen).toBe(true);
+
+		ctx.toggleToolOutputExpansion();
+		expect(docked()).toBe(true);
+		expect(overlays[0]!.hide).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves another report alone once it replaces the jobs report", async () => {
+		const { ctx, controller, rows } = jobsHarness([jobWith(commandOf(3))]);
+		await controller.handleJobsCommand();
+		controller.showCommandReport({ title: "Other", body: new Text("other body", 0, 0) });
+		const other = rows();
+		expect(controller.jobsReportOpen).toBe(false);
+
+		ctx.toggleToolOutputExpansion();
+		expect(rows()).toEqual(other);
+	});
+
+	it("`/jobs full` turns expansion on, so one toggle shows the short form", async () => {
+		const { ctx, controller, rows } = jobsHarness([jobWith(commandOf(3))]);
+		await controller.handleJobsCommand({ full: true });
+		expect(ctx.toolOutputExpanded).toBe(true);
+		expect(rows().join("\n")).toContain("tail2");
+
+		ctx.toggleToolOutputExpansion();
+		expect(rows().join("\n")).not.toContain("tail2");
+	});
+
+	it("`/jobs` opens in full form while expansion is on", async () => {
+		const { ctx, controller, rows } = jobsHarness([jobWith(commandOf(3))]);
+		ctx.toolOutputExpanded = true;
+		await controller.handleJobsCommand();
+		expect(rows().join("\n")).toContain("tail2");
 	});
 });
 

@@ -62,8 +62,18 @@ const DETAILS: Record<string, JobsPanelDetail> = {
 	"bash-2": { command: "bun lint", cwd: "/work", pids: [], exitCode: 1, output: "1 error\n" },
 };
 
-function setup(jobs: { running: JobsPanelJob[]; recent: JobsPanelJob[] } = JOBS) {
-	const source = { load: () => jobs, inspect: (id: string) => DETAILS[id], cancel: vi.fn(), close: vi.fn() };
+function setup(jobs: { running: JobsPanelJob[]; recent: JobsPanelJob[] } = JOBS, details = DETAILS) {
+	let expanded = false;
+	const source = {
+		load: () => jobs,
+		inspect: (id: string) => details[id],
+		cancel: vi.fn(),
+		close: vi.fn(),
+		expanded: () => expanded,
+		toggleExpanded: vi.fn(() => {
+			expanded = !expanded;
+		}),
+	};
 	const sheet = new JobsSheet(source satisfies JobsSheetSource);
 	return { sheet, source };
 }
@@ -101,13 +111,13 @@ describe("JobsSheet", () => {
 	it("offers Cancel job and X only for a running job", () => {
 		const { sheet, source } = setup();
 		sheet.handleInput(DOWN);
-		expect(byRole(sheet.describe(CX), "omp.btn").map(btn => btn.key)).toEqual(["cancel", "close"]);
+		expect(byRole(sheet.describe(CX), "omp.btn").map(btn => btn.key)).toEqual(["cancel", "expand", "close"]);
 		sheet.handleInput("x");
 		expect(source.cancel).toHaveBeenCalledWith("bash-1");
 
 		sheet.handleInput(DOWN);
 		const root = sheet.describe(CX);
-		expect(byRole(root, "omp.btn").map(btn => btn.key)).toEqual(["close"]);
+		expect(byRole(root, "omp.btn").map(btn => btn.key)).toEqual(["expand", "close"]);
 		expect(prop(byRole(root, "omp.jobs.facts")[0], "items")).toContainEqual({
 			k: "Exit code",
 			v: [{ t: "1", s: "error" }],
@@ -153,14 +163,47 @@ describe("JobsSheet", () => {
 
 	it("renders read-only when the source cannot cancel: the jobs and detail stay, Cancel job is gone", () => {
 		// A focused subagent view only watches that agent's jobs (#14814).
-		const source: JobsSheetSource = { load: () => JOBS, inspect: (id: string) => DETAILS[id], close: vi.fn() };
+		const source: JobsSheetSource = {
+			load: () => JOBS,
+			inspect: (id: string) => DETAILS[id],
+			close: vi.fn(),
+			expanded: () => false,
+			toggleExpanded: vi.fn(),
+		};
 		const sheet = new JobsSheet(source);
-		expect(byRole(sheet.describe(CX), "omp.btn").map(btn => btn.key)).toEqual(["close"]);
+		expect(byRole(sheet.describe(CX), "omp.btn").map(btn => btn.key)).toEqual(["expand", "close"]);
 
 		sheet.handleInput(DOWN);
 		const lines = sheet.render(100).join("\n");
 		expect(lines).toContain("cargo test --workspace");
 		expect(lines).toContain("pid 41");
+	});
+
+	it("shows the full command only while expanded, and the expand key toggles it", () => {
+		const { sheet, source } = setup();
+		sheet.handleInput(DOWN);
+		expect(prop(byRole(sheet.describe(CX), "omp.jobs.command")[0], "preview")).toBeDefined();
+		sheet.handleInput("\x0f");
+		expect(source.toggleExpanded).toHaveBeenCalledTimes(1);
+		expect(prop(byRole(sheet.describe(CX), "omp.jobs.command")[0], "preview")).toBeUndefined();
+		sheet.handleNativeEvent({ type: "action", key: "expand", act: "expand", mods: [] });
+		expect(source.toggleExpanded).toHaveBeenCalledTimes(2);
+	});
+
+	it("prints the selected job's whole command in the terminal fallback only while expanded", () => {
+		const command = Array.from({ length: 20 }, (_, i) => `echo line-${i + 1}`).join("\n");
+		const { sheet } = setup(JOBS, { ...DETAILS, "task-1": { command, pids: [] } });
+		const short = sheet.render(100);
+		sheet.handleInput("\x0f");
+		const full = sheet.render(100);
+		const [shortRows, fullRows] = [short, full].map(
+			lines => lines.filter(line => /^[> ] (running|failed) /.test(line)).length,
+		);
+		expect(fullRows).toBe(shortRows);
+		expect(fullRows).toBe(3);
+		const fullLines = full.map(line => line.trim());
+		for (let i = 1; i <= 20; i++) expect(fullLines).toContain(`echo line-${i}`);
+		for (let i = 2; i <= 20; i++) expect(short.join("\n")).not.toContain(`echo line-${i}`);
 	});
 
 	describe("as a tree of subagents", () => {
@@ -195,7 +238,14 @@ describe("JobsSheet", () => {
 			recent: [job("main-done", "Main", { status: "completed", endTime: NOW })],
 		} satisfies JobsPanelSnapshot;
 		const treeSheet = () => {
-			const source = { load: () => TREE, inspect: () => undefined, cancel: vi.fn(), close: vi.fn() };
+			const source = {
+				load: () => TREE,
+				inspect: () => undefined,
+				cancel: vi.fn(),
+				close: vi.fn(),
+				expanded: () => false,
+				toggleExpanded: vi.fn(),
+			};
 			return { sheet: new JobsSheet(source satisfies JobsSheetSource), source };
 		};
 
@@ -230,7 +280,7 @@ describe("JobsSheet", () => {
 		it("cancels only jobs the root owns", () => {
 			const { sheet, source } = treeSheet();
 			sheet.handleInput(DOWN); // task-sub, owned by Audit
-			expect(byRole(sheet.describe(CX), "omp.btn").map(btn => btn.key)).toEqual(["close"]);
+			expect(byRole(sheet.describe(CX), "omp.btn").map(btn => btn.key)).toEqual(["expand", "close"]);
 			sheet.handleInput("x");
 			sheet.handleNativeEvent({ type: "action", key: "cancel", act: "cancel", mods: [] });
 			expect(source.cancel).not.toHaveBeenCalled();

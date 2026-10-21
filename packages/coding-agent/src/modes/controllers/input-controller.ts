@@ -2946,7 +2946,8 @@ export class InputController {
 	}
 
 	toggleToolOutputExpansion(): void {
-		if (this.ctx.hideToolActivity) {
+		// Hidden tool rows cannot show an expansion, but an open job view can.
+		if (this.ctx.hideToolActivity && !this.ctx.jobsViewOpen) {
 			const visibilityKey = appKey(this.ctx.keybindings, "app.tools.toggleVisibility");
 			const visibilityHint = visibilityKey ? `${visibilityKey} or /settings` : "/settings";
 			this.ctx.showStatus(`Tool activity is hidden — show it with ${visibilityHint} before expanding`);
@@ -2989,6 +2990,7 @@ export class InputController {
 				child.setExpanded(expanded);
 			}
 		}
+		this.ctx.refreshJobsReport();
 		// Toggling expansion mutates every live block; blocks already committed to
 		// terminal history stay at their committed presentation.
 		this.ctx.ui.requestRender(true);

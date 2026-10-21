@@ -5,7 +5,10 @@ import { Ellipsis } from "../index";
 import { ScrollView } from "../components/scroll-view";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
+import { formatKeyHint } from "../key-hint-format";
 import {
+	appToolsExpandKey,
+	matchesAppToolsExpand,
 	matchesSelectCancel,
 	matchesSelectDown,
 	matchesSelectPageDown,
@@ -43,6 +46,8 @@ export interface ReportPanelOptions {
 	 * leaves it uncapped.
 	 */
 	readonly maxRows?: () => number | undefined;
+	/** A toggle the expand key (`app.tools.expand`) and an action button run, named by `label`. */
+	readonly expand?: { readonly label: string; run(): void };
 }
 
 /** Text-mode rows around the scrolled body: the borders, two spacers and the footer. */
@@ -58,12 +63,14 @@ const TEXT_CHROME_ROWS = 5;
  * Natively it is a sheet like `/usage`: a centred `lg` glass sheet titled by
  * the report whose body the terminal scrolls (wheel, and the same keys
  * forwarded as scroll requests), then a Close button; Esc closes it.
+ * With {@link ReportPanelOptions.expand}, the expand key and a button before Close run its toggle.
  */
 export class ReportPanel extends OverlayPanel {
 	readonly nativeOverlay: NonNullable<Component["nativeOverlay"]>;
 	readonly #body: Component;
 	readonly #onClose: () => void;
 	readonly #maxRows: (() => number | undefined) | undefined;
+	readonly #expand: ReportPanelOptions["expand"];
 	readonly #view: ScrollView;
 	readonly #footer: Text;
 	#closeHint: string;
@@ -82,6 +89,7 @@ export class ReportPanel extends OverlayPanel {
 		this.#body = options.body;
 		this.#onClose = options.onClose;
 		this.#maxRows = options.maxRows;
+		this.#expand = options.expand;
 		this.#closeHint = `${options.closeKey} to close`;
 		this.#view = new ScrollView(options.body, {
 			height: 0,
@@ -119,7 +127,8 @@ export class ReportPanel extends OverlayPanel {
 		this.#bodyRows = Math.min(rows, bodyMax);
 		this.#view.setHeight(this.#bodyRows);
 		const scrollHint = `${editorKey("tui.select.pageUp")}/${editorKey("tui.select.pageDown")} scroll · `;
-		this.#footer.setText(theme.fg("muted", overflows ? scrollHint + this.#closeHint : this.#closeHint));
+		const expandHint = this.#expand ? `${formatKeyHint(appToolsExpandKey())} ${this.#expand.label} · ` : "";
+		this.#footer.setText(theme.fg("muted", (overflows ? scrollHint : "") + expandHint + this.#closeHint));
 		const lines = super.render(width);
 		return cap !== undefined && lines.length > cap ? lines.slice(0, Math.max(0, cap)) : lines;
 	}
@@ -138,7 +147,9 @@ export class ReportPanel extends OverlayPanel {
 		const scroll = this.#scroll;
 		if (this.#native && this.#native.scroll === scroll) return this.#native.node;
 		const body: NativeNode = { ...col([this.#body], { role: "omp.report.body" }), key: "body", scroll };
-		const node = col([body, actionBar([null, actionButton("Close", "close", { keys: "escape" })])], { gap: "md" });
+		const expand = this.#expand && actionButton(this.#expand.label, "expand", { keys: appToolsExpandKey() });
+		const close = actionButton("Close", "close", { keys: "escape" });
+		const node = col([body, actionBar(expand ? [null, expand, close] : [null, close])], { gap: "md" });
 		this.#native = { scroll, node };
 		return node;
 	}
@@ -160,6 +171,10 @@ export class ReportPanel extends OverlayPanel {
 				return true;
 			})
 		) {
+			return;
+		}
+		if (this.#expand && matchesAppToolsExpand(data)) {
+			this.#expand.run();
 			return;
 		}
 		if (matchesSelectCancel(data)) {
@@ -188,8 +203,10 @@ export class ReportPanel extends OverlayPanel {
 		else this.#view.scroll(by === "line-up" ? -1 : by === "line-down" ? 1 : by === "page-up" ? -page : page);
 	}
 
-	/** Close runs what Esc runs. */
+	/** Close runs what Esc runs; expand what the expand key runs. */
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type === "action" && event.act === "close") this.#onClose();
+		if (event.type !== "action") return;
+		if (event.act === "close") this.#onClose();
+		else if (event.act === "expand") this.#expand?.run();
 	}
 }

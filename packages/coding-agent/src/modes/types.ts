@@ -608,6 +608,10 @@ export interface InteractiveModeContext {
 	dismissCommandReport(): boolean;
 	/** Screen rows a report above the editor may take (all of them but the editor and the chrome under it). */
 	commandReportRows(): number | undefined;
+	/** Rebuild the open `/jobs` report in the current tool-output expansion form; no-op when none is open. */
+	refreshJobsReport(): void;
+	/** A job view is open: the `/jobs` report or the jobs sheet. */
+	readonly jobsViewOpen: boolean;
 	cycleThinkingLevel(): void;
 	cycleRoleModel(direction?: "forward" | "backward"): Promise<void>;
 	toggleToolOutputExpansion(): void;
