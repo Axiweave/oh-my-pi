@@ -250,6 +250,38 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(texts()).toEqual(["/speckit.tasks"]);
 		});
 
+		it("in the tasks scope ends the run after tasks and starts nothing", async () => {
+			await start();
+			mode.toggleSpeckitAutoMode();
+			mode.toggleSpeckitAutoMode();
+			expect(saved()).toMatchObject({ enabled: true, scope: "tasks" });
+			expect(status.mock.calls.at(-1)?.[0]).toMatchObject({ stopAfter: "tasks" });
+			await turnStarts("/speckit.tasks");
+			turnSettles();
+
+			await tick(3);
+			expect(classify).toHaveBeenCalledTimes(1);
+			expect(texts()).toEqual([]);
+			expect(saved()).toMatchObject({ enabled: true, scope: "tasks", run: undefined });
+			expect(mode.getSpeckitAutoDescription()).toBe("Speckit auto: on to tasks (waiting)");
+
+			mode.toggleSpeckitAutoMode();
+			expect(saved()).toMatchObject({ enabled: false, scope: "full" });
+		});
+
+		it("ends the run when the cycle to the tasks scope finds a parked start past tasks", async () => {
+			await start();
+			await startRun("/speckit.tasks");
+			turnSettles();
+			await tick();
+			expect(classify).toHaveBeenCalledTimes(1);
+
+			mode.toggleSpeckitAutoMode();
+			await tick(3);
+			expect(texts()).toEqual([]);
+			expect(saved()).toMatchObject({ enabled: true, scope: "tasks", run: undefined });
+		});
+
 		const guards: [string, () => () => void][] = [
 			["streaming", () => flag("isStreaming")],
 			["compacting", () => flag("isCompacting")],
@@ -1017,6 +1049,8 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(mode.speckitAutoEnabled).toBe(true);
 			expect(saved()).toMatchObject({ enabled: true });
 
+			// The toggle cycles on → stops after tasks → off.
+			mode.toggleSpeckitAutoMode();
 			mode.toggleSpeckitAutoMode();
 			await mode.handleClearCommand();
 			expect(mode.speckitAutoEnabled).toBe(false);

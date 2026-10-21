@@ -46,8 +46,12 @@ export interface SpeckitRun {
 	hold?: SpeckitHold;
 }
 
+/** How far a run goes: `full` runs every phase; `tasks` ends the run before any phase after tasks. */
+export type SpeckitAutoScope = "full" | "tasks";
+
 export interface SpeckitAutoState {
 	enabled: boolean;
+	scope: SpeckitAutoScope;
 	run?: SpeckitRun;
 }
 
@@ -72,7 +76,7 @@ export interface SpeckitVerdict {
 export type SpeckitConverge = "complete" | "added" | "none";
 const CONVERGE_OUTCOMES: Record<SpeckitConverge, null> = { complete: null, added: null, none: null };
 
-export type SpeckitEndResult = "complete" | "open-tasks" | "stopped";
+export type SpeckitEndResult = "complete" | "open-tasks" | "stopped" | "planned";
 
 export type SpeckitAction =
 	| { kind: "start"; phase: SpeckitPhase }
@@ -105,6 +109,10 @@ export const SPECKIT_SUCCESSOR: Record<SpeckitPhase, SpeckitPhase | undefined> =
 	implement: "converge",
 	converge: undefined,
 };
+/** The phases a `tasks` scope run may start. */
+const TASKS_SCOPE: Partial<Record<SpeckitPhase, true>> = { specify: true, clarify: true, plan: true, tasks: true };
+export const speckitScopeAllows = (scope: SpeckitAutoScope, phase: SpeckitPhase): boolean =>
+	scope === "full" || TASKS_SCOPE[phase] === true;
 
 const DEFAULT_CONVERGE_ROUNDS = 3;
 /** Characters of the message end that the judge and the text cues read. */
@@ -185,9 +193,9 @@ function parseRun(data: unknown): SpeckitRun | undefined {
 /** Validates a saved `speckit-auto` entry; `undefined` means "mode off". An invalid run is dropped. */
 export function parseSpeckitAutoState(data: unknown): SpeckitAutoState | undefined {
 	if (typeof data !== "object" || data === null) return undefined;
-	const { enabled, run } = data as Record<string, unknown>;
+	const { enabled, scope, run } = data as Record<string, unknown>;
 	if (typeof enabled !== "boolean") return undefined;
-	return { enabled, run: parseRun(run) };
+	return { enabled, scope: scope === "tasks" ? "tasks" : "full", run: parseRun(run) };
 }
 
 const hold = (kind: SpeckitHold["kind"], reason: string): SpeckitAction => ({ kind: "hold", hold: { kind, reason } });
@@ -208,8 +216,26 @@ const NEEDS_COMPLETED: Partial<Record<SpeckitPhase, true>> = {
 	remediation: true,
 };
 
-/** The decision table in data-model.md, rows 1-23, top to bottom. Pure. */
-export function decideSpeckitStep(run: SpeckitRun, verdict: SpeckitVerdict): SpeckitAction {
+/** The decision table in data-model.md, rows 1-23, then the scope stop. Pure. */
+export function decideSpeckitStep(
+	run: SpeckitRun,
+	verdict: SpeckitVerdict,
+	scope: SpeckitAutoScope = "full",
+): SpeckitAction {
+	return limitToScope(decideFullStep(run, verdict), scope);
+}
+
+/** A start or remediation outside the scope ends the run; a notice before it drops, since its text announces that start. */
+function limitToScope(action: SpeckitAction, scope: SpeckitAutoScope): SpeckitAction {
+	if (action.kind === "notice") {
+		const after = limitToScope(action.after, scope);
+		return after.kind === "end" ? after : action;
+	}
+	const phase = action.kind === "start" ? action.phase : action.kind === "remediate" ? "remediation" : undefined;
+	return phase && !speckitScopeAllows(scope, phase) ? { kind: "end", result: "planned" } : action;
+}
+
+function decideFullStep(run: SpeckitRun, verdict: SpeckitVerdict): SpeckitAction {
 	const { phase } = run;
 	if (verdict.failed) return hold("needs-you", verdict.failed);
 	if (verdict.waits === true) {
@@ -540,6 +566,7 @@ const RESULT_TEXT: Record<SpeckitEndResult, string> = {
 	complete: "complete",
 	"open-tasks": "ended with open tasks",
 	stopped: "stopped",
+	planned: "stopped before implement",
 };
 
 export const formatSpeckitSummary = (run: SpeckitRun, result: SpeckitEndResult): string =>

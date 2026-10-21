@@ -80,6 +80,8 @@ export interface SpeckitAutoStatus {
 	phase?: string;
 	state: SpeckitAutoStatusState;
 	reason?: string;
+	/** The phase after which runs end; unset runs every phase. */
+	stopAfter?: string;
 }
 
 export interface SegmentContext {

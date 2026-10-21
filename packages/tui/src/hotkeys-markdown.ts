@@ -142,7 +142,7 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 				{ keys: [act("app.model.select")], action: "Select model (set roles)" },
 				{ keys: [act("app.plan.toggle")], action: "Toggle plan mode" },
 				{ keys: [act("app.prewalk.toggle")], action: "Arm or drop a prewalk handoff" },
-				{ keys: [act("app.speckitAuto.toggle")], action: "Toggle speckit-auto mode" },
+				{ keys: [act("app.speckitAuto.toggle")], action: "Cycle speckit-auto mode" },
 				{ keys: [act("app.history.search")], action: "Search prompt history" },
 				{ keys: [act("app.tools.expand")], action: "Toggle tool output expansion" },
 				{ keys: [act("app.tools.toggleVisibility")], action: "Toggle tool activity visibility" },

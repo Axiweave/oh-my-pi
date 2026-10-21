@@ -140,6 +140,10 @@ function variantsFor(id: StatusLineSegmentId): readonly SegmentVariantSpec[] {
 					context: { planMode: null, speckitAuto: { phase: "implement", state: "paused" } },
 				},
 				{
+					label: "speckit auto stops after tasks",
+					context: { planMode: null, speckitAuto: { phase: "plan", state: "running", stopAfter: "tasks" } },
+				},
+				{
 					label: "goal active",
 					context: { planMode: null, goalMode: { enabled: true, paused: false } },
 					session: { goalStatus: "active" },

@@ -1181,7 +1181,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			this.#speckitAutoStatus === next ||
 			(this.#speckitAutoStatus?.state === next?.state &&
 				this.#speckitAutoStatus?.phase === next?.phase &&
-				this.#speckitAutoStatus?.reason === next?.reason)
+				this.#speckitAutoStatus?.reason === next?.reason &&
+				this.#speckitAutoStatus?.stopAfter === next?.stopAfter)
 		) {
 			return;
 		}

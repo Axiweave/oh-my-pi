@@ -452,6 +452,8 @@ import {
 	SPECKIT_REMEDIATION_TEXT,
 	speckitEarlierText,
 	SPECKIT_SUCCESSOR,
+	type SpeckitAutoScope,
+	speckitScopeAllows,
 	type SpeckitAction,
 	type SpeckitEndResult,
 	type SpeckitPhase,
@@ -1467,6 +1469,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Fixed time between the starts of two `/loop every` runs. */
 	loopIntervalMs: number | undefined = undefined;
 	speckitAutoEnabled = false;
+	/** How far runs go while the mode is on; the toggle cycles off → full → tasks → off. */
+	#speckitScope: SpeckitAutoScope = "full";
 	speckitSubmitInFlight = 0;
 	#speckitRun: SpeckitRun | undefined;
 	/** Increments on every event that makes pending speckit-auto work stale (user turn, pause, off, next, resume, switch). */
@@ -3673,7 +3677,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Entries keep their data by reference; the run mutates in place.
 		this.sessionManager.appendCustomEntry(
 			SPECKIT_AUTO_ENTRY,
-			structuredClone({ enabled: this.speckitAutoEnabled, run: this.#speckitRun }),
+			structuredClone({ enabled: this.speckitAutoEnabled, scope: this.#speckitScope, run: this.#speckitRun }),
 		);
 	}
 
@@ -3685,7 +3689,14 @@ export class InteractiveMode implements InteractiveModeContext {
 				? "paused"
 				: (run.hold?.kind ?? (this.#speckitJudgeAbort || this.#speckitParked ? "next" : "running"));
 		this.statusLine.setSpeckitAutoStatus(
-			this.speckitAutoEnabled ? { phase: run?.phase, state, reason: run?.hold?.reason } : undefined,
+			this.speckitAutoEnabled
+				? {
+						phase: run?.phase,
+						state,
+						reason: run?.hold?.reason,
+						stopAfter: this.#speckitScope === "tasks" ? "tasks" : undefined,
+					}
+				: undefined,
 		);
 		this.ui.requestRender();
 		// The title and the IDE stay `working` while the mode acts between phases (event-controller); show the
@@ -3722,6 +3733,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const wasEnabled = this.speckitAutoEnabled;
 		this.#bumpSpeckitGeneration();
 		this.speckitAutoEnabled = false;
+		this.#speckitScope = "full";
 		this.#speckitRun = undefined;
 		this.#speckitDecidedKey = undefined;
 		this.#speckitPhaseReply = undefined;
@@ -3738,6 +3750,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const state = parseSpeckitAutoState(entry?.type === "custom" ? entry.data : undefined);
 		if (!state?.enabled) return;
 		this.speckitAutoEnabled = true;
+		this.#speckitScope = state.scope;
 		const run = state.run && { ...state.run, paused: true };
 		this.#speckitRun = run;
 		if (run) this.#replaySpeckitTurns(run);
@@ -3847,14 +3860,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
+	/** Cycles off → on (every phase) → on, stopping after tasks → off. */
 	toggleSpeckitAutoMode(): void {
 		if (!this.speckitAutoEnabled) {
 			if (this.#turnOnSpeckitAuto()) this.#adoptSpeckitTurn();
 			return;
 		}
+		if (this.#speckitScope === "full") {
+			this.#speckitScope = "tasks";
+			const run = this.#speckitRun;
+			const parked = this.#speckitParked;
+			// A parked start past tasks ends the run now; a run past tasks otherwise ends at its next check.
+			if (run && parked && !speckitScopeAllows("tasks", parked.phase)) {
+				this.#bumpSpeckitGeneration();
+				this.#finishSpeckitRun(run, "planned");
+				return;
+			}
+			this.showStatus("Speckit-auto mode on. Runs stop after /speckit.tasks.");
+			this.#saveSpeckitAutoState();
+			this.#updateSpeckitAutoStatus();
+			return;
+		}
 		// A running turn finishes; only the mode's own pending steps drop.
 		this.#bumpSpeckitGeneration();
 		this.speckitAutoEnabled = false;
+		this.#speckitScope = "full";
 		const run = this.#speckitRun;
 		if (run) {
 			// The summary is the off message; a second status line would replace it.
@@ -3922,8 +3952,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			return undefined;
 		}
 		const successor = SPECKIT_SUCCESSOR[run.phase];
-		if (!successor) {
-			this.#finishSpeckitRun(run, "stopped");
+		if (!successor || !speckitScopeAllows(this.#speckitScope, successor)) {
+			this.#finishSpeckitRun(run, successor ? "planned" : "stopped");
 			return undefined;
 		}
 		// The skipped turn is never checked.
@@ -3946,7 +3976,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	getSpeckitAutoDescription(): string {
 		const run = this.#speckitRun;
 		if (this.speckitAutoEnabled) {
-			return run ? `Speckit auto: ${run.paused ? "paused" : "on"} (${run.phase})` : "Speckit auto: on (waiting)";
+			const on = this.#speckitScope === "tasks" ? "on to tasks" : "on";
+			return run ? `Speckit auto: ${run.paused ? "paused" : on} (${run.phase})` : `Speckit auto: ${on} (waiting)`;
 		}
 		const blocker = this.#speckitAutoBlocker();
 		return blocker ? `Speckit auto: blocked by ${blocker} mode` : "Speckit auto: off";
@@ -4057,7 +4088,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (current) this.#speckitJudgeAbort = undefined;
 		}
 		if (!current || this.#speckitRun !== run) return;
-		const action = decideSpeckitStep(run, verdict);
+		const action = decideSpeckitStep(run, verdict, this.#speckitScope);
 		// An unfinished reply while a job this phase started still runs: the agent waits to be woken, not the user.
 		// A `user` hold (the judge's `waits` answer) holds at once, even while the job runs.
 		if (
@@ -9562,6 +9593,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Like the model profile, the mode stays on in the new session; the run stays saved in the old one. */
 	async #newSessionKeepingSpeckitAuto(startNewSession: () => Promise<void>): Promise<void> {
 		const keep = this.speckitAutoEnabled;
+		const scope = this.#speckitScope;
 		const sessionId = this.sessionManager.getSessionId();
 		await this.prepareSessionSwitch();
 		try {
@@ -9573,6 +9605,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.restoreSpeckitAuto();
 				} else {
 					this.speckitAutoEnabled = true;
+					this.#speckitScope = scope;
 					this.#saveSpeckitAutoState();
 					this.#updateSpeckitAutoStatus();
 				}

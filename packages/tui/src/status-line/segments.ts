@@ -608,7 +608,9 @@ function speckitAutoLabel(status: SpeckitAutoStatus): string {
 	const text = paused ? "" : SPECKIT_AUTO_STATE_TEXT[status.state];
 	const state = status.state === "needs-you" && status.reason ? `${text}: ${status.reason}` : text;
 	const phase = status.phase && (SPECKIT_PHASE_TEXT[status.phase] ?? status.phase);
-	const label = ["Speckit", phase, state].filter(Boolean).join(" · ");
+	const label = [status.stopAfter ? `Speckit→${status.stopAfter}` : "Speckit", phase, state]
+		.filter(Boolean)
+		.join(" · ");
 	return paused ? `${label} ${theme.icon.pause}` : label;
 }
 

@@ -272,7 +272,7 @@ export const KEYBINDINGS = {
 	},
 	"app.speckitAuto.toggle": {
 		defaultKeys: [],
-		description: "Toggle speckit-auto mode (/speckit-auto-mode)",
+		description: "Cycle speckit-auto mode (/speckit-auto-mode)",
 	},
 	"app.history.search": {
 		defaultKeys: "ctrl+r",

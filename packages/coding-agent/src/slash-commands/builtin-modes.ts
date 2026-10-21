@@ -646,7 +646,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "speckit-auto-mode",
 		icon: "loop",
-		description: "Toggle speckit-auto mode (runs the speckit phases after clarify on its own)",
+		description: "Cycle speckit-auto mode: on, on stopping after tasks, off",
 		getTuiAutocompleteDescription: runtime => runtime.ctx.getSpeckitAutoDescription(),
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.toggleSpeckitAutoMode();

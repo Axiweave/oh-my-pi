@@ -13,6 +13,8 @@ import {
 	readSpeckitTextVerdict,
 	SPECKIT_PHASE_COMMANDS,
 	type SpeckitAction,
+	type SpeckitAutoScope,
+	type SpeckitAutoState,
 	type SpeckitEndResult,
 	type SpeckitPhase,
 	type SpeckitRun,
@@ -77,9 +79,13 @@ function applyAction(run: SpeckitRun, action: SpeckitAction): SpeckitEndResult |
 }
 
 /** Drives verdicts until the run ends; returns the result, or undefined when the verdicts run out. */
-function drive(run: SpeckitRun, verdicts: Iterable<SpeckitVerdict>): SpeckitEndResult | undefined {
+function drive(
+	run: SpeckitRun,
+	verdicts: Iterable<SpeckitVerdict>,
+	scope: SpeckitAutoScope = "full",
+): SpeckitEndResult | undefined {
 	for (const verdict of verdicts) {
-		const result = applyAction(run, decideSpeckitStep(run, verdict));
+		const result = applyAction(run, decideSpeckitStep(run, verdict, scope));
 		if (result) return result;
 	}
 	return undefined;
@@ -181,6 +187,42 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 		expect(count(run, "converge")).toBe(converges);
 		expect(run.convergeRounds).toBe(limit);
 	});
+
+	it("in the tasks scope never starts a phase after tasks, and clean verdicts end planned after tasks", () => {
+		const SCOPE_SEED = 0x5eed_0010;
+		const random = seeded(SCOPE_SEED);
+		const pick = <T>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
+		for (let index = 0; index < RUNS; index++) {
+			// Any start phase: a user can type a later phase command in the tasks scope.
+			const run = newSpeckitRun(pick(SPECKIT_PHASE_COMMANDS), 3);
+			for (let step = 0; step < MAX_STEPS; step++) {
+				const verdict: SpeckitVerdict = {
+					completed: pick([true, true, undefined]),
+					waits: pick([false, false, true]),
+					routine: random() < 0.5,
+					ready: pick([true, false]),
+					analyze: pick([
+						{ critical: 0, high: 0 },
+						{ critical: 1, high: 0 },
+						{ critical: 0, high: 2 },
+					] as const),
+					fixed: pick([true, false]),
+					converge: pick(["complete", "added", "none"] as const),
+				};
+				const action = decideSpeckitStep(run, verdict, "tasks");
+				const started =
+					action.kind === "start" ? action.phase : action.kind === "remediate" ? "remediation" : undefined;
+				if (started && !["specify", "clarify", "plan", "tasks"].includes(started)) {
+					throw new Error(`started ${started}\nseed=${SCOPE_SEED} run=${index} history=${run.history.join(",")}`);
+				}
+				if (applyAction(run, action)) break;
+			}
+		}
+		const run = newSpeckitRun("specify", 3);
+		const clean: SpeckitVerdict = { completed: true, waits: false, routine: false, ready: true };
+		expect(drive(run, Array(10).fill(clean), "tasks")).toBe("planned");
+		expect(run.history).toEqual(["specify", "clarify", "plan", "tasks"]);
+	});
 });
 
 describe("parseSpeckitPhaseCommand", () => {
@@ -204,7 +246,7 @@ describe("parseSpeckitAutoState", () => {
 	};
 
 	it("round-trips a valid state through JSON", () => {
-		const state = { enabled: true, run };
+		const state: SpeckitAutoState = { enabled: true, scope: "tasks", run };
 		expect(parseSpeckitAutoState(JSON.parse(JSON.stringify(state)))).toEqual(state);
 	});
 
@@ -212,8 +254,12 @@ describe("parseSpeckitAutoState", () => {
 		["an unknown phase", { ...run, phase: "deploy" }],
 		["a negative count", { ...run, convergeRounds: -1 }],
 		["a non-array history", { ...run, history: "specify" }],
-	])("drops a run with %s and keeps enabled", (_, badRun) => {
-		expect(parseSpeckitAutoState({ enabled: true, run: badRun })).toEqual({ enabled: true, run: undefined });
+	])("drops a run with %s and keeps enabled in the full scope", (_, badRun) => {
+		expect(parseSpeckitAutoState({ enabled: true, run: badRun })).toEqual({
+			enabled: true,
+			scope: "full",
+			run: undefined,
+		});
 	});
 
 	it.each([null, "on", 3, { enabled: "yes" }, {}])("treats %p as mode off", data => {
