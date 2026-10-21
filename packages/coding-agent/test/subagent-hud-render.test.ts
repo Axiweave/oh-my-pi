@@ -259,6 +259,35 @@ describe("subagent HUD lines", () => {
 		expect(out).toContain("SchemaMigrator: Migrating the users table");
 	});
 
+	it("counts running agents and previews the raw assignment, not the rendered prompt", () => {
+		const assignment = "Run the 512-rule corpus against the native build and report every mismatch";
+		const out = render([
+			makeSession({
+				id: "Corpus",
+				progress: makeProgress({
+					id: "Corpus",
+					task: `Complete assignment thoroughly:\n\n${assignment}`,
+					assignment,
+				}),
+			}),
+			makeSession({ id: "Bench", description: "Benchmark the shared build" }),
+		]);
+		expect(out).toContain("Subagents · 2 running");
+		expect(out).toContain(`Corpus ${assignment}`);
+		expect(out).not.toContain("Complete assignment thoroughly");
+	});
+
+	it("strips terminal control sequences from the assignment preview", () => {
+		const assignment = "\x1b]0;pwned\x07\x1b[2JAudit the corpus";
+		const raw = renderSubagentHudLines(
+			[makeSession({ id: "Corpus", progress: makeProgress({ id: "Corpus", task: assignment, assignment }) })],
+			120,
+		).join("\n");
+		expect(Bun.stripANSI(raw)).toContain("Audit the corpus");
+		expect(raw).not.toContain("\x1b]0;");
+		expect(raw).not.toContain("\x1b[2J");
+	});
+
 	it("shows a non-default role badge and hides descriptions that only echo the id", () => {
 		const withRole = render([
 			makeSession({
@@ -927,10 +956,12 @@ describe("subagent HUD rates", () => {
 			}
 		}
 		const header = Bun.stripANSI(renderSubagentHudLines(sessions, 120, false, false, lookup(rates))[1]!);
-		expect(header).toBe(`Subagents  ${rateText(expected)} tok/s`);
+		expect(header).toBe(`Subagents · 10 running  ${rateText(expected)} tok/s`);
 
 		const heldOnly = lookup({ Worker0: { rate: 40, live: false } });
-		expect(Bun.stripANSI(renderSubagentHudLines(sessions, 120, false, false, heldOnly)[1]!)).toBe("Subagents");
+		expect(Bun.stripANSI(renderSubagentHudLines(sessions, 120, false, false, heldOnly)[1]!)).toBe(
+			"Subagents · 10 running",
+		);
 
 		const allLive = () => ({ rate: 1234.5, live: true });
 		for (let width = 10; width <= 160; width++) {

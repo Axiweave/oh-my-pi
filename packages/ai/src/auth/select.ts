@@ -668,6 +668,11 @@ export class CredentialSelector {
 				limits.some(limit => cap(limit.window?.id ?? limit.scope.windowId) !== undefined),
 			accountPriority: policy?.priority === undefined || !Number.isFinite(policy.priority) ? 0 : policy.priority,
 			allowanceSpent: remainingFraction === 0,
+			reclaimReady:
+				blockedUntil === undefined &&
+				policy?.reclaimAbovePct !== undefined &&
+				remainingFraction !== undefined &&
+				remainingFraction * 100 >= policy.reclaimAbovePct,
 			usageMeasured:
 				strategy === undefined ? remainingFraction !== undefined : primary !== undefined || secondary !== undefined,
 			hasPriorityBoost:
@@ -1113,13 +1118,26 @@ export class CredentialSelector {
 				candidate.selection.index === sessionPreferredIndex,
 		);
 		const preferredCandidate = sessionPreferredCandidate === -1 ? undefined : candidates[sessionPreferredCandidate];
-		// A warm automatic pin normally wins. Two policies may evict it, each only
+		// A warm automatic pin normally wins. Three policies may evict it, each only
 		// while a sibling is confirmed better: reserve (sibling measured outside
-		// reserve) and spent allowance (unblocked sibling with allowance left).
-		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean =>
-			!sessionPinIsExplicit &&
-			preferredCandidate !== undefined &&
-			candidates.some(candidate => {
+		// reserve), spent allowance (unblocked sibling with allowance left), and
+		// opt-in reclaim (the sibling ranking picks next has higher priority and is
+		// measured at or above its `reclaimAbovePct`).
+		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean => {
+			if (sessionPinIsExplicit || preferredCandidate === undefined) return false;
+			const rankedWinner = candidates.find(
+				candidate =>
+					candidate !== preferredCandidate &&
+					!(excludePreflightFailures && preflightFailures.has(candidate)) &&
+					!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes),
+			);
+			if (
+				rankedWinner?.reclaimReady === true &&
+				(rankedWinner.accountPriority ?? 0) > (preferredCandidate.accountPriority ?? 0)
+			) {
+				return true;
+			}
+			return candidates.some(candidate => {
 				if (candidate === preferredCandidate) return false;
 				if (excludePreflightFailures && preflightFailures.has(candidate)) return false;
 				if (
@@ -1136,6 +1154,7 @@ export class CredentialSelector {
 					!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes)
 				);
 			});
+		};
 		// `stays`: whether an automatic pin keeps serving over the mode's pick.
 		const keepAutomaticPin = (evicted: boolean): boolean => {
 			if (preferredCandidate === undefined) return false;

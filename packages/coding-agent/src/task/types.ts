@@ -92,18 +92,34 @@ const taskSchemaNoIsolation = type({
 	"tools?": "string[]",
 	"+": "delete",
 });
-const taskSchemaBatch = type({
-	context: "string",
-	"model?": "never",
-	tasks: taskItemSchemaIsolated.array(),
-	"+": "delete",
-});
-const taskSchemaBatchNoIsolation = type({
-	context: "string",
-	"model?": "never",
-	tasks: taskItemSchema.array(),
-	"+": "delete",
-});
+function guardBatchAgent(schema: BaseType): BaseType {
+	// Inspect the input before undeclared-key deletion can erase the requested agent.
+	return schema.in
+		.narrow((params, ctx) => {
+			if (params !== null && typeof params === "object" && Object.hasOwn(params, "agent")) {
+				return ctx.reject("a batch with `agent` specified in `tasks[].agent`, not at the top level");
+			}
+			return true;
+		})
+		.pipe(schema);
+}
+
+const taskSchemaBatch = guardBatchAgent(
+	type.raw({
+		context: "string",
+		"model?": "never",
+		tasks: taskItemSchemaIsolated.array(),
+		"+": "delete",
+	}),
+);
+const taskSchemaBatchNoIsolation = guardBatchAgent(
+	type.raw({
+		context: "string",
+		"model?": "never",
+		tasks: taskItemSchema.array(),
+		"+": "delete",
+	}),
+);
 const ALL_TASK_SCHEMAS = [taskSchema, taskSchemaNoIsolation, taskSchemaBatch, taskSchemaBatchNoIsolation] as const;
 
 type DynamicTaskSchema = (typeof ALL_TASK_SCHEMAS)[number];
@@ -158,12 +174,14 @@ function createTaskSchema(options: {
 				"isolated?": "boolean",
 				"+": "delete",
 			});
-			return type.raw({
-				context: "string",
-				"model?": "never",
-				tasks: item.array(),
-				"+": "delete",
-			});
+			return guardBatchAgent(
+				type.raw({
+					context: "string",
+					"model?": "never",
+					tasks: item.array(),
+					"+": "delete",
+				}),
+			);
 		}
 		const item = type.raw({
 			"name?": "string",
@@ -177,12 +195,14 @@ function createTaskSchema(options: {
 			...seanceFields,
 			"+": "delete",
 		});
-		return type.raw({
-			context: "string",
-			"model?": "never",
-			tasks: item.array(),
-			"+": "delete",
-		});
+		return guardBatchAgent(
+			type.raw({
+				context: "string",
+				"model?": "never",
+				tasks: item.array(),
+				"+": "delete",
+			}),
+		);
 	}
 	if (options.isolationEnabled) {
 		return type.raw({

@@ -692,7 +692,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Switch model for this session",
 		acpDescription: "Show current model selection",
 		getTuiAutocompleteDescription: runtime => {
-			const model = runtime.ctx.session.model;
+			const model = runtime.ctx.viewSession.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
 		},
 		handle: async (command, runtime) => {
@@ -740,7 +740,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint: "[model]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
-			const model = runtime.ctx.session.model;
+			const model = runtime.ctx.viewSession.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
 		},
 		handle: async (command, runtime) => {
@@ -831,7 +831,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (command, runtime) => {
 			runtime.ctx.editor.setText("");
 			if (runtime.ctx.focusedAgentId) {
-				runtime.ctx.showStatus("Model/thinking apply to the main session — press ←← to return first");
+				runtime.ctx.showStatus("Model profiles apply to the main session — press ←← to return first");
 				return;
 			}
 			const resolved = resolveModelProfileArg(runtime.ctx.settings, command.args);
@@ -1332,7 +1332,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			description: getConfiguredThinkingLevelMetadata(level).description,
 		})),
 		getTuiAutocompleteDescription: runtime =>
-			`Thinking: ${runtime.ctx.session.configuredThinkingLevel() ?? "model default"}`,
+			`Thinking: ${runtime.ctx.viewSession.configuredThinkingLevel() ?? "model default"}`,
 		handle: async (command, runtime) => {
 			const session = runtime.session;
 			if (!command.args.trim()) {
@@ -1355,18 +1355,19 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: (command, runtime) => {
 			clearSubmittedText(runtime);
 			const { ctx } = runtime;
+			const session = ctx.viewSession;
 			if (!command.args.trim()) {
-				if (ctx.session.model?.reasoning) ctx.showThinkingSelector();
-				else ctx.showStatus(noThinkingMessage(ctx.session));
+				if (session.model?.reasoning) ctx.showThinkingSelector();
+				else ctx.showStatus(noThinkingMessage(session));
 				return;
 			}
-			const resolved = resolveThinkingArgument(ctx.session, command.args);
+			const resolved = resolveThinkingArgument(session, command.args);
 			if ("error" in resolved) {
 				ctx.showError(resolved.error);
 				return;
 			}
 			// thinking_level_changed refreshes the status line and editor border.
-			ctx.session.setThinkingLevel(resolved.level);
+			session.setThinkingLevel(resolved.level);
 			ctx.showStatus(`Thinking set to ${resolved.level}.`);
 		},
 	},

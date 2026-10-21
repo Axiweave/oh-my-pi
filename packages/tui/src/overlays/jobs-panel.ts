@@ -6,7 +6,7 @@
  * (cwd, live pids, exit code, artifact) and live output.
  */
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
-import { formatDuration } from "@oh-my-pi/pi-utils";
+import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
 import {
 	appToolsExpandKey,
@@ -20,11 +20,13 @@ import {
 import { matchesKey } from "../keys";
 import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { collapseCommand } from "../apps/ps-data";
+import { PREVIEW_LIMITS, shortenEmbeddedPaths } from "../render/render-utils";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, selectList } from "../native/overlay";
 import { theme } from "../theme/theme";
 import { buildJobTree, type JobTreeAgent, type JobTreeRow, jobTreeGuide } from "./job-tree";
+import { describeJobWidget, type JobWidgetView, renderJobWidgetLines } from "../tools/job-widget";
 
 /** One async job as the session snapshots it. */
 export interface JobsPanelJob {
@@ -62,6 +64,8 @@ export interface JobsPanelDetail {
 	readonly output?: string;
 	/** Artifact holding the full output when `output` is cut. */
 	readonly artifactId?: string;
+	/** The job's live widget (frozen once it settles), drawn above the output. */
+	readonly widget?: JobWidgetView;
 }
 
 /** The session behind a {@link JobsSheet}. */
@@ -166,6 +170,7 @@ export class JobsSheet implements Component {
 			detail?.pids.join(" "),
 			detail?.exitCode,
 			detail?.artifactId,
+			detail?.widget ? `${detail.widget.updatedAt}:${detail.widget.state}` : "",
 			jobs.some(job => job.status === "running") ? Math.floor(now / 1000) : "",
 			expanded,
 			this.#scroll?.n,
@@ -221,9 +226,18 @@ export class JobsSheet implements Component {
 			);
 		}
 		const detail = selected && this.#source.inspect(selected.id);
+		// Rows show the cut label; the selected job's command wraps here, bounded
+		// so a long script never pushes the facts and output off the sheet, and
+		// whole (paths included) while the expand key shows full commands.
 		const command = selected && (detail?.command ?? (selected.type === "task" ? undefined : selected.label));
-		if (command && this.#source.expanded()) {
-			for (const line of wrapTextWithAnsi(replaceTabs(command), Math.max(1, width - 3))) lines.push(`   ${line}`);
+		if (command) {
+			const full = this.#source.expanded();
+			const clean = replaceTabs(sanitizeText(command));
+			const commandRows = wrapTextWithAnsi(full ? clean : shortenEmbeddedPaths(clean), Math.max(1, width - 3));
+			const shown = full ? commandRows : commandRows.slice(0, PREVIEW_LIMITS.EXPANDED_LINES);
+			for (const line of shown) lines.push(`   ${line}`);
+			const hidden = commandRows.length - shown.length;
+			if (hidden > 0) lines.push(truncateToWidth(`   … ${hidden} more command lines`, width));
 		}
 		if (detail) {
 			const facts = compact([
@@ -233,6 +247,11 @@ export class JobsSheet implements Component {
 				detail.artifactId && `artifact://${detail.artifactId}`,
 			]);
 			if (facts.length > 0) lines.push(truncateToWidth(`   ${facts.join(" · ")}`, width));
+			if (detail.widget) {
+				for (const line of renderJobWidgetLines(detail.widget, Math.max(0, width - 3), theme)) {
+					lines.push(`   ${line}`);
+				}
+			}
 			for (const line of this.#tailLines(selected.id, detail.output ?? "")) {
 				if (line) lines.push(truncateToWidth(`   ${line}`, width));
 			}
@@ -452,6 +471,7 @@ function describeDetail(
 				})
 			: text(job.label, { role: "omp.jobs.title", wrap: "word" }),
 		facts.length > 0 && node("kv", { items: facts, role: "omp.jobs.facts" }),
+		detail?.widget && node("col", { role: "omp.jobs.widget" }, [describeJobWidget(detail.widget)], "widget"),
 		node(
 			"col",
 			{ role: "omp.jobs.out", gap: "sm" },

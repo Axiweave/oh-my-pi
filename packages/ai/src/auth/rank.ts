@@ -27,6 +27,10 @@ export type UsageCandidate<T extends AuthCredential> = {
 	 * spent, so if it still serves it draws on paid overage such as Codex credits.
 	 */
 	allowanceSpent?: boolean;
+	/** Present after policy-aware ranking: the account's configured `priority` (0 when unset). */
+	accountPriority?: number;
+	/** Present after policy-aware ranking: unblocked and measured at or above its `reclaimAbovePct`. */
+	reclaimReady?: boolean;
 };
 
 /** OAuth credential eligible for usage ranking. */

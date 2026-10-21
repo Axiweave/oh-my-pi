@@ -69,6 +69,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 				provider: "anthropic",
 				account: { email: "policy@example.com" },
 				capPct: 75,
+				reclaimAbovePct: 60,
 			},
 		] satisfies AuthAccountPolicies;
 		await Bun.write(
@@ -255,6 +256,18 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 					"",
 				].join("\n"),
 				error: "auth.accountPolicies[0].account has unknown fields: tenantId",
+			},
+			{
+				yaml: [
+					"auth:",
+					"  accountPolicies:",
+					"    - provider: openai-codex",
+					"      account:",
+					"        email: preferred@example.com",
+					"      reclaimAbovePct: high",
+					"",
+				].join("\n"),
+				error: "auth.accountPolicies[0].reclaimAbovePct must be a finite number",
 			},
 			{
 				yaml: [

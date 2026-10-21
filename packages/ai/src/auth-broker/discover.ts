@@ -29,7 +29,7 @@ import {
 import { parseAuthRouting, validateAccountPolicies } from "../auth/policy";
 import * as AIError from "../error";
 import { AuthBrokerClient, AuthBrokerError } from "./client";
-import { type AuthBrokerAccountPool, RemoteAuthCredentialStore } from "./remote-store";
+import { type AuthBrokerAccountPool, type AuthBrokerProviderPool, RemoteAuthCredentialStore } from "./remote-store";
 import { readAuthBrokerSnapshotCache, scheduleAuthBrokerSnapshotCacheWrite } from "./snapshot-cache";
 import { DEFAULT_SNAPSHOT_CACHE_TTL_MS, type SnapshotResponse } from "./types";
 
@@ -126,7 +126,16 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 			throw new AIError.ConfigurationError(`${path} must be an object`);
 		}
 		const policy = entry as Record<string, unknown>;
-		const policyFields = ["provider", "account", "priority", "weight", "capPct", "windowCapPct", "disabled"];
+		const policyFields = [
+			"provider",
+			"account",
+			"priority",
+			"weight",
+			"capPct",
+			"windowCapPct",
+			"reclaimAbovePct",
+			"disabled",
+		];
 		const unknownPolicyFields = Object.keys(policy).filter(key => !policyFields.includes(key));
 		if (unknownPolicyFields.length > 0) {
 			throw new AIError.ConfigurationError(`${path} has unknown fields: ${unknownPolicyFields.join(", ")}`);
@@ -166,6 +175,12 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 		if (policy.priority !== undefined && (typeof policy.priority !== "number" || !Number.isFinite(policy.priority))) {
 			throw new AIError.ConfigurationError(`${path}.priority must be a finite number`);
 		}
+		if (
+			policy.reclaimAbovePct !== undefined &&
+			(typeof policy.reclaimAbovePct !== "number" || !Number.isFinite(policy.reclaimAbovePct))
+		) {
+			throw new AIError.ConfigurationError(`${path}.reclaimAbovePct must be a finite number`);
+		}
 
 		return {
 			provider,
@@ -183,6 +198,7 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 			...(policy.windowCapPct !== undefined
 				? { windowCapPct: policy.windowCapPct as Readonly<Record<string, number>> }
 				: {}),
+			...(typeof policy.reclaimAbovePct === "number" ? { reclaimAbovePct: policy.reclaimAbovePct } : {}),
 			...(policy.disabled !== undefined ? { disabled: policy.disabled as boolean } : {}),
 		};
 	});
@@ -281,7 +297,7 @@ export async function loadAuthBrokerAccountPool(): Promise<AuthBrokerAccountPool
 		throw new AIError.ConfigurationError("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE must contain a JSON object");
 	}
 
-	const accountPool = new Map<string, ReadonlySet<string>>();
+	const accountPool = new Map<string, ReadonlySet<string> | AuthBrokerProviderPool>();
 	for (const [provider, value] of Object.entries(parsed)) {
 		const normalizedProvider = provider.trim();
 		if (normalizedProvider.length === 0) {
@@ -292,28 +308,66 @@ export async function loadAuthBrokerAccountPool(): Promise<AuthBrokerAccountPool
 				"OMP_AUTH_BROKER_ACCOUNT_POOL_FILE contains a provider id with surrounding whitespace",
 			);
 		}
-		if (!Array.isArray(value)) {
-			throw new AIError.ConfigurationError(
-				`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} must be an array of identity keys`,
-			);
-		}
-		const identities = new Set<string>();
-		for (const identity of value) {
-			if (typeof identity !== "string" || identity.length === 0) {
-				throw new AIError.ConfigurationError(
-					`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} contains an invalid identity key`,
-				);
-			}
-			if (identity !== identity.trim()) {
-				throw new AIError.ConfigurationError(
-					`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} contains an identity key with surrounding whitespace`,
-				);
-			}
-			identities.add(identity);
-		}
-		accountPool.set(provider, identities);
+		accountPool.set(provider, parseAccountPoolEntry(provider, value));
 	}
 	return accountPool;
+}
+
+/**
+ * One pool-file entry: an identity array (visible OAuth accounts, API keys
+ * kept), `true` (everything visible), `false` (nothing visible), or a rule
+ * object `{ "accounts"?: [...], "apiKeys"?: boolean }`.
+ */
+function parseAccountPoolEntry(provider: string, value: unknown): ReadonlySet<string> | AuthBrokerProviderPool {
+	if (Array.isArray(value)) return parseAccountPoolIdentities(provider, value);
+	if (value === true) return {};
+	if (value === false) return { accounts: new Set(), apiKeys: false };
+	if (value === null || typeof value !== "object") {
+		throw new AIError.ConfigurationError(
+			`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} must be an array of identity keys, a boolean, or an object with "accounts"/"apiKeys"`,
+		);
+	}
+	const rule: { accounts?: ReadonlySet<string>; apiKeys?: boolean } = {};
+	for (const [key, field] of Object.entries(value)) {
+		if (key === "accounts") {
+			if (!Array.isArray(field)) {
+				throw new AIError.ConfigurationError(
+					`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} has "accounts" that is not an array of identity keys`,
+				);
+			}
+			rule.accounts = parseAccountPoolIdentities(provider, field);
+		} else if (key === "apiKeys") {
+			if (typeof field !== "boolean") {
+				throw new AIError.ConfigurationError(
+					`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} has "apiKeys" that is not a boolean`,
+				);
+			}
+			rule.apiKeys = field;
+		} else {
+			throw new AIError.ConfigurationError(
+				`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} has unknown field ${JSON.stringify(key)}`,
+			);
+		}
+	}
+	return rule;
+}
+
+function parseAccountPoolIdentities(provider: string, value: unknown[]): Set<string> {
+	const identities = new Set<string>();
+	for (const identity of value) {
+		if (typeof identity !== "string" || identity.length === 0) {
+			throw new AIError.ConfigurationError(
+				`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} contains an invalid identity key`,
+			);
+		}
+		if (identity !== identity.trim()) {
+			throw new AIError.ConfigurationError(
+				`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE entry for ${provider} contains an identity key with surrounding whitespace`,
+			);
+		}
+		identities.add(identity);
+	}
+	return identities;
 }
 
 function resolveSnapshotTtlMs(): number {

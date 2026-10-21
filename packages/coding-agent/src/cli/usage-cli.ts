@@ -29,6 +29,7 @@ import { capFor } from "@oh-my-pi/pi-ai/auth/policy";
 import { isOverCaps } from "@oh-my-pi/pi-ai/auth/usage-report";
 import type { ClientUsageClientSummary } from "@oh-my-pi/pi-ai/usage";
 import { formatProviderName } from "@oh-my-pi/pi-tui/chrome/format";
+import { peakBuckets, renderSparkline } from "@oh-my-pi/pi-tui/components/sparkline";
 import { formatDuration, formatNumber, getProjectDir, sanitizeText } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { ModelRegistry } from "../config/model-registry";
@@ -698,7 +699,8 @@ function formatPolicyLine(
 				: accountCap === undefined
 					? "order"
 					: "global";
-	const capLabel = `${accountCap === undefined ? "none" : `${accountCap}%`} (${capSource})`;
+	const reclaimLabel = policy?.reclaimAbovePct === undefined ? "" : ` · reclaim above ${policy.reclaimAbovePct}%`;
+	const capLabel = `${accountCap === undefined ? "none" : `${accountCap}%`} (${capSource})${reclaimLabel}`;
 	// `omp usage` has no model/session context, so report the conservative
 	// account-wide state from the most-consumed visible window. Actual routing
 	// still scopes limits and selection in AuthStorage.
@@ -942,7 +944,6 @@ export function formatUsageBreakdown(
 }
 
 const HISTORY_SPARK_WIDTH = 48;
-const SPARK_LEVELS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
 
 interface HistorySeries {
 	title: string;
@@ -1000,24 +1001,15 @@ function historyStatus(fraction: number | undefined, status: UsageHistoryEntry["
 
 /** Peak-per-bucket sparkline over [sinceMs, nowMs]; empty buckets render dim dots. */
 function renderHistorySparkline(entries: UsageHistoryEntry[], sinceMs: number, nowMs: number): string {
-	const span = Math.max(1, nowMs - sinceMs);
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
-	const buckets: Array<number | undefined> = new Array(HISTORY_SPARK_WIDTH).fill(undefined);
-	for (const entry of entries) {
-		if (entry.usedFraction === undefined) continue;
-		const offset = Math.floor(((entry.recordedAt - sinceMs) / span) * HISTORY_SPARK_WIDTH);
-		const index = Math.min(HISTORY_SPARK_WIDTH - 1, Math.max(0, offset));
-		const prev = buckets[index];
-		buckets[index] = prev === undefined ? entry.usedFraction : Math.max(prev, entry.usedFraction);
-	}
-	return buckets
-		.map(fraction => {
-			if (fraction === undefined) return chalk.dim("·");
-			const clamped = Math.min(Math.max(fraction, 0), 1);
-			const level = SPARK_LEVELS[Math.min(SPARK_LEVELS.length - 1, Math.floor(clamped * SPARK_LEVELS.length))];
-			return STATUS_COLOR[historyStatus(clamped, undefined)](level);
-		})
-		.join("");
+	const points = entries.flatMap(entry =>
+		entry.usedFraction === undefined ? [] : [{ at: entry.recordedAt, value: entry.usedFraction }],
+	);
+	return renderSparkline(peakBuckets(points, sinceMs, nowMs, HISTORY_SPARK_WIDTH), {
+		min: 0,
+		max: 1,
+		gap: chalk.dim("·"),
+		style: (glyph, _value, fraction) => STATUS_COLOR[historyStatus(fraction, undefined)](glyph),
+	});
 }
 
 /** Identity strings a history rendering could surface — input for {@link buildRedactionMap}. */

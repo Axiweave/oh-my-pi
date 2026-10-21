@@ -68,6 +68,8 @@ export interface AuthAccountPolicy {
 	readonly capPct?: number;
 	/** Per-window cap (1–100) by usage window id; overrides `capPct` for that window. */
 	readonly windowCapPct?: Readonly<Record<string, number>>;
+	/** Remaining quota percentage, above the reserve, at which this account takes back lower-priority warm pins. */
+	readonly reclaimAbovePct?: number;
 	/** When true, routing never selects the matched credential; it stays stored and refreshed. */
 	readonly disabled?: boolean;
 }

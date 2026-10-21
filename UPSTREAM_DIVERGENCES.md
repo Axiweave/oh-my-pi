@@ -3,18 +3,21 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.12.2` on 2026-10-18.
+**Reviewed against:** `v18.12.5` on 2026-10-21.
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.12.2`.
-`bun check` passes. `rustfmt` first flagged one indentation change in the merged `input.rs`, which is now formatted.
-The merge had conflicts in 11 files. The resolutions preserve every fork decision and keep upstream behavior.
-Upstream's grammar-based string resolution in `StdinBuffer` covers the fork's 10-second kitty hold, so the merge retires that decision and removes `stringHoldTimeout`.
-The fork extends upstream's new `history.db` salvage so it also copies project-local locations. Upstream's `tui.completeScrollback` controls only transient report rows in the fork.
-1030 test files ran in separate processes, and 1026 passed. The set covered every divergence check, every test file that upstream changed, and the tests that import each source file that both sides changed.
-`sdk-tool-activation` and `eval/js-package-environment` also fail at the pre-merge commit. `tools/browser-freeze-settle` timed out on a Chromium launch under load and passes alone.
-`model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`) also fails at the pre-merge commit. Fork commit `454748ffa5` started it: that test expects a sessionless key lookup to rotate, and the fork's `smart` key checks do not rotate.
-`bun run test:rs` passed all 3881 tests, with 5 skipped.
+The launcher targets this checkout and reports `18.12.5`. `bun check` passes.
+The merge had conflicts in 15 files. The resolutions preserve every fork decision and keep upstream behavior:
+- Upstream's opt-in account reclaim (`reclaimAbovePct`) stays. The fork works out the account reserve from `capPct` and `windowCapPct`.
+- Upstream's model and thinking controls for a focused subagent stay. Model-profile switches and the cyber toggle still refuse in a focused view.
+- Upstream's bounded jobs-sheet command preview is the short form of the fork's expand key.
+- Upstream's `Subagents · N running` HUD header carries the fork's live tok/s total.
+1547 test files ran in separate processes, and 1541 passed. The set covered every divergence check, every test file that both sides changed, and the tests that import each source file that both sides changed.
+All 217 test files that upstream added or changed since `v18.12.2` also ran in separate processes, and 216 passed.
+`browser-queries` (`matches role/ exact names ... submit input has no value`) also fails at the `v18.12.5` tag.
+`sdk-tool-activation`, `eval/js-package-environment`, `model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`), and `terminal-background` (SIXEL multiplexer repaint) also fail at the pre-merge commit.
+`openai-codex-responses-lite` and `credential-pin` timed out under load and pass alone.
+`bun run test:rs` passed all 3954 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -122,7 +125,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 
 ### Subagent generation rates
 
-- **Decision:** With `composer.tokenRate` on, show each pinned subagent's live or last generation rate and the live total.
+- **Decision:** With `composer.tokenRate` on, show each pinned subagent's live or last generation rate and the live total. The total follows upstream's `Subagents · N running` header and comes before upstream's agent-hub key hint.
 - **Decision:** Preserve rates alongside upstream live tool previews. Quiet streaming spans still refresh rates, and a focused subagent uses the same reading.
 - **Key paths:** `packages/coding-agent/src/modes/interactive-mode.ts`.
 - **Check:** `packages/coding-agent/test/subagent-hud-render.test.ts`.
@@ -163,7 +166,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Why:** Users can read early assistant text before finalization, including unfinished paragraphs and open code fences.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/tui/src/chrome/transcript-container.ts` (`#measuredAppendBatch`, `#renderedAppendBatch`), `packages/coding-agent/src/modes/settings.ts`, and `packages/tui/src/tui.ts`.
 - **Checks:** `packages/coding-agent/test/composer-streaming-scrollback.test.ts`, `packages/tui/test/transcript-container.test.ts`, and `packages/tui/test/history-frame-plan.test.ts`.
-- **Known gap:** CLI startup still requests history clearing in `startup-composer.ts` and `main.ts`. This predates `v18.3.2`. The composer checks do not verify shell-history preservation through those callers. Keep the preservation decision.
+- **Known gap:** CLI startup still requests history clearing in `startup-composer.ts`. This predates `v18.3.2`. The composer checks do not verify shell-history preservation through that caller. Keep the preservation decision.
 
 ### Collapsed command cards
 
@@ -214,6 +217,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Preserve project profiles during discovery reloads and restore the profile default after plan mode.
 - **Decision:** Nested session construction must not replace a live session's role bundle. Explicit session restoration still applies the incoming session's profile policy.
 - **Decision:** Keep `modelProfileSwitchNotice` (default `true`). When disabled, picker and resume-prompt switches omit success notices without hiding errors.
+- **Decision:** Profiles switch the main session's role bundle only. Upstream `v18.12.3` lets `/model`, `/switch`, `/effort`, Ctrl+P, and Shift+Tab act on a focused subagent. `/model-profile`, the profile picker, and profile cycling still refuse in a focused view.
 - **Why:** One action must switch the complete role-model set for a workflow.
 - **Key paths:** `packages/coding-agent/src/config/model-roles.ts`, `packages/coding-agent/src/config/settings.ts`, `packages/coding-agent/src/session/model-controls.ts`, and `packages/coding-agent/src/session/agent-session.ts`.
 - **Checks:** `packages/coding-agent/test/agent-session-model-profiles.test.ts`, `packages/coding-agent/test/sdk-nested-session-shared-settings.test.ts`, `packages/coding-agent/test/cli-model-profile-flag.test.ts`, `packages/coding-agent/test/model-profile-picker.test.ts`, and `packages/coding-agent/test/slash-commands/model-profile.test.ts`.
@@ -230,7 +234,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 
 ### Per-call subagent model selection
 
-- **Decision:** Keep `model` on flat task calls, each batch item, eval `agent()`, and eval `workpool()`. Reject `model` on a batch container.
+- **Decision:** Keep `model` on flat task calls, each batch item, eval `agent()`, and eval `workpool()`. Reject `model` on a batch container. Upstream's `guardBatchAgent` also rejects `agent` there.
 - **Decision:** Upstream's seance agent also reads `model`, as its source-model override. Keep `model` valid for every agent. `validateSeanceFields` in `packages/coding-agent/src/task/seance.ts` rejects only `sourceSession` on other agents.
 - **Decision:** A model array is an ordered preference. Explicit selectors take precedence over agent defaults and parent inheritance.
 - **Decision:** Inherit the live model route and effective thinking level when no explicit selector applies. Preserve agent-level effort precedence.
@@ -377,7 +381,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 
 ### Per-provider account routing
 
-- **Decision:** Keep `auth.routing.<provider>` with `mode` (`smart`, `order`, `rotate`, `weight`, `usage`, `pace`), `stays` (`auto`, `session`, `turn`, `off`, `strict`), and `sink`. `auth.accountPolicies` uses `capPct` and `windowCapPct` instead of `reservePct`, plus `weight`, `disabled`, and `account.keySuffix`.
+- **Decision:** Keep `auth.routing.<provider>` with `mode` (`smart`, `order`, `rotate`, `weight`, `usage`, `pace`), `stays` (`auto`, `session`, `turn`, `off`, `strict`), and `sink`. `auth.accountPolicies` uses `capPct` and `windowCapPct` instead of `reservePct`, plus `weight`, `disabled`, and `account.keySuffix`. Upstream's `reclaimAbovePct` stays: the reserve is 100 minus the smallest cap, and reclaim moves only a warm automatic pin under `stays: auto`.
 - **Decision:** A `strict` session never moves to another account. After its account is removed, it fails until that account signs in again or the provider's set of accounts changes. The hold persists with the session pin, survives a restart, follows subagents, and respects session account pools.
 - **Decision:** `getApiKey(model, { withinTurn })` in the agent loop and the gateway keeps the account for a request whose last message is a tool result. Key checks do not move rotation, weight, sink, or learn-once state. For an auth-gateway client scoped to accounts, the key lookups and the `strict` check use the client's credential session (`gatewayCredentialSessionId`), so all conversations on that client share one `stays` pin and one `strict` hold. This is upstream's client scope. `ModelRegistry.getApiKey` and `getApiKeyForProvider` throw unless the caller passes `{ skipMissing: true }`.
 - **Decision:** A credential peek never moves the round-robin cursor in any routing mode. Upstream scans stored credentials in order. In `smart` mode, a peek for a session starts at that session's hashed index.
@@ -408,7 +412,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 
 ### Expand key in job views
 
-- **Decision:** `app.tools.expand` switches the `/jobs` report between cut and full commands, and the jobs sheet between the 4-line command preview and the full command. The full command has no height bound, so the sheet forwards PgUp/PgDn to the scroller around its detail pane, as `ReportPanel` does for its body. Both views read `toolOutputExpanded`, so one key and one state drive the transcript and the job views. `/jobs full` sets the state on. The report rebuilds on each change, so a toggle can move it between the dock and the full-screen page. Overlay views (full-screen report, native report sheet, jobs sheet) handle the key themselves, because the global listener stops under overlays. The hidden-tool-activity refusal is skipped while a job view is open.
+- **Decision:** `app.tools.expand` switches the `/jobs` report between cut and full commands, and the jobs sheet between upstream's bounded command preview (4 lines natively, 12 lines with shortened paths in the text fallback) and the full command. The full command has no height bound, so the sheet forwards PgUp/PgDn to the scroller around its detail pane, as `ReportPanel` does for its body. Both views read `toolOutputExpanded`, so one key and one state drive the transcript and the job views. `/jobs full` sets the state on. The report rebuilds on each change, so a toggle can move it between the dock and the full-screen page. Overlay views (full-screen report, native report sheet, jobs sheet) handle the key themselves, because the global listener stops under overlays. The hidden-tool-activity refusal is skipped while a job view is open.
 - **Why:** The user wants to read a long background-job command from the report without closing it and typing `/jobs full`.
 - **Key paths:** `packages/tui/src/overlays/report-panel.ts` (`expand` option), `packages/tui/src/overlays/jobs-panel.ts` (`JobsSheetSource.expanded`/`toggleExpanded`), `packages/coding-agent/src/modes/controllers/command-controller.ts` (`#showJobsReport`, `refreshJobsReport`), `packages/coding-agent/src/modes/controllers/input-controller.ts` (`setToolsExpanded`, `toggleToolOutputExpansion`), `packages/coding-agent/src/modes/interactive-mode.ts` (`jobsViewOpen`, `showJobsSheet`).
 - **Checks:** `packages/coding-agent/test/modes/controllers/jobs-command.test.ts` ("/jobs expand toggle"), `packages/coding-agent/test/modes/controllers/input-controller-tool-expansion.test.ts`, `packages/tui/test/report-panel.test.ts`, and `packages/tui/test/jobs-panel.test.ts`.

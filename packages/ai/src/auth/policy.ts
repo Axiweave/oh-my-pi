@@ -69,11 +69,13 @@ export function parseAuthRouting(value: unknown): Readonly<Record<string, Provid
 }
 
 /**
- * Validate account-policy values (identity selectors, priority, weight, caps).
+ * Validate account-policy values (identity selectors, priority, weight, caps, reclaim line).
+ * `reclaimAbovePct` must sit above the account's reserve: 100 − its smallest cap, where an
+ * account without `capPct` falls back to `defaultReservePct` when given.
  *
  * @throws ConfigurationError naming the `auth.accountPolicies[i]` path of the first bad value.
  */
-export function validateAccountPolicies(accountPolicies: AuthAccountPolicies): void {
+export function validateAccountPolicies(accountPolicies: AuthAccountPolicies, defaultReservePct?: number): void {
 	for (let index = 0; index < accountPolicies.length; index += 1) {
 		const policy = accountPolicies[index]!;
 		const path = `auth.accountPolicies[${index}]`;
@@ -143,6 +145,22 @@ export function validateAccountPolicies(accountPolicies: AuthAccountPolicies): v
 				}
 			}
 		}
+		if (policy.reclaimAbovePct !== undefined) {
+			const fallbackCap = policy.capPct ?? (defaultReservePct === undefined ? undefined : 100 - defaultReservePct);
+			const caps = Object.values(policy.windowCapPct ?? {});
+			if (fallbackCap !== undefined) caps.push(fallbackCap);
+			const reservePct = caps.length === 0 ? 0 : 100 - Math.min(...caps);
+			if (
+				typeof policy.reclaimAbovePct !== "number" ||
+				!Number.isFinite(policy.reclaimAbovePct) ||
+				policy.reclaimAbovePct <= reservePct ||
+				policy.reclaimAbovePct > 100
+			) {
+				throw new AIError.ConfigurationError(
+					`${path}.reclaimAbovePct must be a finite number above the account's reserve (${reservePct}%) and at most 100`,
+				);
+			}
+		}
 		if (policy.disabled !== undefined && typeof policy.disabled !== "boolean") {
 			throw new AIError.ConfigurationError(`${path}.disabled must be a boolean`);
 		}
@@ -179,13 +197,14 @@ export class AccountPolicies {
 		defaultReservePct: number | undefined,
 		routing: Readonly<Record<string, ProviderRouting>> | undefined,
 	) {
-		validateAccountPolicies(policies);
-		this.#routing = parseAuthRouting(routing);
-		this.#accountPolicies = policies;
-		this.#defaultReservePct =
+		const effectiveDefaultReservePct =
 			typeof defaultReservePct === "number" && Number.isFinite(defaultReservePct)
 				? Math.max(0, Math.min(100, defaultReservePct))
 				: DEFAULT_USAGE_RESERVE_PCT;
+		validateAccountPolicies(policies, effectiveDefaultReservePct);
+		this.#routing = parseAuthRouting(routing);
+		this.#accountPolicies = policies;
+		this.#defaultReservePct = effectiveDefaultReservePct;
 	}
 
 	/** Global usage reserve (0–100) for accounts without a per-account `capPct`. */
@@ -235,11 +254,20 @@ export class AccountPolicies {
 		const policyIndex = this.#accountPolicies.findIndex(
 			policy => policy.provider === provider && (policy.capPct !== undefined || policy.windowCapPct !== undefined),
 		);
-		if (policyIndex === -1) return;
-		const field = this.#accountPolicies[policyIndex]!.capPct !== undefined ? "capPct" : "windowCapPct";
-		throw new AIError.ConfigurationError(
-			`auth.accountPolicies[${policyIndex}].${field} requires a usage provider for ${provider}`,
+		if (policyIndex !== -1) {
+			const field = this.#accountPolicies[policyIndex]!.capPct !== undefined ? "capPct" : "windowCapPct";
+			throw new AIError.ConfigurationError(
+				`auth.accountPolicies[${policyIndex}].${field} requires a usage provider for ${provider}`,
+			);
+		}
+		const reclaimIndex = this.#accountPolicies.findIndex(
+			policy => policy.provider === provider && policy.reclaimAbovePct !== undefined,
 		);
+		if (reclaimIndex !== -1) {
+			throw new AIError.ConfigurationError(
+				`auth.accountPolicies[${reclaimIndex}].reclaimAbovePct requires a usage provider for ${provider}`,
+			);
+		}
 	}
 
 	/** Throw on ambiguous selectors for `provider`; a selector whose account is absent is inert and warns once. */
