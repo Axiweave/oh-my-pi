@@ -14,7 +14,7 @@ import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 afterEach(() => vi.restoreAllMocks());
 for (const provider of ["openrouter", "vercel-ai-gateway"] as const) {
 	it(`real SDK inheritance preserves ${provider} route and live effort without overriding explicit child choices`, async () => {
-		const dir = TempDir.createSync("sdk-active-selector-");
+		const dir = TempDir.createSync("@sdk-active-selector-");
 		const authStorage = createInMemoryAuthStorage();
 		const modelRegistry = new ModelRegistry(authStorage, dir.join("models.yml"));
 		const routing =
@@ -102,7 +102,7 @@ for (const provider of ["openrouter", "vercel-ai-gateway"] as const) {
 		} finally {
 			await session.dispose();
 			authStorage.close();
-			dir.remove();
+			await dir.remove();
 		}
 	});
 }
