@@ -679,6 +679,7 @@ async function runInteractiveMode(
 	startupGoal?: string,
 	startupRestore?: () => Promise<RestoreOutcome>,
 	refreshScopedModelsAfterLogin?: () => Promise<void>,
+	startsPlanYolo = false,
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
@@ -730,7 +731,7 @@ async function runInteractiveMode(
 				suppressWelcomeIntro: resuming || setupScenes.length > 0 || playStartupSplash,
 				clearInitialTerminalHistory: true,
 				autoStartCollab: joinLink === undefined,
-				startsGoal: startupGoal !== undefined,
+				startupBlocker: startupGoal !== undefined ? "goal" : startsPlanYolo ? "plan" : undefined,
 			}),
 		);
 		startDeferredStartupWork?.();
@@ -2782,6 +2783,7 @@ export async function runRootCommand(
 						initialArgs.goal,
 						parsedArgs.restore ? () => restoreSession(session, { eventBus, subagentEventBus }) : undefined,
 						refreshScopedModelsAfterLogin,
+						parsedArgs.planYolo === true,
 					);
 				} finally {
 					startupLease?.dispose();

@@ -1368,16 +1368,21 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(warn).not.toHaveBeenCalled();
 		});
 
-		it("gives way to a --goal start with one notice", async () => {
-			configure("full");
-			const shown = vi.spyOn(mode, "showStatus");
-			await start({ startsGoal: true });
+		for (const [flag, blocker] of [
+			["--goal", "goal"],
+			["--plan-yolo", "plan"],
+		] as const) {
+			it(`gives way to a ${flag} start with one notice`, async () => {
+				configure("full");
+				const shown = vi.spyOn(mode, "showStatus");
+				await start({ startupBlocker: blocker });
 
-			expect(mode.speckitAutoEnabled).toBe(false);
-			expect(shown.mock.calls.filter(([text]) => text.includes("stays off"))).toEqual([
-				["Speckit-auto mode stays off: goal mode is on."],
-			]);
-		});
+				expect(mode.speckitAutoEnabled).toBe(false);
+				expect(shown.mock.calls.filter(([text]) => text.includes("stays off"))).toEqual([
+					[`Speckit-auto mode stays off: ${blocker} mode is on.`],
+				]);
+			});
+		}
 
 		it("gives way to plan mode from plan.defaultOnStartup", async () => {
 			configure("full");

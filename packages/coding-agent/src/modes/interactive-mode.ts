@@ -2812,7 +2812,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// default through handleNewCommand instead. `speckitAuto.defaultOnStartup`
 		// follows the same rule, after plan mode so an active plan mode blocks it.
 		await this.#applyPlanModeDefault();
-		this.#applySpeckitAutoDefault(options.startsGoal ? "goal" : undefined);
+		this.#applySpeckitAutoDefault(options.startupBlocker);
 
 		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
 		// One-shot: consumeDraft removes the sidecar after read so the next
@@ -3843,7 +3843,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Brand-new means no conversation and no saved speckit-auto entry on the branch, so a
 	 * resumed session keeps its own state. Called at launch, after `/new`, and after `/delete`.
 	 */
-	#applySpeckitAutoDefault(startupBlocker?: "goal"): void {
+	#applySpeckitAutoDefault(startupBlocker?: "goal" | "plan"): void {
 		if (this.speckitAutoEnabled) return;
 		const scope = cfgSpeckitAutoDefaultOnStartup.get(this.session.settings);
 		if (scope === "off") return;

@@ -92,8 +92,8 @@ export interface InteractiveModeInitOptions {
 	clearInitialTerminalHistory?: boolean;
 	/** Opt into hosting when the caller owns outer startup readiness and shutdown. */
 	autoStartCollab?: boolean;
-	/** A `--goal` objective starts after init; the speckit-auto startup default gives way to it. */
-	startsGoal?: boolean;
+	/** A mode that `--goal` or `--plan-yolo` starts after init; the speckit-auto startup default gives way to it. */
+	startupBlocker?: "goal" | "plan";
 }
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &
