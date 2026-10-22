@@ -22,14 +22,13 @@
 - `ObservedUsageInput` accepts `credentialId`, so routing can count recent tokens for each account.
 - Added `AuthStorage.routing.config`, `AuthStorage.routing.strict(provider, sessionId)`, `AuthStorage.routing.weights(provider)`, and `AuthStorage.routing.preview(provider, reports)`. `strict` is true when the provider uses `stays: strict` and the session has no explicit pin. `weights` lists the weight of each API key in `weight` mode or when a key policy sets a weight. The preview returns the mode, stays mode, sink state, and the account the next new session would use, with a short reason. A single OAuth account beside API keys is named with the reason `only account`. For `smart` on a pool without usage reports, the preview has no `next`, because the pick depends on the session.
 - `AuthStorage.setAccountPolicies` rejects a `capPct` or `windowCapPct` on a provider without usage reports, and the previous policies stay active.
-- In every mode except `smart`, only a request (`keys.getWithCredential`, `oauth.access`) moves `rotate` and `weight` along, clears `sink`, or uses up a learn-once try. A key check through `keys.get`, `getApiKey`, or `keys.peek` picks the account the next request would get and records the session pin, as before, but changes no routing state. The first request on a pin that only key checks have used still counts as a new pick.
+- In every mode, only a request (`keys.getWithCredential`, `oauth.access`) moves `rotate` and `weight` along, moves the `smart` round-robin turn, clears `sink`, or uses up a learn-once try. A key check through `keys.get`, `getApiKey`, or `keys.peek` picks the account the next request would get and records the session pin, as before, but changes no routing state. The first request on a pin that only key checks have used still counts as a new pick.
 - The auth gateway answers `401 authentication_error` without account or session details when a strict session's account was signed out.
 - Added `AuthStorage.limits.noteRateLimited(provider, credentialId)`. It feeds `sink` after a rate-limit refusal that is not a usage limit (`CONCURRENT_LIMIT` or `RATE_LIMIT_EXCEEDED`). A usage-limit refusal also feeds `sink` when the account's usage report still shows quota left.
 - The auth gateway applies the same turn rule as the agent: a request whose last message is a tool result (Anthropic `tool_result`, OpenAI chat `tool`, Responses `function_call_output`) stays on the turn's account. Under `stays: strict`, a gateway auth or usage-limit error does not move the session to another account. A `CONCURRENT_LIMIT` or `RATE_LIMIT_EXCEEDED` refusal feeds `sink`.
 
 ### Fixed
 
-- In `smart`, a key check without a session (`keys.get`, `getApiKey`, `keys.peek`) no longer moves the round-robin turn. The next sessionless request gets the same account or key that the check picked.
 - Anthropic server compaction now accepts custom endpoints when `remoteCompaction.enabled` is true. Model capability checks and explicit opt-outs still apply.
 
 ## [18.12.5] - 2026-10-21
