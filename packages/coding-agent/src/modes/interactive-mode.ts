@@ -399,6 +399,7 @@ import {
 	cfgRecapIdleSeconds,
 	cfgShowHardwareCursor,
 	cfgSpeckitAutoConvergeRounds,
+	cfgSpeckitAutoDefaultOnStartup,
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
@@ -2808,8 +2809,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// part of the switch reconciler above: the plan-approval → execution handoff
 		// and loop resets also start sessions through handleClearCommand and must
 		// never be dragged back into plan mode; user-initiated /new re-applies the
-		// default through handleNewCommand instead.
+		// default through handleNewCommand instead. `speckitAuto.defaultOnStartup`
+		// follows the same rule, after plan mode so an active plan mode blocks it.
 		await this.#applyPlanModeDefault();
+		this.#applySpeckitAutoDefault(options.startsGoal ? "goal" : undefined);
 
 		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
 		// One-shot: consumeDraft removes the sidecar after read so the next
@@ -3835,6 +3838,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		return undefined;
 	}
 
+	/**
+	 * Turns the mode on in a brand-new session when `speckitAuto.defaultOnStartup` asks for it.
+	 * Brand-new means no conversation and no saved speckit-auto entry on the branch, so a
+	 * resumed session keeps its own state. Called at launch, after `/new`, and after `/delete`.
+	 */
+	#applySpeckitAutoDefault(startupBlocker?: "goal"): void {
+		if (this.speckitAutoEnabled) return;
+		const scope = cfgSpeckitAutoDefaultOnStartup.get(this.session.settings);
+		if (scope === "off") return;
+		if (this.sessionManager.buildSessionContext().messages.length > 0) return;
+		const saved = this.sessionManager
+			.getBranch()
+			.some(entry => entry.type === "custom" && entry.customType === SPECKIT_AUTO_ENTRY);
+		if (saved) return;
+		// A global default stays quiet in projects without spec-kit.
+		if (SPECKIT_PHASE_COMMANDS.some(phase => !this.fileSlashCommands.has(`speckit.${phase}`))) return;
+		const blocker = startupBlocker ?? this.#speckitAutoBlocker();
+		if (blocker) {
+			this.showStatus(`Speckit-auto mode stays off: ${blocker} mode is on.`);
+			return;
+		}
+		this.#speckitScope = scope;
+		this.#turnOnSpeckitAuto();
+	}
+
 	#turnOnSpeckitAuto(): boolean {
 		const missing = SPECKIT_PHASE_COMMANDS.filter(phase => !this.fileSlashCommands.has(`speckit.${phase}`));
 		if (missing.length > 0) {
@@ -3862,11 +3890,31 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Cycles off → on (every phase) → on, stopping after tasks → off. */
 	toggleSpeckitAutoMode(): void {
+		this.setSpeckitAutoMode(!this.speckitAutoEnabled ? "full" : this.#speckitScope === "full" ? "tasks" : "off");
+	}
+
+	/** Moves the mode to `target`; true when the mode ends in that state. */
+	setSpeckitAutoMode(target: "off" | SpeckitAutoScope): boolean {
 		if (!this.speckitAutoEnabled) {
-			if (this.#turnOnSpeckitAuto()) this.#adoptSpeckitTurn();
-			return;
+			if (target === "off") {
+				this.showStatus("Speckit-auto mode off.");
+				return true;
+			}
+			this.#speckitScope = target;
+			if (this.#turnOnSpeckitAuto()) {
+				this.#adoptSpeckitTurn();
+				return true;
+			}
+			this.#speckitScope = "full";
+			return false;
 		}
-		if (this.#speckitScope === "full") {
+		if (target === this.#speckitScope) {
+			this.showStatus(
+				target === "tasks" ? "Speckit-auto mode on. Runs stop after /speckit.tasks." : "Speckit-auto mode on.",
+			);
+			return true;
+		}
+		if (target === "tasks") {
 			this.#speckitScope = "tasks";
 			const run = this.#speckitRun;
 			const parked = this.#speckitParked;
@@ -3874,12 +3922,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (run && parked && !speckitScopeAllows("tasks", parked.phase)) {
 				this.#bumpSpeckitGeneration();
 				this.#finishSpeckitRun(run, "planned");
-				return;
+				return true;
 			}
 			this.showStatus("Speckit-auto mode on. Runs stop after /speckit.tasks.");
 			this.#saveSpeckitAutoState();
 			this.#updateSpeckitAutoStatus();
-			return;
+			return true;
+		}
+		if (target === "full") {
+			this.#speckitScope = "full";
+			this.showStatus("Speckit-auto mode on. Runs go through every phase.");
+			this.#saveSpeckitAutoState();
+			this.#updateSpeckitAutoStatus();
+			return true;
 		}
 		// A running turn finishes; only the mode's own pending steps drop.
 		this.#bumpSpeckitGeneration();
@@ -3894,6 +3949,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#updateSpeckitAutoStatus();
 			this.showStatus("Speckit-auto mode off.");
 		}
+		return true;
 	}
 
 	async handleSpeckitAutoCommand(args: string): Promise<string | undefined> {
@@ -9568,13 +9624,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * User-initiated `/new` (slash command and `app.session.new`): starts a new
 	 * session like {@link handleClearCommand}, then honors `plan.defaultOnStartup`
-	 * as launch does. Internal resets keep calling handleClearCommand directly.
+	 * and `speckitAuto.defaultOnStartup` as launch does. Internal resets keep
+	 * calling handleClearCommand directly.
 	 */
 	async handleNewCommand(): Promise<void> {
 		const previousSessionId = this.sessionManager.getSessionId();
 		await this.handleClearCommand();
 		if (this.sessionManager.getSessionId() === previousSessionId) return;
 		await this.#applyPlanModeDefault();
+		this.#applySpeckitAutoDefault();
 	}
 
 	handleFreshCommand(): Promise<void> {
@@ -9587,7 +9645,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async handleDeleteCommand(): Promise<void> {
 		if (this.#vibeSessionTransitionBlocked()) return;
+		const previousSessionId = this.sessionManager.getSessionId();
 		await this.#newSessionKeepingSpeckitAuto(() => this.#commandController.handleDeleteCommand());
+		if (this.sessionManager.getSessionId() !== previousSessionId) this.#applySpeckitAutoDefault();
 	}
 
 	/** Like the model profile, the mode stays on in the new session; the run stays saved in the old one. */

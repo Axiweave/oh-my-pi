@@ -14,6 +14,7 @@ import {
 	cfgModelProfile,
 	cfgModelRoleStorage,
 } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgSpeckitAutoDefaultOnStartup } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 it("applies project role mutations over active runtime overrides", () => {
 	const settings = Settings.isolated({});
@@ -351,6 +352,30 @@ describe("Settings.reloadForCwd", () => {
 				modelRoles: { default: "anthropic/project" },
 				modelProfile: "work",
 			});
+		});
+		it("layers project speckitAuto.defaultOnStartup over the global one", async () => {
+			const testDir = path.join(os.tmpdir(), `speckit-startup-${Snowflake.next()}`);
+			const projectDir = path.join(testDir, "project");
+			const globalPath = path.join(testDir, "config.yml");
+			const projectPath = path.join(projectDir, ".omp", "config.yml");
+			fs.mkdirSync(path.dirname(projectPath), { recursive: true });
+			const load = () => Settings.loadIsolated({ cwd: projectDir, agentDir: testDir });
+			try {
+				fs.writeFileSync(globalPath, "speckitAuto:\n  defaultOnStartup: full\n");
+				fs.writeFileSync(projectPath, 'speckitAuto:\n  defaultOnStartup: "off"\n');
+				expect(cfgSpeckitAutoDefaultOnStartup.get(await load())).toBe("off");
+
+				fs.writeFileSync(globalPath, 'speckitAuto:\n  defaultOnStartup: "off"\n');
+				fs.writeFileSync(projectPath, "speckitAuto:\n  defaultOnStartup: tasks\n");
+				expect(cfgSpeckitAutoDefaultOnStartup.get(await load())).toBe("tasks");
+
+				fs.writeFileSync(globalPath, "speckitAuto:\n  defaultOnStartup: full\n");
+				fs.writeFileSync(projectPath, "modelRoles:\n  default: anthropic/project\n");
+				expect(cfgSpeckitAutoDefaultOnStartup.get(await load())).toBe("full");
+			} finally {
+				AgentStorage.close();
+				if (fs.existsSync(testDir)) removeSyncWithRetries(testDir);
+			}
 		});
 		it("does not copy unedited roles from other project settings providers", async () => {
 			await Bun.write(

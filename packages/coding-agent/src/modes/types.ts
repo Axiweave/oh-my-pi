@@ -92,6 +92,8 @@ export interface InteractiveModeInitOptions {
 	clearInitialTerminalHistory?: boolean;
 	/** Opt into hosting when the caller owns outer startup readiness and shutdown. */
 	autoStartCollab?: boolean;
+	/** A `--goal` objective starts after init; the speckit-auto startup default gives way to it. */
+	startsGoal?: boolean;
 }
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &
@@ -651,6 +653,8 @@ export interface InteractiveModeContext {
 	disableGoalMode(message?: string): void;
 	pauseLoop(): void;
 	toggleSpeckitAutoMode(): void;
+	/** Moves speckit-auto mode to `target`; true when the mode ends in that state. */
+	setSpeckitAutoMode(target: "off" | "full" | "tasks"): boolean;
 	handleSpeckitAutoCommand(args: string): Promise<string | undefined>;
 	pauseSpeckitAuto(): void;
 	/** Brings back this branch's saved speckit-auto state, the run paused; for a session switch that did not happen. */

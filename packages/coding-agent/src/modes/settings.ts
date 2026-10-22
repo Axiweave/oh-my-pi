@@ -994,6 +994,25 @@ export const cfgSpeckitAutoConvergeRounds = register({
 	},
 });
 
+export const cfgSpeckitAutoDefaultOnStartup = register({
+	id: "speckitAuto.defaultOnStartup",
+	type: "enum",
+	values: ["off", "full", "tasks"] as const,
+	default: "off",
+	ui: {
+		tab: "interaction",
+		group: "Input",
+		label: "Speckit auto on startup",
+		description:
+			"Turn speckit-auto mode on in new sessions; a project .omp/config.yml value overrides the global one",
+		options: [
+			{ value: "off", label: "Off" },
+			{ value: "full", label: "Full", description: "Run every phase" },
+			{ value: "tasks", label: "Tasks", description: "Stop after /speckit.tasks" },
+		],
+	},
+});
+
 // Input and startup
 export const cfgComposerRecallClearedDrafts = register({
 	id: "composer.recallClearedDrafts",

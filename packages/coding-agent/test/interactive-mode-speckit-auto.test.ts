@@ -8,10 +8,15 @@ import * as ideState from "@oh-my-pi/pi-coding-agent/mcp/ide-state";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { cfgCompletionNotify, cfgErrorNotify } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import {
+	cfgCompletionNotify,
+	cfgErrorNotify,
+	cfgSpeckitAutoDefaultOnStartup,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
 import * as speckitAuto from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
 import type { SpeckitVerdict } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
-import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { InteractiveModeInitOptions, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/async-job-delivery";
 import { LAUNCH_COMPLETION_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/launch-completion";
@@ -102,8 +107,8 @@ describe("InteractiveMode speckit-auto mode", () => {
 	});
 
 	/** Starts the mode UI with every phase command installed; fake timers from here on. */
-	async function start(): Promise<void> {
-		await mode.init({ suppressWelcomeIntro: true });
+	async function start(options: InteractiveModeInitOptions = {}): Promise<void> {
+		await mode.init({ suppressWelcomeIntro: true, ...options });
 		mode.fileSlashCommands = new Set(PHASE_COMMANDS);
 		mode.ui.requestRender = vi.fn();
 		vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
@@ -1303,6 +1308,162 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(mode.speckitAutoEnabled).toBe(true);
 			expect(saved()?.run).toBeUndefined();
 			expect(mode.getSpeckitAutoDescription()).toBe("Speckit auto: on (waiting)");
+		});
+	});
+
+	describe("startup default", () => {
+		const description = (scope: "full" | "tasks"): string =>
+			`Speckit auto: ${scope === "tasks" ? "on to tasks" : "on"} (waiting)`;
+
+		/** Sets `speckitAuto.defaultOnStartup` and installs `commands` where init loads them from. */
+		function configure(value: "off" | "full" | "tasks", commands: readonly string[] = PHASE_COMMANDS): void {
+			cfgSpeckitAutoDefaultOnStartup.override(session.settings, value);
+			session.setSlashCommands(commands.map(name => ({ name, description: name, content: "", source: "test" })));
+		}
+
+		for (const scope of ["full", "tasks"] as const) {
+			it(`turns the mode on at the ${scope} scope in a brand-new session`, async () => {
+				configure(scope);
+				await start();
+
+				expect(mode.getSpeckitAutoDescription()).toBe(description(scope));
+				expect(saved()).toMatchObject({ enabled: true, scope });
+			});
+
+			it(`leaves a session with a conversation off at the ${scope} default`, async () => {
+				configure(scope);
+				session.sessionManager.appendMessage({ ...createAssistantMessage("earlier"), timestamp: ++clock });
+				await start();
+
+				expect(mode.speckitAutoEnabled).toBe(false);
+				expect(saved()).toBeUndefined();
+			});
+		}
+
+		it("leaves the mode off when the default is off", async () => {
+			configure("off");
+			await start();
+
+			expect(mode.speckitAutoEnabled).toBe(false);
+			expect(saved()).toBeUndefined();
+		});
+
+		it("keeps a saved off in an empty session", async () => {
+			configure("full");
+			session.sessionManager.appendCustomEntry(speckitAuto.SPECKIT_AUTO_ENTRY, { enabled: false, scope: "full" });
+			await start();
+
+			expect(mode.speckitAutoEnabled).toBe(false);
+		});
+
+		it("stays off without a warning when a phase command is missing", async () => {
+			configure(
+				"full",
+				PHASE_COMMANDS.filter(name => name !== "speckit.converge"),
+			);
+			const warn = vi.spyOn(mode, "showWarning");
+			await start();
+
+			expect(mode.speckitAutoEnabled).toBe(false);
+			expect(warn).not.toHaveBeenCalled();
+		});
+
+		it("gives way to a --goal start with one notice", async () => {
+			configure("full");
+			const shown = vi.spyOn(mode, "showStatus");
+			await start({ startsGoal: true });
+
+			expect(mode.speckitAutoEnabled).toBe(false);
+			expect(shown.mock.calls.filter(([text]) => text.includes("stays off"))).toEqual([
+				["Speckit-auto mode stays off: goal mode is on."],
+			]);
+		});
+
+		it("gives way to plan mode from plan.defaultOnStartup", async () => {
+			configure("full");
+			cfgPlanEnabled.override(session.settings, true);
+			cfgPlanDefaultOnStartup.override(session.settings, true);
+			const shown = vi.spyOn(mode, "showStatus");
+			await start();
+
+			expect(mode.planModeEnabled).toBe(true);
+			expect(mode.speckitAutoEnabled).toBe(false);
+			expect(shown.mock.calls.some(([text]) => text === "Speckit-auto mode stays off: plan mode is on.")).toBe(true);
+		});
+
+		it("applies on /new and /delete when the mode is off, but not on an internal reset", async () => {
+			configure("tasks");
+			await start();
+			const offWithConversation = async (): Promise<void> => {
+				mode.setSpeckitAutoMode("off");
+				session.sessionManager.appendMessage({ ...createAssistantMessage("hi"), timestamp: ++clock });
+				await session.sessionManager.flush();
+			};
+
+			await offWithConversation();
+			await mode.handleNewCommand();
+			expect(mode.getSpeckitAutoDescription()).toBe(description("tasks"));
+
+			await offWithConversation();
+			await mode.handleClearCommand();
+			expect(mode.speckitAutoEnabled).toBe(false);
+
+			await offWithConversation();
+			await mode.handleDeleteCommand();
+			expect(mode.getSpeckitAutoDescription()).toBe(description("tasks"));
+		});
+
+		it("keeps the scope that /new carries over instead of the default", async () => {
+			configure("full");
+			await start();
+			mode.setSpeckitAutoMode("tasks");
+
+			await mode.handleNewCommand();
+
+			expect(mode.getSpeckitAutoDescription()).toBe(description("tasks"));
+		});
+	});
+
+	describe("setSpeckitAutoMode", () => {
+		it("turns the mode on at the target scope", async () => {
+			await start();
+
+			expect(mode.setSpeckitAutoMode("tasks")).toBe(true);
+			expect(saved()).toMatchObject({ enabled: true, scope: "tasks" });
+		});
+
+		it("widens tasks to full without touching the active run", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			mode.setSpeckitAutoMode("tasks");
+			const run = saved()?.run;
+
+			expect(mode.setSpeckitAutoMode("full")).toBe(true);
+
+			expect(saved()).toMatchObject({ enabled: true, scope: "full", run });
+			expect(mode.speckitAutoRunActive).toBe(true);
+		});
+
+		it("changes nothing when the mode already is in the target state", async () => {
+			await start();
+			for (const target of ["off", "full", "tasks"] as const) {
+				mode.setSpeckitAutoMode(target);
+				const entries = session.sessionManager.getEntries().length;
+
+				expect(mode.setSpeckitAutoMode(target)).toBe(true);
+				expect(session.sessionManager.getEntries().length).toBe(entries);
+			}
+		});
+
+		it("reports a refused turn-on and keeps the next cycle at full", async () => {
+			await start();
+			mode.planModeEnabled = true;
+
+			expect(mode.setSpeckitAutoMode("tasks")).toBe(false);
+
+			mode.planModeEnabled = false;
+			mode.toggleSpeckitAutoMode();
+			expect(saved()).toMatchObject({ enabled: true, scope: "full" });
 		});
 	});
 

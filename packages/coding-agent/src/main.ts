@@ -730,6 +730,7 @@ async function runInteractiveMode(
 				suppressWelcomeIntro: resuming || setupScenes.length > 0 || playStartupSplash,
 				clearInitialTerminalHistory: true,
 				autoStartCollab: joinLink === undefined,
+				startsGoal: startupGoal !== undefined,
 			}),
 		);
 		startDeferredStartupWork?.();

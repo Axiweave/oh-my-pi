@@ -49,6 +49,7 @@ import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgCyberMode, cfgModelProfile, cfgReviewUsesPlan } from "../config/model-settings";
+import { cfgSpeckitAutoDefaultOnStartup } from "../modes/settings";
 
 export function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -257,6 +258,37 @@ function persistCyberMode(settings: Settings, scope: "global" | "project"): stri
 		return "saved as the startup default (global config)";
 	}
 	settings.setProjectValue(cfgCyberMode, true);
+	return "saved as the startup default (.omp/config.yml)";
+}
+
+type SpeckitAutoModeValue = "off" | "full" | "tasks";
+const SPECKIT_AUTO_MODE_USAGE = "Usage: /speckit-auto-mode [off|full|tasks] [global|project]";
+
+/** Resolves a `/speckit-auto-mode` argument; `undefined` for a form the command does not take. */
+function resolveSpeckitAutoModeArg(
+	args: string,
+): { kind: "cycle" } | { kind: "set"; value: SpeckitAutoModeValue; scope?: "global" | "project" } | undefined {
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	if (tokens.length === 0) return { kind: "cycle" };
+	if (tokens.length > 2) return undefined;
+	const [value, scope] = tokens;
+	if (value !== "off" && value !== "full" && value !== "tasks") return undefined;
+	if (scope === undefined) return { kind: "set", value };
+	if (scope !== "global" && scope !== "project") return undefined;
+	return { kind: "set", value, scope };
+}
+
+/** Persists `speckitAuto.defaultOnStartup` to the named scope, returning the feedback line. */
+function persistSpeckitAutoDefault(
+	settings: Settings,
+	value: SpeckitAutoModeValue,
+	scope: "global" | "project",
+): string {
+	if (scope === "global") {
+		cfgSpeckitAutoDefaultOnStartup.set(settings, value);
+		return "saved as the startup default (global config)";
+	}
+	settings.setProjectValue(cfgSpeckitAutoDefaultOnStartup, value);
 	return "saved as the startup default (.omp/config.yml)";
 }
 
@@ -646,11 +678,25 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "speckit-auto-mode",
 		icon: "loop",
-		description: "Cycle speckit-auto mode: on, on stopping after tasks, off",
+		description: "Cycle speckit-auto mode, or set it and save it as the startup default",
+		inlineHint: "[off|full|tasks] [global|project]",
+		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => runtime.ctx.getSpeckitAutoDescription(),
-		handleTui: async (_command, runtime) => {
-			runtime.ctx.toggleSpeckitAutoMode();
+		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
+			const resolved = resolveSpeckitAutoModeArg(command.args);
+			if (!resolved) {
+				runtime.ctx.showStatus(SPECKIT_AUTO_MODE_USAGE);
+				return;
+			}
+			if (resolved.kind === "cycle") {
+				runtime.ctx.toggleSpeckitAutoMode();
+				return;
+			}
+			// A refused turn-on already warned; it saves nothing.
+			if (!runtime.ctx.setSpeckitAutoMode(resolved.value) || !resolved.scope) return;
+			const saved = persistSpeckitAutoDefault(runtime.ctx.settings, resolved.value, resolved.scope);
+			runtime.ctx.showStatus(`Speckit-auto startup default: ${resolved.value} — ${saved}`);
 		},
 	},
 	{

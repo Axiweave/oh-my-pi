@@ -32,6 +32,7 @@ import {
 	cfgSetupVersion,
 	cfgStatusLineLeftSegments,
 	cfgSpellingAutocomplete,
+	cfgSpeckitAutoDefaultOnStartup,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import {
@@ -443,6 +444,26 @@ describe("Settings", () => {
 			// A fresh load of the same project reads the write back as the startup value.
 			const reloaded = await Settings.init({ cwd: projectDir, agentDir });
 			expect(cfgCyberMode.get(reloaded)).toBe(true);
+		});
+
+		it("persists a project-scope speckitAuto.defaultOnStartup write only to the project config", async () => {
+			await writeSettings({});
+			const projectConfigPath = path.join(projectDir, ".omp", "config.yml");
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			settings.setProjectValue(cfgSpeckitAutoDefaultOnStartup, "tasks");
+			await settings.flush();
+
+			const saved = YAML.parse(await Bun.file(projectConfigPath).text()) as Record<string, unknown>;
+			expect(saved).toEqual({ speckitAuto: { defaultOnStartup: "tasks" } });
+			const global = YAML.parse(await Bun.file(getConfigPath()).text()) as Record<string, unknown> | null;
+			expect(global?.speckitAuto).toBeUndefined();
+		});
+
+		it("rejects an invalid project-scope speckitAuto.defaultOnStartup value", async () => {
+			await writeSettings({});
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(() => settings.setProjectValue(cfgSpeckitAutoDefaultOnStartup, "bogus")).toThrow();
 		});
 
 		it("preserves a symlinked main config while atomically updating its target", async () => {
