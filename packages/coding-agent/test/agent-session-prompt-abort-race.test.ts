@@ -44,6 +44,7 @@ describe("AgentSession prompt admission racing abort", () => {
 			modelRegistry?: Pick<ModelRegistry, "getApiKey">;
 			clientBridge?: unknown;
 			extensionRunner?: unknown;
+			promptTemplates?: unknown;
 		} = {},
 	) {
 		authStorage = await AuthStorage.create(":memory:");
@@ -64,6 +65,7 @@ describe("AgentSession prompt admission racing abort", () => {
 			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
 			modelRegistry: (options.modelRegistry ?? fallbackRegistry) as never,
 			...(options.extensionRunner ? { extensionRunner: options.extensionRunner as never } : {}),
+			...(options.promptTemplates ? { promptTemplates: options.promptTemplates as never } : {}),
 		});
 		if (options.clientBridge) {
 			session.setClientBridge(options.clientBridge as never);
@@ -599,30 +601,67 @@ describe("AgentSession prompt admission racing abort", () => {
 		expect(calls).toBe(1);
 	});
 
-	it("joinActiveTurn expands a file command and keeps its command card", async () => {
-		const turnStarted = Promise.withResolvers<void>();
-		const releaseTurn = Promise.withResolvers<void>();
-		const { session } = await createSession([
-			async () => {
-				turnStarted.resolve();
-				await releaseTurn.promise;
-				return { content: ["first turn"] };
-			},
-			() => ({ content: ["steer answered"] }),
-		]);
-		session.setSlashCommands([
-			{ name: "greet", description: "greet", content: "Say hello to $ARGUMENTS", source: "test" },
-		] as never);
+	it("joinActiveTurn queues the same expanded steer as steer() for file commands, templates, and plain text", async () => {
+		const rows: Array<{ input: string; contains: string[]; card?: string }> = [
+			{ input: "/greet", contains: ["Say hello to"], card: "greet" },
+			{ input: "/greet big wide world", contains: ["Say hello to big wide world"], card: "greet" },
+			{ input: "/fixed anything", contains: ["Fixed body", "anything"], card: "fixed" },
+			{ input: "/wrap topic", contains: ["Template about topic"], card: "tpl" },
+			{ input: "plain steer text", contains: ["plain steer text"] },
+		];
+		for (const row of rows) {
+			const turnStarted = Promise.withResolvers<void>();
+			const releaseTurn = Promise.withResolvers<void>();
+			const { session } = await createSession(
+				[
+					async () => {
+						turnStarted.resolve();
+						await releaseTurn.promise;
+						return { content: ["first turn"] };
+					},
+					() => ({ content: ["steers answered"] }),
+				],
+				false,
+				{
+					promptTemplates: [
+						{ name: "tpl", description: "tpl", content: "Template about $ARGUMENTS", source: "test" },
+					],
+				},
+			);
+			session.setSlashCommands([
+				{ name: "greet", description: "greet", content: "Say hello to $ARGUMENTS", source: "test" },
+				{ name: "fixed", description: "fixed", content: "Fixed body", source: "test" },
+				{ name: "wrap", description: "wrap", content: "/tpl $ARGUMENTS", source: "test" },
+			] as never);
 
-		const running = session.prompt("start");
-		await withTimeout(turnStarted.promise, 2_000, "First turn never started");
-		expect(await session.joinActiveTurn("/greet world")).toBe(true);
+			const running = session.prompt("start");
+			await withTimeout(turnStarted.promise, 2_000, "First turn never started");
+			expect(await session.joinActiveTurn(row.input), row.input).toBe(true);
+			await session.steer(row.input);
 
-		const [queued] = session.agent.peekSteeringQueue();
-		expect(queued).toMatchObject({ promptTemplate: "greet", promptTemplateInput: "/greet world" });
-		expect(JSON.stringify(queued)).toContain("Say hello to world");
-		releaseTurn.resolve();
-		await running;
-		await session.waitForIdle();
+			const [joined, steered] = session.agent.peekSteeringQueue().map(message => {
+				const { content, promptTemplate, promptTemplateInput } = message as {
+					content: Array<{ type: string; text?: string }>;
+					promptTemplate?: string;
+					promptTemplateInput?: string;
+				};
+				const text = content.map(part => part.text ?? "").join("");
+				return { text, promptTemplate, promptTemplateInput };
+			});
+			expect(joined, row.input).toEqual(steered);
+			for (const fragment of row.contains) expect(joined.text, row.input).toContain(fragment);
+			expect(joined.text.startsWith("/"), row.input).toBe(false);
+			expect(joined.promptTemplate, row.input).toBe(row.card);
+			expect(joined.promptTemplateInput, row.input).toBe(row.card ? row.input : undefined);
+
+			releaseTurn.resolve();
+			await running;
+			await session.waitForIdle();
+			// afterEach disposes the last row's session.
+			if (row !== rows.at(-1)) {
+				await session.dispose();
+				authStorage?.close();
+			}
+		}
 	});
 });

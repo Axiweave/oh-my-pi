@@ -15,7 +15,8 @@ Three auto-merged gaps were fixed:
 - Upstream's new deferred-pattern test host gets the fork's `reviewPlanActive`.
 - Upstream lets an empty subagent chain reach `getRetryFallbackRole`, so a cyber-excluded primary persisted as its allowlisted substitute. The read-back now uses the raw role, as the install does.
 846 test files ran in separate processes, and 843 passed. The set covered every divergence check, every test file that both sides changed, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed.
-`sdk-tool-activation` (5 Cursor cases) and `model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`) also fail at the pre-merge commit.
+`sdk-tool-activation` (5 Cursor cases) also fails at the pre-merge commit.
+`model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`) relied on a key check moving the round-robin turn. That breaks the fork's key-check rule, which `454748ffa5` extended to `smart`. The code stays, and the test now spends the turn on the request path.
 `main-model-suggestions` timed out under load and passes alone.
 `bun run test:rs` passed all 3954 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
@@ -281,7 +282,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Preserve command images and queue modes during compaction replay, including mixed and command-only queues.
 - **Why:** Editors such as claude-code-ide.el drive the composer through these packets instead of terminal keystrokes, and a command queued for the next yield must stay visible and reach the message body. Upstream has no packet intake, no leading-command editor API, and no recognition ranges.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/tui/src/prompt/queue-input.ts`, `packages/tui/src/prompt/custom-editor.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/components/editor.ts`, and `packages/tui/src/autocomplete.ts`.
-- **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/tui/test/custom-editor.test.ts`, `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`, `packages/coding-agent/test/input-controller-skill-queue.test.ts`, `packages/tui/test/editor.test.ts`, and `packages/coding-agent/test/agent-session-prompt-abort-race.test.ts` (`joinActiveTurn expands a file command and keeps its command card`).
+- **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/tui/test/custom-editor.test.ts`, `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`, `packages/coding-agent/test/input-controller-skill-queue.test.ts`, `packages/tui/test/editor.test.ts`, and `packages/coding-agent/test/agent-session-prompt-abort-race.test.ts` (`joinActiveTurn queues the same expanded steer as steer()`).
 
 ### OSC 133 prompt markers on submitted messages
 

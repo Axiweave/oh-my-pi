@@ -2319,6 +2319,15 @@ describe("ModelRegistry", () => {
 			const firstParsed = JSON.parse(firstApiKey!) as { token?: string; enterpriseUrl?: string };
 			expect(firstParsed.token).toBe("ghu_individual_token_123");
 			expect(firstParsed.enterpriseUrl).toBeUndefined();
+			// A key check does not spend the round-robin turn. Only a request does.
+			const recheckParsed = JSON.parse((await registry.getApiKey(model))!) as { token?: string };
+			expect(recheckParsed.token).toBe("ghu_individual_token_123");
+			const request = await registry.getApiKeyWithCredentialForProvider("github-copilot", undefined, {
+				baseUrl: model.baseUrl,
+				modelId: model.id,
+			});
+			const requestParsed = JSON.parse(request!.apiKey) as { token?: string };
+			expect(requestParsed.token).toBe("ghu_individual_token_123");
 			const secondApiKey = await registry.getApiKey(model);
 			expect(secondApiKey).toBeDefined();
 			const secondParsed = JSON.parse(secondApiKey!) as { token?: string; enterpriseUrl?: string };
