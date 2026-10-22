@@ -291,6 +291,36 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(texts()).toEqual(["/speckit.converge"]);
 		});
 
+		it("in the tasks scope goes on to converge after the user types implement into a run held at analyze", async () => {
+			await start();
+			mode.setSpeckitAutoMode("tasks");
+			await turnStarts("/speckit.analyze");
+			turnSettles({ ...CLEAN, analyze: "unreadable" });
+			await tick(3);
+			expect(saved()?.run).toMatchObject({ phase: "analyze", hold: { reason: "no readable analyze report" } });
+
+			await turnStarts("/speckit.implement");
+			expect(saved()?.run).toMatchObject({ history: ["analyze", "implement"], editing: true });
+			turnSettles();
+			await tick(3);
+			expect(texts()).toEqual(["/speckit.converge"]);
+		});
+
+		it("ends a user-started implement run at its check after a cycle to the tasks scope", async () => {
+			await start();
+			const shown = vi.spyOn(mode, "showStatus");
+			mode.setSpeckitAutoMode("full");
+			await turnStarts("/speckit.implement");
+			mode.setSpeckitAutoMode("tasks");
+			turnSettles();
+
+			await tick(3);
+			expect(classify).toHaveBeenCalledTimes(1);
+			expect(texts()).toEqual([]);
+			expect(saved()).toMatchObject({ enabled: true, scope: "tasks", run: undefined });
+			expect(shown).toHaveBeenCalledWith(expect.stringContaining("run stopped after implement (tasks mode)."));
+		});
+
 		it("ends the run when the cycle to the tasks scope finds a parked start past analyze", async () => {
 			await start();
 			await startRun("/speckit.analyze");
@@ -861,6 +891,22 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(classify).not.toHaveBeenCalled();
 			expect(submitted).toHaveLength(0);
 		});
+
+		it("stops a typed implement at its check when the mode turns on in the tasks scope", async () => {
+			await start();
+			sessionHas(userText("/speckit.implement"));
+			setStreaming(() => true);
+
+			mode.setSpeckitAutoMode("tasks");
+			expect(saved()?.run).toMatchObject({ phase: "implement", editing: false });
+
+			setStreaming(() => false);
+			turnSettles();
+			await tick(3);
+			expect(classify).toHaveBeenCalledTimes(1);
+			expect(texts()).toEqual([]);
+			expect(saved()?.run).toBeUndefined();
+		});
 	});
 
 	describe("pause, resume, next, and session state", () => {
@@ -1071,7 +1117,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(mode.speckitAutoEnabled).toBe(true);
 			expect(saved()).toMatchObject({ enabled: true });
 
-			// The toggle cycles on → stops after tasks → off.
+			// The toggle cycles on → stops before implement → off.
 			mode.toggleSpeckitAutoMode();
 			mode.toggleSpeckitAutoMode();
 			await mode.handleClearCommand();

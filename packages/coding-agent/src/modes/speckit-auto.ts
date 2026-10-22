@@ -583,5 +583,11 @@ const RESULT_TEXT: Record<SpeckitEndResult, string> = {
 	planned: "stopped before implement",
 };
 
-export const formatSpeckitSummary = (run: SpeckitRun, result: SpeckitEndResult): string =>
-	`Speckit auto run ${RESULT_TEXT[result]}. Phases: ${run.history.join(" → ")}. Remediation rounds: ${run.remediationRounds}/${SPECKIT_REMEDIATION_ROUNDS}. Converge rounds: ${run.convergeRounds}/${run.convergeLimit}.`;
+export function formatSpeckitSummary(run: SpeckitRun, result: SpeckitEndResult): string {
+	// A tasks-scope stop after an implement turn names where it stopped; implement already ran.
+	const text =
+		result === "planned" && run.history.includes("implement")
+			? `stopped after ${run.phase} (tasks mode)`
+			: RESULT_TEXT[result];
+	return `Speckit auto run ${text}. Phases: ${run.history.join(" → ")}. Remediation rounds: ${run.remediationRounds}/${SPECKIT_REMEDIATION_ROUNDS}. Converge rounds: ${run.convergeRounds}/${run.convergeLimit}.`;
+}

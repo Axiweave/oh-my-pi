@@ -3808,6 +3808,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!phase) return;
 		const run = newSpeckitRun(phase, normalizeConvergeRounds(cfgSpeckitAutoConvergeRounds.get(this.settings)));
 		run.turnOpen = true;
+		// Turning the mode on picks its scope: a tasks turn-on stops this run like a cycle to tasks does.
+		run.editing = false;
 		this.#speckitRun = run;
 		this.#speckitTurnStartedAt = opener.timestamp;
 		this.#speckitDecidedKey = this.#replaySpeckitTurns(run)?.timestamp;
@@ -3892,7 +3894,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
-	/** Cycles off → on (every phase) → on, stopping after tasks → off. */
+	/** Cycles off → on (every phase) → on, stopping before implement → off. */
 	toggleSpeckitAutoMode(): void {
 		this.setSpeckitAutoMode(!this.speckitAutoEnabled ? "full" : this.#speckitScope === "full" ? "tasks" : "off");
 	}
