@@ -3,20 +3,19 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.12.5` on 2026-10-21.
+**Reviewed against:** `v18.12.6` on 2026-10-21.
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.12.5`. `bun check` passes.
-The merge had conflicts in 15 files. The resolutions preserve every fork decision and keep upstream behavior:
-- Upstream's opt-in account reclaim (`reclaimAbovePct`) stays. The fork works out the account reserve from `capPct` and `windowCapPct`.
-- Upstream's model and thinking controls for a focused subagent stay. Model-profile switches and the cyber toggle still refuse in a focused view.
-- Upstream's bounded jobs-sheet command preview is the short form of the fork's expand key.
-- Upstream's `Subagents · N running` HUD header carries the fork's live tok/s total.
-1547 test files ran in separate processes, and 1541 passed. The set covered every divergence check, every test file that both sides changed, and the tests that import each source file that both sides changed.
-All 217 test files that upstream added or changed since `v18.12.2` also ran in separate processes, and 216 passed.
-`browser-queries` (`matches role/ exact names ... submit input has no value`) also fails at the `v18.12.5` tag.
-`sdk-tool-activation`, `eval/js-package-environment`, `model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`), and `terminal-background` (SIXEL multiplexer repaint) also fail at the pre-merge commit.
-`openai-codex-responses-lite` and `credential-pin` timed out under load and pass alone.
+The launcher targets this checkout and reports `18.12.6`. `bun check` passes.
+The merge had conflicts in 2 files. The resolutions preserve every fork decision and keep upstream behavior:
+- The first `model_change` entry of a new session keeps the fork's cyber and review-plan state. Upstream's deferred-pattern retry-role entry follows it and also records the cyber state.
+- The ACP builtin `/todo` HUD verbs (`expand`, `collapse`, `compact`) take upstream's failed result.
+Two auto-merged gaps were fixed:
+- Upstream's ACP `_session/steering` path (`joinActiveTurn`) now expands file commands and keeps the command card, as `steer()` does.
+- Upstream's new deferred-pattern test host gets the fork's `reviewPlanActive`.
+846 test files ran in separate processes, and 843 passed. The set covered every divergence check, every test file that both sides changed, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed.
+`sdk-tool-activation` (5 Cursor cases) and `model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`) also fail at the pre-merge commit.
+`main-model-suggestions` timed out under load and passes alone.
 `bun run test:rs` passed all 3954 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
@@ -277,11 +276,11 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Accept `ESC _ pi:prompt;<command> ESC \` and `ESC _ pi:keyword;<word> ESC \` input packets from terminal hosts. A prompt packet replaces or inserts the draft's leading slash command, a keyword packet places a standalone word at the message start, and neither moves the body cursor.
 - **Decision:** Treat a `->` / `=>` queue shorthand as a header. Packets, the leading-command edits, and command recognition take the body line and anchor from `queueShorthandBodyStart`, so a command never lands in front of the shorthand and a bare prefix keeps its header line with the body appended below.
 - **Decision:** Color-highlight a fully recognized leading command and inline `/skill:name` tokens in the composer, scanning from the message start rather than column 0 so a queued body keeps its highlight. A replaced autocomplete provider invalidates the cached recognition.
-- **Decision:** Expand file commands before prompt templates in steering and follow-up messages. Queue shorthand and `/queue` also load registered skill commands.
+- **Decision:** Expand file commands before prompt templates in steering and follow-up messages. This includes upstream `v18.12.6`'s ACP `_session/steering` admission (`AgentSession.joinActiveTurn`), which also keeps the command card. Queue shorthand and `/queue` also load registered skill commands.
 - **Decision:** Preserve command images and queue modes during compaction replay, including mixed and command-only queues.
 - **Why:** Editors such as claude-code-ide.el drive the composer through these packets instead of terminal keystrokes, and a command queued for the next yield must stay visible and reach the message body. Upstream has no packet intake, no leading-command editor API, and no recognition ranges.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/tui/src/prompt/queue-input.ts`, `packages/tui/src/prompt/custom-editor.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/components/editor.ts`, and `packages/tui/src/autocomplete.ts`.
-- **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/tui/test/custom-editor.test.ts`, `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`, `packages/coding-agent/test/input-controller-skill-queue.test.ts`, and `packages/tui/test/editor.test.ts`.
+- **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/tui/test/custom-editor.test.ts`, `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`, `packages/coding-agent/test/input-controller-skill-queue.test.ts`, `packages/tui/test/editor.test.ts`, and `packages/coding-agent/test/agent-session-prompt-abort-race.test.ts` (`joinActiveTurn expands a file command and keeps its command card`).
 
 ### OSC 133 prompt markers on submitted messages
 

@@ -24,6 +24,16 @@
 - Fixed shutdown rearming a destructive history reset while flushing a provider's pending rows.
 - A non-fullscreen bottom overlay (model picker, model profile picker) no longer scrolls on-screen history into native scrollback. The overlay now paints over those rows and restores them when it closes, so the transcript no longer leaves a blank gap above the editor. History offered while the overlay is open is committed after it closes. When the on-screen rows are unknown (after a resize, or image rows), the overlay uses the alternate screen. A resize while the overlay covers history replays the history when the overlay closes.
 
+## [18.12.6] - 2026-10-21
+
+### Changed
+
+- In Tern, centered sheets (`/context`, reports, keyboard shortcuts, BTW history, session info, the pause screen) fill the pane when it is narrower than 100 columns instead of floating with margins ([#16676](https://github.com/can1357/oh-my-pi/pull/16676) by [@H4vC](https://github.com/H4vC))
+
+### Fixed
+
+- Fixed the `/agents` and `/models` hubs in Tern squeezing the left sidebar as long lines (such as a streaming new-agent draft) widen the body pane
+
 ## [18.12.4] - 2026-10-20
 
 ### Added
