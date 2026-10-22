@@ -430,7 +430,7 @@ describe("Settings", () => {
 			);
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			settings.setProjectCyberMode(true);
+			settings.setProjectValue(cfgCyberMode, true);
 			await settings.flush();
 
 			const saved = YAML.parse(await Bun.file(projectConfigPath).text()) as Record<string, unknown>;

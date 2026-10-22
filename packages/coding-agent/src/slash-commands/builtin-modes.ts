@@ -221,7 +221,7 @@ function persistModelProfile(settings: Settings, name: string, scope: ModelProfi
 		cfgModelProfile.set(settings, name);
 		return "saved as startup profile (global config)";
 	}
-	settings.setProjectModelProfile(name);
+	settings.setProjectValue(cfgModelProfile, name);
 	return "saved as startup profile (.omp/config.yml)";
 }
 
@@ -256,7 +256,7 @@ function persistCyberMode(settings: Settings, scope: "global" | "project"): stri
 		cfgCyberMode.set(settings, true);
 		return "saved as the startup default (global config)";
 	}
-	settings.setProjectCyberMode(true);
+	settings.setProjectValue(cfgCyberMode, true);
 	return "saved as the startup default (.omp/config.yml)";
 }
 
@@ -294,7 +294,7 @@ function persistReviewPlan(settings: Settings, scope: "global" | "project", enab
 		cfgReviewUsesPlan.set(settings, enabled);
 		return "Saved to global config";
 	}
-	settings.setProjectReviewUsesPlan(enabled);
+	settings.setProjectValue(cfgReviewUsesPlan, enabled);
 	return "Saved to project config";
 }
 

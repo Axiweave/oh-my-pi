@@ -342,7 +342,7 @@ describe("Settings.reloadForCwd", () => {
 			const projectConfigPath = path.join(startDir, ".omp", "config.yml");
 			settings.setProjectModelRole("default", "anthropic/project");
 
-			settings.setProjectModelProfile("work");
+			settings.setProjectValue(cfgModelProfile, "work");
 			// Merged-layer visibility before any disk write.
 			expect(cfgModelProfile.get(settings)).toBe("work");
 			await settings.flush();
