@@ -72,6 +72,7 @@
 
 ### Fixed
 
+- A subagent with an empty fallback chain and a primary that cyber mode excludes now records the configured primary in its saved session, not the allowed model that replaced it. A revived subagent therefore gets the same routing again.
 - A `/loop` run no longer clears the draft text or attachments in the input box.
 - Fixed speckit-auto doing nothing when you turned it on after a phase command started. This happened, for example, when goal mode blocked the mode, you ran `/goal drop`, and `/speckit.specify` was already running. `/speckit-auto-mode` now follows the latest user turn when it is a speckit phase command. A finished turn gets its check at once, and a running turn gets it when it ends. If the latest user turn is not a phase command, the mode still waits for one.
 - X-only web searches now check the cyber allowlist before adding xAI fallback models.

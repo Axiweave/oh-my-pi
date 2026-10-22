@@ -10,9 +10,10 @@ The launcher targets this checkout and reports `18.12.6`. `bun check` passes.
 The merge had conflicts in 2 files. The resolutions preserve every fork decision and keep upstream behavior:
 - The first `model_change` entry of a new session keeps the fork's cyber and review-plan state. Upstream's deferred-pattern retry-role entry follows it and also records the cyber state.
 - The ACP builtin `/todo` HUD verbs (`expand`, `collapse`, `compact`) take upstream's failed result.
-Two auto-merged gaps were fixed:
+Three auto-merged gaps were fixed:
 - Upstream's ACP `_session/steering` path (`joinActiveTurn`) now expands file commands and keeps the command card, as `steer()` does.
 - Upstream's new deferred-pattern test host gets the fork's `reviewPlanActive`.
+- Upstream lets an empty subagent chain reach `getRetryFallbackRole`, so a cyber-excluded primary persisted as its allowlisted substitute. The read-back now uses the raw role, as the install does.
 846 test files ran in separate processes, and 843 passed. The set covered every divergence check, every test file that both sides changed, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed.
 `sdk-tool-activation` (5 Cursor cases) and `model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`) also fail at the pre-merge commit.
 `main-model-suggestions` timed out under load and passes alone.
@@ -308,7 +309,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Failed session switches restore outgoing protection and notice history. Publish cyber notices only after a successful switch. Resumed active-model substitutions use the startup warning channel.
 - **Decision:** Send print/RPC startup warnings to stderr at CLI session creation. Publish ACP warnings after registration, excluding temporary-session transitions.
 - **Decision:** Keep protection on shared configuration state. An implicit clear removes only its owner's claim. An explicit operator switch-off clears all claims.
-- **Decision:** Parked subagent settings retain their exact protection claims during warm revival. Dynamic retry-role installation preserves raw configured chains.
+- **Decision:** Parked subagent settings retain their exact protection claims during warm revival. Dynamic retry-role installation preserves raw configured chains, and the `session_init` read-back persists the raw primary, not its filtered substitute.
 - **Revival and retry checks:** `packages/coding-agent/test/task/parked-subagent-session-release.test.ts` and `packages/coding-agent/test/retry-fallback.test.ts`.
 - **Decision:** Apply installed membership checks to background overrides, fallback traversal, cache-warm replays, and dispatch. A retained callback re-checks protection before it dispatches, and a session that shares another session's protection stays constrained while its own indicator is off.
 - **Why:** Operators need to restrict cyber work to approved models. This allowlist does not bypass provider safety restrictions. Preserve the filtering, switch guard, `cyber` status-line segment, and lifecycle rules.

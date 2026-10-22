@@ -6,6 +6,7 @@ import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mo
 import {
 	expandDefaultRetryFallbackChains,
 	findRetryFallbackCandidates,
+	getRetryFallbackRole,
 	installRetryFallbackRole,
 	type RetryFallbackResolutionContext,
 	resolveRetryFallbackChainKey,
@@ -53,6 +54,33 @@ describe("retry fallback selector resolution", () => {
 		settings.clearCyberRoles("parent", { operator: true });
 		expect(settings.getModelRole("default")).toBe(original);
 		expect(settings.getModelRole("reviewer")).toBe(`${original}, ${primary}`);
+	});
+
+	it("reads back the installed retry role unchanged, with or without cyber protection", () => {
+		const allowed = getBundledModel("google", "gemini-2.5-flash")!;
+		const excluded = getBundledModel("openai", "gpt-4o-mini")!;
+		const allowedSelector = `${allowed.provider}/${allowed.id}`;
+		const excludedSelector = `${excluded.provider}/${excluded.id}`;
+		for (const cyber of [false, true]) {
+			for (const primary of [allowedSelector, excludedSelector]) {
+				for (const chain of [[], [allowedSelector], [excludedSelector, allowedSelector]]) {
+					const settings = Settings.isolated({
+						cyberModels: [allowedSelector],
+						modelRoles: { default: excludedSelector },
+					});
+					if (cyber) {
+						const allowlist = resolveCyberAllowlist(settings, [allowed, excluded]);
+						if (!allowlist) throw new Error("The test allowlist did not resolve.");
+						settings.applyCyberRoles("parent", allowlist);
+					}
+					const installed = { primary, chain };
+					installRetryFallbackRole(settings, "subagent:x", installed);
+					expect(getRetryFallbackRole(settings, "subagent:x"), JSON.stringify({ cyber, ...installed })).toEqual(
+						installed,
+					);
+				}
+			}
+		}
 	});
 
 	it("resolves chain keys by exact model, longest wildcard, role, then default", () => {

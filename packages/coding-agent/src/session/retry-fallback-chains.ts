@@ -199,9 +199,12 @@ export interface RetryFallbackRole {
 	chain: string[];
 }
 
-/** Reads the primary and chain installed for `role`, including an explicitly empty chain. */
+/**
+ * Reads the primary and chain installed for `role`, including an explicitly empty chain.
+ * The primary is the raw selector `installRetryFallbackRole` wrote, not its cyber-filtered value.
+ */
 export function getRetryFallbackRole(settings: Settings, role: string): RetryFallbackRole | undefined {
-	const primary = settings.getModelRole(role);
+	const primary = settings.getRawModelRoles()[role];
 	const chain = cfgRetryFallbackChains.get(settings)[role];
 	if (!primary || !Array.isArray(chain)) return undefined;
 	return { primary, chain };
