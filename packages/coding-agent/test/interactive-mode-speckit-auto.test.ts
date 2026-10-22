@@ -255,29 +255,46 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(texts()).toEqual(["/speckit.tasks"]);
 		});
 
-		it("in the tasks scope ends the run after tasks and starts nothing", async () => {
+		it("in the tasks scope runs analyze, then ends the run and starts nothing", async () => {
 			await start();
 			mode.toggleSpeckitAutoMode();
 			mode.toggleSpeckitAutoMode();
 			expect(saved()).toMatchObject({ enabled: true, scope: "tasks" });
-			expect(status.mock.calls.at(-1)?.[0]).toMatchObject({ stopAfter: "tasks" });
+			expect(status.mock.calls.at(-1)?.[0]).toMatchObject({ stopAfter: "analyze" });
 			await turnStarts("/speckit.tasks");
 			turnSettles();
 
 			await tick(3);
-			expect(classify).toHaveBeenCalledTimes(1);
-			expect(texts()).toEqual([]);
+			expect(texts()).toEqual(["/speckit.analyze"]);
+			await ownTurnRuns(submitted[0]);
+			turnSettles({ ...CLEAN, analyze: { critical: 0, high: 0 } });
+
+			await tick(3);
+			expect(classify).toHaveBeenCalledTimes(2);
+			expect(texts()).toEqual(["/speckit.analyze"]);
 			expect(saved()).toMatchObject({ enabled: true, scope: "tasks", run: undefined });
-			expect(mode.getSpeckitAutoDescription()).toBe("Speckit auto: on to tasks (waiting)");
+			expect(mode.getSpeckitAutoDescription()).toBe("Speckit auto: on to analyze (waiting)");
 
 			mode.toggleSpeckitAutoMode();
 			expect(saved()).toMatchObject({ enabled: false, scope: "full" });
 		});
 
-		it("ends the run when the cycle to the tasks scope finds a parked start past tasks", async () => {
+		it("in the tasks scope goes on to converge after the user starts implement", async () => {
 			await start();
-			await startRun("/speckit.tasks");
+			mode.setSpeckitAutoMode("tasks");
+			await turnStarts("/speckit.implement");
+			expect(status.mock.calls.at(-1)?.[0]).toMatchObject({ stopAfter: undefined });
+			expect(mode.getSpeckitAutoDescription()).toBe("Speckit auto: on (implement)");
 			turnSettles();
+
+			await tick(3);
+			expect(texts()).toEqual(["/speckit.converge"]);
+		});
+
+		it("ends the run when the cycle to the tasks scope finds a parked start past analyze", async () => {
+			await start();
+			await startRun("/speckit.analyze");
+			turnSettles({ ...CLEAN, analyze: { critical: 0, high: 0 } });
 			await tick();
 			expect(classify).toHaveBeenCalledTimes(1);
 
@@ -1313,7 +1330,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 
 	describe("startup default", () => {
 		const description = (scope: "full" | "tasks"): string =>
-			`Speckit auto: ${scope === "tasks" ? "on to tasks" : "on"} (waiting)`;
+			`Speckit auto: ${scope === "tasks" ? "on to analyze" : "on"} (waiting)`;
 
 		/** Sets `speckitAuto.defaultOnStartup` and installs `commands` where init loads them from. */
 		function configure(value: "off" | "full" | "tasks", commands: readonly string[] = PHASE_COMMANDS): void {

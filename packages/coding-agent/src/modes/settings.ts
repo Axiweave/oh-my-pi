@@ -1008,7 +1008,7 @@ export const cfgSpeckitAutoDefaultOnStartup = register({
 		options: [
 			{ value: "off", label: "Off" },
 			{ value: "full", label: "Full", description: "Run every phase" },
-			{ value: "tasks", label: "Tasks", description: "Stop after /speckit.tasks" },
+			{ value: "tasks", label: "Tasks", description: "Stop before /speckit.implement" },
 		],
 	},
 });

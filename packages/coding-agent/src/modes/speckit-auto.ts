@@ -43,10 +43,12 @@ export interface SpeckitRun {
 	/** A run turn started and has not settled yet. */
 	turnOpen: boolean;
 	paused: boolean;
+	/** The user started implement or converge: the run goes through every phase in any scope. */
+	editing: boolean;
 	hold?: SpeckitHold;
 }
 
-/** How far a run goes: `full` runs every phase; `tasks` ends the run before any phase after tasks. */
+/** How far a run goes: `full` runs every phase; `tasks` ends the run before implement unless the user starts it. */
 export type SpeckitAutoScope = "full" | "tasks";
 
 export interface SpeckitAutoState {
@@ -109,10 +111,20 @@ export const SPECKIT_SUCCESSOR: Record<SpeckitPhase, SpeckitPhase | undefined> =
 	implement: "converge",
 	converge: undefined,
 };
-/** The phases a `tasks` scope run may start. */
-const TASKS_SCOPE: Partial<Record<SpeckitPhase, true>> = { specify: true, clarify: true, plan: true, tasks: true };
+/** The phases a `tasks` scope run may start; the others edit code. */
+const TASKS_SCOPE: Partial<Record<SpeckitPhase, true>> = {
+	specify: true,
+	clarify: true,
+	plan: true,
+	tasks: true,
+	analyze: true,
+	remediation: true,
+};
 export const speckitScopeAllows = (scope: SpeckitAutoScope, phase: SpeckitPhase): boolean =>
 	scope === "full" || TASKS_SCOPE[phase] === true;
+/** The scope a run follows: a run the user moved into editing follows `full`. */
+export const speckitRunScope = (run: SpeckitRun, scope: SpeckitAutoScope): SpeckitAutoScope =>
+	run.editing ? "full" : scope;
 
 const DEFAULT_CONVERGE_ROUNDS = 3;
 /** Characters of the message end that the judge and the text cues read. */
@@ -154,6 +166,7 @@ export function newSpeckitRun(phase: SpeckitPhase, convergeLimit: number): Speck
 		autoAnswered: false,
 		turnOpen: true,
 		paused: false,
+		editing: !speckitScopeAllows("tasks", phase),
 	};
 }
 
@@ -183,6 +196,7 @@ function parseRun(data: unknown): SpeckitRun | undefined {
 		autoAnswered: run.autoAnswered === true,
 		turnOpen: run.turnOpen === true,
 		paused: run.paused === true,
+		editing: run.editing === true,
 		hold:
 			(saved?.kind === "user" || saved?.kind === "needs-you") && typeof saved.reason === "string"
 				? { kind: saved.kind, reason: saved.reason }
@@ -222,7 +236,7 @@ export function decideSpeckitStep(
 	verdict: SpeckitVerdict,
 	scope: SpeckitAutoScope = "full",
 ): SpeckitAction {
-	return limitToScope(decideFullStep(run, verdict), scope);
+	return limitToScope(decideFullStep(run, verdict), speckitRunScope(run, scope));
 }
 
 /** A start or remediation outside the scope ends the run; a notice before it drops, since its text announces that start. */

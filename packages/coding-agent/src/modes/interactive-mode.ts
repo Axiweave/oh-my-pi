@@ -454,6 +454,7 @@ import {
 	speckitEarlierText,
 	SPECKIT_SUCCESSOR,
 	type SpeckitAutoScope,
+	speckitRunScope,
 	speckitScopeAllows,
 	type SpeckitAction,
 	type SpeckitEndResult,
@@ -3697,7 +3698,10 @@ export class InteractiveMode implements InteractiveModeContext {
 						phase: run?.phase,
 						state,
 						reason: run?.hold?.reason,
-						stopAfter: this.#speckitScope === "tasks" ? "tasks" : undefined,
+						stopAfter:
+							(run ? speckitRunScope(run, this.#speckitScope) : this.#speckitScope) === "tasks"
+								? "analyze"
+								: undefined,
 					}
 				: undefined,
 		);
@@ -3910,7 +3914,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (target === this.#speckitScope) {
 			this.showStatus(
-				target === "tasks" ? "Speckit-auto mode on. Runs stop after /speckit.tasks." : "Speckit-auto mode on.",
+				target === "tasks" ? "Speckit-auto mode on. Runs stop before /speckit.implement." : "Speckit-auto mode on.",
 			);
 			return true;
 		}
@@ -3918,13 +3922,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#speckitScope = "tasks";
 			const run = this.#speckitRun;
 			const parked = this.#speckitParked;
-			// A parked start past tasks ends the run now; a run past tasks otherwise ends at its next check.
+			// An explicit cycle to tasks wins over an earlier user-started implement.
+			if (run) run.editing = false;
+			// A parked start past analyze ends the run now; a run past analyze otherwise ends at its next check.
 			if (run && parked && !speckitScopeAllows("tasks", parked.phase)) {
 				this.#bumpSpeckitGeneration();
 				this.#finishSpeckitRun(run, "planned");
 				return true;
 			}
-			this.showStatus("Speckit-auto mode on. Runs stop after /speckit.tasks.");
+			this.showStatus("Speckit-auto mode on. Runs stop before /speckit.implement.");
 			this.#saveSpeckitAutoState();
 			this.#updateSpeckitAutoStatus();
 			return true;
@@ -4008,7 +4014,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return undefined;
 		}
 		const successor = SPECKIT_SUCCESSOR[run.phase];
-		if (!successor || !speckitScopeAllows(this.#speckitScope, successor)) {
+		if (!successor || !speckitScopeAllows(speckitRunScope(run, this.#speckitScope), successor)) {
 			this.#finishSpeckitRun(run, successor ? "planned" : "stopped");
 			return undefined;
 		}
@@ -4032,8 +4038,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	getSpeckitAutoDescription(): string {
 		const run = this.#speckitRun;
 		if (this.speckitAutoEnabled) {
-			const on = this.#speckitScope === "tasks" ? "on to tasks" : "on";
-			return run ? `Speckit auto: ${run.paused ? "paused" : on} (${run.phase})` : `Speckit auto: ${on} (waiting)`;
+			const on = run ? speckitRunScope(run, this.#speckitScope) : this.#speckitScope;
+			const label = on === "tasks" ? "on to analyze" : "on";
+			return run
+				? `Speckit auto: ${run.paused ? "paused" : label} (${run.phase})`
+				: `Speckit auto: ${label} (waiting)`;
 		}
 		const blocker = this.#speckitAutoBlocker();
 		return blocker ? `Speckit auto: blocked by ${blocker} mode` : "Speckit auto: off";
@@ -4278,6 +4287,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				run = newSpeckitRun(phase, normalizeConvergeRounds(cfgSpeckitAutoConvergeRounds.get(this.settings)));
 				this.#speckitRun = run;
 			} else if (phase && run) {
+				// A phase command the user types past analyze starts editing: the run goes on as `full`.
+				if (!speckitScopeAllows("tasks", phase)) run.editing = true;
 				this.#enterSpeckitPhase(run, phase);
 			} else if (!run || run.paused) {
 				// A paused run stays paused through other turns.

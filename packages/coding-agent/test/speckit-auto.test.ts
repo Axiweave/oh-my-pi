@@ -19,6 +19,7 @@ import {
 	type SpeckitPhase,
 	type SpeckitRun,
 	speckitEarlierText,
+	speckitScopeAllows,
 	type SpeckitConverge,
 	type SpeckitVerdict,
 } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
@@ -188,40 +189,68 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 		expect(run.convergeRounds).toBe(limit);
 	});
 
-	it("in the tasks scope never starts a phase after tasks, and clean verdicts end planned after tasks", () => {
+	const scopeVerdict = (random: () => number): SpeckitVerdict => {
+		const pick = <T>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
+		return {
+			completed: pick([true, true, undefined]),
+			waits: pick([false, false, true]),
+			routine: random() < 0.5,
+			ready: pick([true, false]),
+			analyze: pick([
+				{ critical: 0, high: 0 },
+				{ critical: 1, high: 0 },
+				{ critical: 0, high: 2 },
+			] as const),
+			fixed: pick([true, false]),
+			converge: pick(["complete", "added", "none"] as const),
+		};
+	};
+
+	it("in the tasks scope never starts implement or converge, and clean verdicts end planned after analyze", () => {
 		const SCOPE_SEED = 0x5eed_0010;
 		const random = seeded(SCOPE_SEED);
-		const pick = <T>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
+		const starts = SPECKIT_PHASE_COMMANDS.filter(phase => speckitScopeAllows("tasks", phase));
 		for (let index = 0; index < RUNS; index++) {
-			// Any start phase: a user can type a later phase command in the tasks scope.
-			const run = newSpeckitRun(pick(SPECKIT_PHASE_COMMANDS), 3);
+			const run = newSpeckitRun(starts[Math.floor(random() * starts.length)]!, 3);
 			for (let step = 0; step < MAX_STEPS; step++) {
-				const verdict: SpeckitVerdict = {
-					completed: pick([true, true, undefined]),
-					waits: pick([false, false, true]),
-					routine: random() < 0.5,
-					ready: pick([true, false]),
-					analyze: pick([
-						{ critical: 0, high: 0 },
-						{ critical: 1, high: 0 },
-						{ critical: 0, high: 2 },
-					] as const),
-					fixed: pick([true, false]),
-					converge: pick(["complete", "added", "none"] as const),
-				};
-				const action = decideSpeckitStep(run, verdict, "tasks");
+				const action = decideSpeckitStep(run, scopeVerdict(random), "tasks");
 				const started =
 					action.kind === "start" ? action.phase : action.kind === "remediate" ? "remediation" : undefined;
-				if (started && !["specify", "clarify", "plan", "tasks"].includes(started)) {
+				if (started === "implement" || started === "converge") {
 					throw new Error(`started ${started}\nseed=${SCOPE_SEED} run=${index} history=${run.history.join(",")}`);
 				}
 				if (applyAction(run, action)) break;
 			}
 		}
 		const run = newSpeckitRun("specify", 3);
-		const clean: SpeckitVerdict = { completed: true, waits: false, routine: false, ready: true };
+		const clean: SpeckitVerdict = {
+			completed: true,
+			waits: false,
+			routine: false,
+			ready: true,
+			analyze: { critical: 0, high: 0 },
+		};
 		expect(drive(run, Array(10).fill(clean), "tasks")).toBe("planned");
-		expect(run.history).toEqual(["specify", "clarify", "plan", "tasks"]);
+		expect(run.history).toEqual(["specify", "clarify", "plan", "tasks", "analyze"]);
+	});
+
+	it("in the tasks scope decides like full once the user starts implement or converge", () => {
+		const EDIT_SEED = 0x5eed_0011;
+		const random = seeded(EDIT_SEED);
+		for (let index = 0; index < RUNS; index++) {
+			const run = newSpeckitRun(random() < 0.5 ? "implement" : "converge", 3);
+			for (let step = 0; step < MAX_STEPS; step++) {
+				const verdict = scopeVerdict(random);
+				const action = decideSpeckitStep(run, verdict, "tasks");
+				const full = decideSpeckitStep(run, verdict, "full");
+				if (!Bun.deepEquals(action, full)) {
+					throw new Error(
+						`tasks ${JSON.stringify(action)} != full ${JSON.stringify(full)}\nseed=${EDIT_SEED} run=${index} history=${run.history.join(",")}`,
+					);
+				}
+				if (applyAction(run, action)) break;
+			}
+		}
 	});
 });
 
@@ -242,6 +271,7 @@ describe("parseSpeckitAutoState", () => {
 		...newSpeckitRun("analyze", 2),
 		history: ["specify", "clarify", "plan", "tasks", "analyze"],
 		remediationRounds: 1,
+		editing: true,
 		hold: { kind: "needs-you", reason: "no readable analyze report" },
 	};
 
