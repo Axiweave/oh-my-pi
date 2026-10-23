@@ -1971,6 +1971,23 @@ export class CustomEditor extends Editor {
 		return true;
 	}
 
+	/** Toggle the `->` queue shorthand. A prefixed draft loses the prefix (and its header line);
+	 *  any other draft gains a `->` header line. The cursor keeps its place in the body. */
+	toggleQueuePrefix(): void {
+		const text = this.getText();
+		const lines = this.getLines();
+		const { line, col } = this.getCursor();
+		let cursor = col;
+		for (let i = 0; i < line; i++) cursor += lines[i]!.length + 1;
+		if (parseQueueShorthand(text) === undefined) {
+			this.applyHostEdit({ from: 0, to: 0, text: "->\n", cursor: cursor + 3, len: text.length });
+			return;
+		}
+		const body = queueShorthandBodyStart(text);
+		const head = body.line === 0 ? body.anchor : Math.min(lines[0]!.length + 1, text.length);
+		this.applyHostEdit({ from: 0, to: head, text: "", cursor: Math.max(0, cursor - head), len: text.length });
+	}
+
 	/** Promote a newly formed bare `->` / `=>` prefix to a reserved header line by opening the
 	 *  queue body beneath it. `hadBareQueuePrefix` is the pre-edit state: a prompt that was
 	 *  already just the prefix is left alone so the user can keep editing it. */

@@ -12,6 +12,7 @@
 - Added `Editor.insertLeadingKeyword` so hosts can place a standalone word at the start of a draft, after a leading slash command when one is present, without moving the body cursor. It takes the same optional `line` and `anchor`.
 - Added the `speckitAuto` status-line mode state (`SpeckitAutoStatus`, `StatusLineComponent.setSpeckitAutoStatus`). The `mode` segment shows `⏩ Speckit · <phase> · <state>` (new `icon.speckitAuto`: Nerd Font forward, ASCII `>>`) after vibe mode and before loop mode. Long phase names are short (`spec`, `clar`, `anlz`, `fix`, `impl`, `conv`). A running phase shows no state text. Other states show `on`, `next`, `you`, `stuck: <reason>`, or the pause icon. A paused run uses the warning color.
 - Added `SpeckitAutoStatus.stopAfter`. When it is set, the `mode` segment shows `Speckit→<phase>` instead of `Speckit`, for example `Speckit→analyze · plan`.
+- Added `CustomEditor.toggleQueuePrefix` and the `app.message.toggleQueue` keybinding (default `Alt+Q`, `Alt+Shift+Q`). The toggle adds a `->` header line to the draft, or removes any `->` / `=>` prefix. The cursor keeps its place in the body.
 
 ### Fixed
 

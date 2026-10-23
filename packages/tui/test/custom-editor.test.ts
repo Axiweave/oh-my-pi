@@ -253,6 +253,39 @@ describe("CustomEditor queue shorthand decoration", () => {
 		expect(editor.getText()).toBe("->\n/speckit.plan fix the bXug");
 	});
 
+	it("toggleQueuePrefix round-trips any unprefixed draft and keeps the cursor in the body", () => {
+		for (const draft of ["", "x", "fix the bug", "a\nb\n", "1. one\n2. two", "-x", "=y"]) {
+			const editor = new CustomEditor(getEditorTheme());
+			editor.setText(draft);
+			editor.toggleQueuePrefix();
+			expect(editor.getText()).toBe(`->\n${draft}`);
+			editor.toggleQueuePrefix();
+			expect(editor.getText()).toBe(draft);
+			editor.insertText("X");
+			expect(editor.getText()).toBe(`${draft}X`);
+		}
+	});
+
+	it("toggleQueuePrefix strips every prefix shape down to the body", () => {
+		const cases: Array<[string, string]> = [
+			["->", ""],
+			["=>", ""],
+			["->\n", ""],
+			["-> fix it", "fix it"],
+			["->fix it", "fix it"],
+			["=>\nfix\nit", "fix\nit"],
+			["->  \nfix", "fix"],
+		];
+		for (const [draft, body] of cases) {
+			const editor = new CustomEditor(getEditorTheme());
+			editor.setText(draft);
+			editor.toggleQueuePrefix();
+			expect(editor.getText()).toBe(body);
+			editor.insertText("X");
+			expect(editor.getText()).toBe(`${body}X`);
+		}
+	});
+
 	it("moves inline command recognition with a host keyword edit after an earlier render", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.setAutocompleteProvider(

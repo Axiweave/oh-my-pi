@@ -46,6 +46,7 @@ interface AppKeybindings {
 	"app.message.followUp": true;
 	"app.retry": true;
 	"app.message.dequeue": true;
+	"app.message.toggleQueue": true;
 	"app.clipboard.pasteImage": true;
 	"app.clipboard.pasteTextRaw": true;
 	"app.clipboard.copyLine": true;
@@ -193,6 +194,11 @@ export const KEYBINDINGS = {
 		// for character composition, leaving Alt+Up unreachable there.
 		defaultKeys: ["alt+up", "shift+up"],
 		description: "Dequeue message",
+	},
+	"app.message.toggleQueue": {
+		// Q for queue, next to Ctrl+Q (follow-up).
+		defaultKeys: ["alt+q", "alt+shift+q"],
+		description: "Toggle the -> queue prefix",
 	},
 	"app.clipboard.pasteImage": {
 		defaultKeys: getDefaultPasteImageKeys(),
