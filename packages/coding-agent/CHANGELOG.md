@@ -75,6 +75,7 @@
 ### Fixed
 
 - A subagent model override, the SDK `modelPatternAuthFallback`, and the job-widget model pick now move to the next model when an account is strict, disabled, or outside the session's pool. Before, the key check threw and the pick failed.
+- The headless browser now uses the `en-US` UI locale on every host, which matches its `en-US` stealth profile. Before, Chromium on a non-English macOS named controls in the host language, for example `提交` for a submit input.
 - A subagent with an empty fallback chain and a primary that cyber mode excludes now records the configured primary in its saved session, not the allowed model that replaced it. A revived subagent therefore gets the same routing again.
 - ACP mid-turn steering (`_session/steering`) now expands file slash commands before prompt templates and shows the command card, the same as other steers.
 - A `/loop` run no longer clears the draft text or attachments in the input box.

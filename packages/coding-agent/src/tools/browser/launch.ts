@@ -611,6 +611,12 @@ export function buildHeadlessLaunchArgs(
 		"--hide-scrollbars",
 		"--enable-features=WebMCPTesting,DevToolsWebMCPSupport",
 		`--window-size=${viewport.width},${viewport.height}`,
+		// The stealth profile reports `en-US`, so the browser's own UI strings
+		// (default `<input type=submit>` labels, validation messages) must not
+		// follow the host locale. Chromium reads `--lang` on Linux/Windows and the
+		// Cocoa `AppleLanguages` argument domain on macOS.
+		"--lang=en-US",
+		...(process.platform === "darwin" ? ["-AppleLanguages", "(en-US)"] : []),
 	];
 	if (features.ignoreHttpsErrors) launchArgs.push("--ignore-certificate-errors");
 	if (features.allowFileAccess) launchArgs.push("--allow-file-access-from-files");
