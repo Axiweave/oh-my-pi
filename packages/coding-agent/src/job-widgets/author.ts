@@ -192,7 +192,7 @@ async function resolveWidgetModel(
 		if (model) candidates.push(model);
 	}
 	for (const model of candidates) {
-		if (await registry.getApiKey(model, sessionId, { signal })) return model;
+		if (await registry.getApiKey(model, sessionId, { signal, skipMissing: true })) return model;
 	}
 	return undefined;
 }

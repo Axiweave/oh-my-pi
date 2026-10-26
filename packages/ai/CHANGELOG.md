@@ -30,6 +30,7 @@
 ### Fixed
 
 - Anthropic server compaction now accepts custom endpoints when `remoteCompaction.enabled` is true. Model capability checks and explicit opt-outs still apply.
+- `streamSimple` with an API key resolver now fails with the resolver's `MissingApiKeyError` (strict sign-out, disabled account, or restricted pool). Before, it wrapped that error in a `ConfigurationError` with the message "Failed to resolve API key". Other resolver errors are still wrapped.
 
 ## [18.13.0] - 2026-10-26
 

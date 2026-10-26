@@ -1924,7 +1924,7 @@ export async function resolveModelOverrideWithAuthFallback(
 	for (const pattern of patterns) {
 		const candidate = resolveModelOverride([pattern], lookupRegistry, settings);
 		if (!candidate.model) continue;
-		const key = await modelRegistry.getApiKey(candidate.model, sessionId);
+		const key = await modelRegistry.getApiKey(candidate.model, sessionId, { skipMissing: true });
 		if (key === kNoAuth || isAuthenticated(key)) {
 			return { ...candidate, authFallbackUsed: false };
 		}
@@ -1938,7 +1938,7 @@ export async function resolveModelOverrideWithAuthFallback(
 	if (modelsAreEqual(fallback.model, primary.model)) {
 		return { ...primary, authFallbackUsed: false };
 	}
-	const fallbackKey = await modelRegistry.getApiKey(fallback.model, sessionId);
+	const fallbackKey = await modelRegistry.getApiKey(fallback.model, sessionId, { skipMissing: true });
 	if (fallbackKey !== kNoAuth && !isAuthenticated(fallbackKey)) {
 		return { ...primary, authFallbackUsed: false };
 	}

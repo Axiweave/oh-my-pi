@@ -3263,7 +3263,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 				let authFallbackUsed = false;
 				if (options.modelPatternAuthFallback) {
-					const primaryKey = await modelRegistry.getApiKey(primary.model);
+					const primaryKey = await modelRegistry.getApiKey(primary.model, undefined, { skipMissing: true });
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
 						const fallback = parseModelPattern(
 							options.modelPatternAuthFallback,
@@ -3271,7 +3271,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							matchPreferences,
 						);
 						if (fallback.model) {
-							const fallbackKey = await modelRegistry.getApiKey(fallback.model);
+							const fallbackKey = await modelRegistry.getApiKey(fallback.model, undefined, {
+								skipMissing: true,
+							});
 							if (isAuthenticated(fallbackKey)) {
 								selectedModel = fallback.model;
 								selectedThinkingLevel = fallback.thinkingLevel;

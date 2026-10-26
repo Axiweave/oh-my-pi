@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { kNoAuth } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import {
@@ -345,4 +346,50 @@ test("accepts a keyless parent after requested credentials fail", async () => {
 	);
 	expect(resolved.model?.id).toBe("local-model");
 	expect(resolved.authFallbackUsed).toBe(true);
+});
+
+describe("a provider whose session may use no key", () => {
+	// ModelRegistry.getApiKey rejects for a strict session whose account was signed
+	// out, a disabled account, or an exhausted restricted pool — unless the caller
+	// passes `skipMissing`, which resolves undefined so the caller can move on.
+	function strictRegistry(blocked: ReadonlySet<string>) {
+		return {
+			getAvailable: () => [unauthedTaskModel, sharedModel, parentModel],
+			getApiKey: async (model: Model<Api>, _sessionId?: string, options?: { skipMissing?: boolean }) => {
+				if (!blocked.has(model.provider)) return "sk-test-token";
+				if (options?.skipMissing) return undefined;
+				throw new AIError.MissingApiKeyError(model.provider);
+			},
+		};
+	}
+
+	test("moves on to the next requested candidate", async () => {
+		const resolved = await resolveModelOverrideWithAuthFallback(
+			["opencode-zen/qwen3.6-plus-free", "deepseek/shared-id"],
+			undefined,
+			strictRegistry(new Set(["opencode-zen"])),
+		);
+		expect(resolved.model?.id).toBe("shared-id");
+		expect(resolved.authFallbackUsed).toBe(false);
+	});
+
+	test("falls back to the parent model", async () => {
+		const resolved = await resolveModelOverrideWithAuthFallback(
+			["opencode-zen/qwen3.6-plus-free"],
+			"deepseek/deepseek-v4-pro",
+			strictRegistry(new Set(["opencode-zen"])),
+		);
+		expect(resolved.model?.id).toBe("deepseek-v4-pro");
+		expect(resolved.authFallbackUsed).toBe(true);
+	});
+
+	test("keeps the requested model when the parent may use no key either", async () => {
+		const resolved = await resolveModelOverrideWithAuthFallback(
+			["opencode-zen/qwen3.6-plus-free"],
+			"deepseek/deepseek-v4-pro",
+			strictRegistry(new Set(["opencode-zen", "deepseek"])),
+		);
+		expect(resolved.model?.id).toBe("qwen3.6-plus-free");
+		expect(resolved.authFallbackUsed).toBe(false);
+	});
 });

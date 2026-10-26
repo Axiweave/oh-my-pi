@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ApiKeyResolution, ApiKeyResolveContext } from "@oh-my-pi/pi-ai";
 import { registerCustomApi, resolveApiKeyOnce, seedApiKeyResolver, unregisterCustomApis } from "@oh-my-pi/pi-ai";
-import { OAuthError, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { ConfigurationError, MissingApiKeyError, OAuthError, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { classify } from "@oh-my-pi/pi-ai/error/flags";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@oh-my-pi/pi-ai/types";
@@ -982,5 +982,60 @@ describe("streamSimple resolver auth retry", () => {
 
 		expect((caught as Error).message).toMatch(/No API key for provider/);
 		expect(attempts).toBe(0);
+	});
+
+	/** Drain `stream` and return what it failed with. */
+	async function failureOf(stream: AsyncIterable<unknown>): Promise<unknown> {
+		try {
+			for await (const _event of stream) {
+				// drain
+			}
+		} catch (error) {
+			return error;
+		}
+		throw new Error("stream did not fail");
+	}
+
+	it("keeps a missing-key refusal from the initial resolve as MissingApiKeyError", async () => {
+		let attempts = 0;
+		registerCustomApi(
+			API,
+			() => {
+				attempts += 1;
+				return new AssistantMessageEventStream();
+			},
+			SOURCE_ID,
+		);
+		// A strict session whose account was signed out, a disabled account, or an
+		// exhausted restricted pool: the resolver refuses with the reason.
+		const refusal = new MissingApiKeyError("test-provider");
+
+		const caught = await failureOf(
+			streamSimple(model(), context, {
+				apiKey: async () => {
+					throw refusal;
+				},
+			}),
+		);
+
+		expect(caught).toBe(refusal);
+		expect(attempts).toBe(0);
+	});
+
+	it("wraps any other initial resolver failure as a ConfigurationError with its cause", async () => {
+		registerCustomApi(API, () => new AssistantMessageEventStream(), SOURCE_ID);
+		const brokerDown = new Error("broker unreachable");
+
+		const caught = await failureOf(
+			streamSimple(model(), context, {
+				apiKey: async () => {
+					throw brokerDown;
+				},
+			}),
+		);
+
+		expect(caught).toBeInstanceOf(ConfigurationError);
+		expect((caught as Error).cause).toBe(brokerDown);
+		expect((caught as Error).message).toContain("broker unreachable");
 	});
 });

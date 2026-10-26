@@ -1318,8 +1318,14 @@ function streamSimpleRequest<TApi extends Api>(
 				credentialId = typeof resolved === "string" ? undefined : resolved?.credentialId;
 				oauthIdentity = typeof resolved === "string" ? undefined : resolved?.oauthIdentity;
 			} catch (error) {
-				// A thrown resolver is a broker/OAuth/network failure, not a missing
-				// key — surface the cause instead of masking it as "No API key".
+				// A missing-key refusal (strict sign-out, disabled account, restricted
+				// pool) keeps its type, as in `withAuth`. Any other thrown resolver is a
+				// broker/OAuth/network failure — surface the cause instead of masking it
+				// as "No API key".
+				if (error instanceof AIError.MissingApiKeyError) {
+					outer.fail(error);
+					return;
+				}
 				outer.fail(
 					new AIError.ConfigurationError(
 						`Failed to resolve API key for provider ${model.provider}: ${error instanceof Error ? error.message : String(error)}`,
