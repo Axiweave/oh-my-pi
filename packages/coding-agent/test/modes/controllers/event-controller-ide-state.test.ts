@@ -159,6 +159,7 @@ function makeTurnEndContext(
 		sessionManager: { getSessionName: () => "test-session" },
 		clearPinnedError: () => {},
 		ensureLoadingAnimation: () => {},
+		setWorkingMessage: () => {},
 		showError: () => {},
 		session,
 		viewSession,

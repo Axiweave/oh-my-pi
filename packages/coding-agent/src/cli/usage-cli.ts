@@ -257,7 +257,8 @@ function aggregateStatus(limits: UsageLimit[]): LimitStatus {
 
 function formatUnitValue(value: number, unit: UsageUnit): string {
 	if (unit === "usd") return `$${value.toFixed(2)}`;
-	return formatNumber(value);
+	// Metered balances (e.g. Codex spend-cap credits) arrive as fractional floats.
+	return formatNumber(Number.isInteger(value) ? value : Math.round(value * 100) / 100);
 }
 
 const UNIT_SUFFIX: Record<UsageUnit, string> = {
@@ -678,29 +679,33 @@ function policyEnabledProviders(
 	return providers;
 }
 
-function formatPolicyLine(
+/** Optional per-account JSON field on reports and accountsWithoutUsage; the text view's policy line renders it. */
+export type UsagePolicyDiagnostics = {
+	disabled?: true;
+	priority: number;
+	/** Present in `weight` mode or when the policy sets one. */
+	weight?: number;
+	/** Account-wide cap; absent when the account has none (`order` mode without `capPct`). */
+	capPct?: number;
+	capSource: "global" | "override" | "order";
+	windowCapPct?: Readonly<Record<string, number>>;
+	reclaimAbovePct?: number;
+} & (
+	| { state: "unknown"; remainingPct?: never }
+	| { state: "exhausted"; remainingPct?: number }
+	| { state: "eligible" | "inside-cap"; remainingPct: number }
+);
+
+function computePolicyDiagnostics(
 	provider: string,
 	identity: OAuthAccountIdentity,
 	limits: UsageLimit[] | undefined,
 	options: UsagePolicyDiagnosticsOptions,
-): string {
+): UsagePolicyDiagnostics {
 	const policy = options.getAccountPolicy(provider, identity);
 	const mode = options.getRoutingMode?.(provider) ?? "smart";
-	const weight = mode === "weight" || policy?.weight !== undefined ? ` · weight ${policy?.weight ?? 1}` : "";
-	const priority = `${policy?.disabled ? "disabled · " : ""}priority ${policy?.priority ?? 0}${weight}`;
 	const caps = capFor(policy, mode, options.globalReservePct);
 	const accountCap = caps(undefined);
-	const windowCaps = Object.entries(policy?.windowCapPct ?? {}).map(([windowId, pct]) => `${windowId} ${pct}%`);
-	const capSource =
-		windowCaps.length > 0
-			? windowCaps.join(", ")
-			: policy?.capPct !== undefined
-				? "override"
-				: accountCap === undefined
-					? "order"
-					: "global";
-	const reclaimLabel = policy?.reclaimAbovePct === undefined ? "" : ` · reclaim above ${policy.reclaimAbovePct}%`;
-	const capLabel = `${accountCap === undefined ? "none" : `${accountCap}%`} (${capSource})${reclaimLabel}`;
 	// `omp usage` has no model/session context, so report the conservative
 	// account-wide state from the most-consumed visible window. Actual routing
 	// still scopes limits and selection in AuthStorage.
@@ -710,14 +715,73 @@ function formatPolicyLine(
 	const usedFractions = (limits ?? [])
 		.map(resolveUsedFraction)
 		.filter((fraction): fraction is number => fraction !== undefined && Number.isFinite(fraction));
-	if (usedFractions.length === 0) {
-		const unmeasured = exhausted ? "exhausted" : "reserve unknown";
-		return `policy: ${priority} · cap ${capLabel} · ${unmeasured}`;
-	}
+	const windowCapPct = policy?.windowCapPct;
+	const base = {
+		...(policy?.disabled ? { disabled: true as const } : {}),
+		priority: policy?.priority ?? 0,
+		...(mode === "weight" || policy?.weight !== undefined ? { weight: policy?.weight ?? 1 } : {}),
+		...(accountCap === undefined ? {} : { capPct: accountCap }),
+		capSource: policy?.capPct !== undefined ? "override" : accountCap === undefined ? "order" : "global",
+		...(windowCapPct && Object.keys(windowCapPct).length > 0 ? { windowCapPct } : {}),
+		...(policy?.reclaimAbovePct === undefined ? {} : { reclaimAbovePct: policy.reclaimAbovePct }),
+	} as const;
+	if (usedFractions.length === 0) return { ...base, state: exhausted ? "exhausted" : "unknown" };
 	const remainingFraction = Math.max(0, 1 - Math.max(...usedFractions));
 	const state =
-		exhausted || remainingFraction <= 0 ? " · exhausted" : isOverCaps(limits ?? [], caps) ? " · inside cap" : "";
-	return `policy: ${priority} · cap ${capLabel}${state} · ${(remainingFraction * 100).toFixed(1)}% left`;
+		exhausted || remainingFraction <= 0 ? "exhausted" : isOverCaps(limits ?? [], caps) ? "inside-cap" : "eligible";
+	// Rounded exactly as the text view prints it (`toFixed(1)`), so JSON carries 9 rather than 8.999999999999996.
+	return { ...base, state, remainingPct: Number((remainingFraction * 100).toFixed(1)) };
+}
+
+function formatPolicyLine(policy: UsagePolicyDiagnostics): string {
+	const weight = policy.weight === undefined ? "" : ` · weight ${policy.weight}`;
+	const priority = `${policy.disabled ? "disabled · " : ""}priority ${policy.priority}${weight}`;
+	const windowCaps = Object.entries(policy.windowCapPct ?? {}).map(([windowId, pct]) => `${windowId} ${pct}%`);
+	const capSource = windowCaps.length > 0 ? windowCaps.join(", ") : policy.capSource;
+	const reclaimLabel = policy.reclaimAbovePct === undefined ? "" : ` · reclaim above ${policy.reclaimAbovePct}%`;
+	const capLabel = `${policy.capPct === undefined ? "none" : `${policy.capPct}%`} (${capSource})${reclaimLabel}`;
+	const prefix = `policy: ${priority} · cap ${capLabel}`;
+	if (policy.remainingPct === undefined) {
+		return `${prefix} · ${policy.state === "exhausted" ? "exhausted" : "reserve unknown"}`;
+	}
+	const state = policy.state === "exhausted" ? " · exhausted" : policy.state === "inside-cap" ? " · inside cap" : "";
+	return `${prefix}${state} · ${policy.remainingPct.toFixed(1)}% left`;
+}
+
+/** Add policy only where the text view displays it (providers with a configured account policy). */
+export function annotateUsagePolicy(
+	reports: UsageReport[],
+	unreported: UsageAccountIdentity[],
+	accounts: UsageAccountIdentity[],
+	options: UsagePolicyDiagnosticsOptions,
+): {
+	reports: (UsageReport & { policy?: UsagePolicyDiagnostics })[];
+	accountsWithoutUsage: (UsageAccountIdentity & { policy?: UsagePolicyDiagnostics })[];
+} {
+	const enabled = policyEnabledProviders(reports, accounts, options);
+	return {
+		reports: reports.map(report =>
+			enabled.has(report.provider)
+				? {
+						...report,
+						policy: computePolicyDiagnostics(
+							report.provider,
+							usageReportIdentity(report),
+							report.limits,
+							options,
+						),
+					}
+				: report,
+		),
+		accountsWithoutUsage: unreported.map(account =>
+			enabled.has(account.provider) && account.type === "oauth"
+				? {
+						...account,
+						policy: computePolicyDiagnostics(account.provider, accountOAuthIdentity(account), undefined, options),
+					}
+				: account,
+		),
+	};
 }
 
 /** `1 expires in 6h`, or `2 expire, soonest in 6h`. */
@@ -884,7 +948,7 @@ export function formatUsageBreakdown(
 			lines.push(`  ${formatAccountHeader(report, providerReports, index, nowMs, redaction)}`);
 			if (policyOptions && policyProviders.has(provider)) {
 				lines.push(
-					`      ${chalk.dim(formatPolicyLine(provider, usageReportIdentity(report), report.limits, policyOptions))}`,
+					`      ${chalk.dim(formatPolicyLine(computePolicyDiagnostics(provider, usageReportIdentity(report), report.limits, policyOptions)))}`,
 				);
 			} else if (defaultWeight) {
 				lines.push(`      ${chalk.dim("weight 1")}`);
@@ -909,7 +973,7 @@ export function formatUsageBreakdown(
 			lines.push(`  ${chalk.dim("○")} ${chalk.dim(`${label} — no usage data`)}`);
 			if (policyOptions && account.type === "oauth" && policyProviders.has(provider)) {
 				lines.push(
-					`      ${chalk.dim(formatPolicyLine(provider, accountOAuthIdentity(account), undefined, policyOptions))}`,
+					`      ${chalk.dim(formatPolicyLine(computePolicyDiagnostics(provider, accountOAuthIdentity(account), undefined, policyOptions)))}`,
 				);
 			} else if (defaultWeight && account.type === "oauth") {
 				lines.push(`      ${chalk.dim("weight 1")}`);
@@ -1676,10 +1740,16 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			: undefined;
 
 		if (cmd.json) {
-			// Drop the heavy provider-specific `raw` payload — same shape as the
-			// broker/gateway `/v1/usage` endpoints.
-			let trimmed = filteredReports.map(({ raw: _raw, ...rest }) => rest);
-			let unreportedAccounts = collectUnreportedAccounts(filteredReports, accounts);
+			// Compute policy against original identities before masking, then drop
+			// the heavy provider-specific `raw` payload.
+			const annotated = annotateUsagePolicy(
+				filteredReports,
+				collectUnreportedAccounts(filteredReports, accounts),
+				accounts,
+				policyOptions,
+			);
+			let trimmed = annotated.reports.map(({ raw: _raw, ...rest }) => rest);
+			let unreportedAccounts = annotated.accountsWithoutUsage;
 			if (redaction) {
 				trimmed = trimmed.map(report => redactReportForJson(report, redaction));
 				unreportedAccounts = unreportedAccounts.map(account => ({

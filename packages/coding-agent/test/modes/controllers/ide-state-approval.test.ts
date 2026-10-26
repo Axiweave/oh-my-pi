@@ -308,7 +308,7 @@ describe("Approval flow IDE session-state publishing", () => {
 		await execution;
 	});
 
-	it("an xd:// tier bypass reports nothing while an explicit prompt policy still reports needs-input", async () => {
+	it("an xd:// bypass reports nothing while an explicit prompt policy under another key still reports needs-input", async () => {
 		const harness = makeHarness();
 		const ui = await harness.init();
 		const runner = createRunner();
@@ -321,7 +321,7 @@ describe("Approval flow IDE session-state publishing", () => {
 			{},
 			undefined,
 			undefined,
-			context({ xdevApproved: true }),
+			context({ xdevPolicyKey: "dangerous_tool" }),
 		);
 		bypassed.executeDeferred.resolve();
 		await bypassExecution;
@@ -335,7 +335,7 @@ describe("Approval flow IDE session-state publishing", () => {
 			{},
 			undefined,
 			undefined,
-			context({ xdevApproved: true, approval: { dangerous_tool: "prompt" } }),
+			context({ xdevPolicyKey: "outer_device", approval: { dangerous_tool: "prompt" } }),
 		);
 		const dialog = await waitForApprovalDialog(harness.ctx);
 		expect(harness.fake.sent).toEqual(["needs-input"]);

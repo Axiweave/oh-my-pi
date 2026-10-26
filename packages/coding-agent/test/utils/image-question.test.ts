@@ -1,11 +1,17 @@
 import { describe, expect, it } from "bun:test";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, completeSimple, Model } from "@oh-my-pi/pi-ai";
 import type { ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveCyberAllowlist } from "@oh-my-pi/pi-coding-agent/config/cyber-mode";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { resolveImageQuestionModel } from "@oh-my-pi/pi-coding-agent/utils/image-question";
+import { CostCapError, CostGate } from "@oh-my-pi/pi-coding-agent/session/cost-gate";
+import {
+	askImageQuestion,
+	type ResolvedImageQuestionModel,
+	resolveImageQuestionModel,
+} from "@oh-my-pi/pi-coding-agent/utils/image-question";
+import { rejectionOf } from "../helpers/rejection";
 
 function makeProxyModel(id: string, compat?: ModelSpec["compat"]): Model<Api> {
 	return buildModel({
@@ -103,5 +109,42 @@ describe("resolveImageQuestionModel under cyber mode", () => {
 		expect(() =>
 			resolveImageQuestionModel(makeSession(textOnlyActive, [excludedVision, allowedText], settings)),
 		).toThrow("Unable to resolve a model for image questions.");
+	});
+});
+
+describe("askImageQuestion cost cap", () => {
+	it("sends no image question once the session is at its cost cap", async () => {
+		const model = makeProxyModel("vision");
+		const costGate = new CostGate(Settings.isolated({ "session.maxCost": 1 }), 1.2, () => {});
+		const base = makeSession(model, [model]);
+		const session = {
+			...base,
+			costGate,
+			modelRegistry: {
+				...base.modelRegistry,
+				getApiKey: async () => "test-key",
+				resolver: () => async () => "test-key",
+			},
+		} as unknown as ToolSession;
+		let calls = 0;
+		const completeImpl = (async () => {
+			calls++;
+			throw new Error("should not be called");
+		}) as unknown as typeof completeSimple;
+		const image = { resolvedPath: "/x.png", mimeType: "image/png", data: "AAAA", textNote: "", bytes: 3 };
+
+		const refused = await rejectionOf(
+			askImageQuestion(
+				session,
+				{ model, selectedPattern: "myproxy/vision" } as ResolvedImageQuestionModel,
+				image,
+				"what?",
+				undefined,
+				completeImpl,
+			),
+		);
+
+		expect(refused).toBeInstanceOf(CostCapError);
+		expect(calls).toBe(0);
 	});
 });

@@ -3,22 +3,24 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.12.6` on 2026-10-21.
+**Reviewed against:** `v18.13.0` on 2026-10-26.
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.12.6`. `bun check` passes.
-The merge had conflicts in 2 files. The resolutions preserve every fork decision and keep upstream behavior:
-- The first `model_change` entry of a new session keeps the fork's cyber and review-plan state. Upstream's deferred-pattern retry-role entry follows it and also records the cyber state.
-- The ACP builtin `/todo` HUD verbs (`expand`, `collapse`, `compact`) take upstream's failed result.
-Three auto-merged gaps were fixed:
-- Upstream's ACP `_session/steering` path (`joinActiveTurn`) now expands file commands and keeps the command card, as `steer()` does.
-- Upstream's new deferred-pattern test host gets the fork's `reviewPlanActive`.
-- Upstream lets an empty subagent chain reach `getRetryFallbackRole`, so a cyber-excluded primary persisted as its allowlisted substitute. The read-back now uses the raw role, as the install does.
-846 test files ran in separate processes, and 843 passed. The set covered every divergence check, every test file that both sides changed, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed.
-`sdk-tool-activation` (5 Cursor cases) also fails at the pre-merge commit.
-`model-registry` (`getApiKey does not mutate bundled github-copilot baseUrl`) relied on a key check moving the round-robin turn. That breaks the fork's key-check rule, which `454748ffa5` extended to `smart`. The code stays, and the test now spends the turn on the request path.
-`main-model-suggestions` timed out under load and passes alone.
-`bun run test:rs` passed all 3954 tests, with 5 skipped.
+The launcher targets this checkout and reports `18.13.0`. `bun check` passes.
+The merge had conflicts in 16 files. The resolutions preserve every fork decision and keep upstream behavior:
+- `omp usage --json` takes upstream's structured policy object in the fork's cap terms (`capPct`, `capSource`, `windowCapPct`, state `inside-cap`).
+- `resolveModelOverrideWithAuthFallback` keeps the fork's ordered loop, which already tries every configured pattern before the parent. Upstream's second loop was dropped.
+- Upstream's background-job wait row and Esc stop join the fork's `working` state during job waits.
+- The eval `agent()` and `workpool()` prompt keeps the fork's `model` parameter on upstream's new text.
+- `background_window_pointer` takes upstream's caller-read `EntryFront` on both the window and the desktop-root background paths.
+These merge gaps were fixed:
+- Upstream's live working label clamp now counts the fork's extra icon cell, so the wait row stays on one row.
+- The composer packet edits mark the Vim dot-repeat session untracked, as upstream's host edits do.
+- `/plan debate` uses upstream's renamed `runWithDetachedDraft`.
+- Fork tests follow upstream contracts: `xdevPolicyKey` replaces `xdevApproved`, the event-controller fake gets `setWorkingMessage`, and the `compaction-retry` routing case has history that a compaction can shrink (upstream now refuses a compaction that does not reduce context).
+- Bun 1.4.4 `bun link` fails with EEXIST over the `omp` wrapper link, so a repeat `bun run setup` failed. `scripts/setup.ts` now drops that link first.
+1465 test files ran in separate processes. The set covered every divergence check, every test file that both sides changed, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed. After the fixes, all pass except 3 that also fail at the pre-merge commit: `sdk-tool-activation` (5 Cursor cases), `eval/js-package-environment`, and `tools/browser-queries`.
+`bun run test:rs` passed all 4023 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
@@ -57,6 +59,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 ### Local source installation
 
 - **Decision:** Use this fork's checkout and `bun run setup` for installation, repair, and updates.
+- **Decision:** Before `bun link`, `scripts/setup.ts` removes a global `omp` symlink that points at this checkout's wrapper. Bun 1.4.4 refuses (EEXIST) to replace a bin that it did not create, and `scripts/link-omp.sh` then links the wrapper again.
 - **Why:** Upstream packages and installers replace the fork and omit its changes.
 - **Key paths:** `README.md`, `AGENTS.md`, `packages/coding-agent/README.md`, `scripts/setup.ts`, and `scripts/link-omp.sh`.
 - **Checks:** Follow the command-target and runtime checks in `README.md` under Install.
@@ -110,9 +113,10 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 ### Working message icon spacing
 
 - **Decision:** Leave one extra visual cell between the working icon and its message.
+- **Decision:** Upstream's live working label (the background-job wait row) is clamped to one row. The clamp counts the extra cell.
 - **Why:** Spinner and Escape glyphs otherwise touch the message in common terminal fonts.
 - **Key path:** `packages/coding-agent/src/modes/interactive-mode.ts`.
-- **Check:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts`.
+- **Checks:** `packages/coding-agent/test/interactive-mode-working-accent.test.ts` and `packages/coding-agent/test/interactive-mode-working-label.test.ts`.
 
 ### Working message timer
 
@@ -240,6 +244,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** A model array is an ordered preference. Explicit selectors take precedence over agent defaults and parent inheritance.
 - **Decision:** Inherit the live model route and effective thinking level when no explicit selector applies. Preserve agent-level effort precedence.
 - **Decision:** Explicit selectors must not remove OAuth account pools or cyber restrictions. Configured retry chains remain separate from selector preferences.
+- **Decision:** Upstream `v18.13.0` (#16640) added a loop that tries the remaining configured models before the parent. The fork's ordered loop in `resolveModelOverrideWithAuthFallback` already does this, so upstream's loop was dropped.
 - **Why:** Upstream commit `31876ff53e` removed per-call selectors. This fork keeps them for task-specific model choices.
 - **Key paths:** `packages/coding-agent/src/config/model-resolver.ts`, `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/task/`, `packages/coding-agent/src/eval/agent-bridge.ts`, `packages/coding-agent/src/eval/workpool-bridge.ts`, and `packages/coding-agent/src/vibe/runtime.ts`.
 - **Checks:** `packages/coding-agent/test/model-resolver.test.ts`, `packages/coding-agent/test/sdk-active-selector.test.ts`, `packages/coding-agent/test/task/task-schema.test.ts`, `packages/coding-agent/test/task/structured-subagent.test.ts`, `packages/coding-agent/test/sdk-model-selection.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, `packages/coding-agent/test/eval/agent-bridge-policy.test.ts`, `packages/coding-agent/test/eval/workpool-bridge.test.ts`, `packages/coding-agent/test/eval/prelude-agent.test.ts`, `packages/coding-agent/test/eval/prelude-runtime.test.ts`, `packages/coding-agent/test/eval/py/prelude.test.ts`, `packages/coding-agent/test/task/workpool.test.ts`, and `packages/coding-agent/test/interactive-mode-vibe-toggle.test.ts`.
@@ -281,6 +286,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** Expand file commands before prompt templates in steering and follow-up messages. This includes upstream `v18.12.6`'s ACP `_session/steering` admission (`AgentSession.joinActiveTurn`), which also keeps the command card. Queue shorthand and `/queue` also load registered skill commands.
 - **Decision:** Preserve command images and queue modes during compaction replay, including mixed and command-only queues.
 - **Decision:** Keep `app.message.toggleQueue` (default `Alt+Q`, `Alt+Shift+Q`). It calls `CustomEditor.toggleQueuePrefix`, which adds a `->` header line or removes an existing `->` / `=>` prefix, and keeps the body cursor.
+- **Decision:** A prompt or keyword packet edit marks the open Vim Insert session untracked, as upstream's `applyHostEdit` does. The dot-repeat record then comes from the final-text diff.
 - **Why:** Editors such as claude-code-ide.el drive the composer through these packets instead of terminal keystrokes, and a command queued for the next yield must stay visible and reach the message body. Upstream has no packet intake, no leading-command editor API, and no recognition ranges.
 - **Key paths:** `packages/tui/src/prompt/composer.ts`, `packages/tui/src/prompt/queue-input.ts`, `packages/tui/src/prompt/custom-editor.ts`, `packages/coding-agent/src/modes/controllers/input-controller.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/tui/src/components/editor.ts`, and `packages/tui/src/autocomplete.ts`.
 - **Checks:** `packages/coding-agent/test/startup-composer.test.ts`, `packages/tui/test/custom-editor.test.ts`, `packages/coding-agent/test/agent-session-queued-steer-delivery.test.ts`, `packages/coding-agent/test/input-controller-skill-queue.test.ts`, `packages/tui/test/editor.test.ts`, and `packages/coding-agent/test/agent-session-prompt-abort-race.test.ts` (`joinActiveTurn queues the same expanded steer as steer()`).
@@ -379,6 +385,7 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 
 - **Decision:** Keep the terminal title, the OSC 7501 run status, and the IDE session state at `working` while `AgentSession.hasPendingAsyncWork()` is true. This holds after the model yields with `awaitingAsyncWork`. Publish `idle`, `done`, or `failed` only after the work ends without a wake.
 - **Decision:** At such a yield (a clean stop with no tool call, own jobs still running, no result waiting to wake, main session in view, no active speckit-auto run), the TUI asks the `judge` role (purpose `needs-user`, 15 s limit) whether the reply needs the user. On yes, it runs the settled teardown at once: the loader stops, the title shows `done`, the IDE shows `needs-input`, and the completion notification fires. The verdict lasts until a main-session `agent_start`, or until the judged reply is no longer the session's last reply (`/new`, `/resume`, fork, branch). A queued message drops a late yes. Viewing a running subagent does not end it, and the later job drain does not run the teardown again. The wire `agent_end`, stop hooks, RPC, ACP, and print mode do not change.
+- **Decision:** Upstream `v18.13.0` names the wait on the working row and lets Esc end it (`stopAwaitingAsyncWork`). The fork keeps `working` while the row shows. Esc also aborts the `needs-user` judge and publishes IDE `idle`, because the interrupted teardown skips the settled IDE state.
 - **Why:** Upstream drops the title to idle and publishes `done` at the yield, so a session that still waits on a job looks finished. A fixed `working` state hides a question that the agent asks while a watcher runs.
 - **Key paths:** `packages/coding-agent/src/modes/controllers/event-controller.ts` (`#handleTurnEnd`, `#handleAgentEnd`, `#judgeJobWait`, `jobWaitNeedsInput`), `packages/coding-agent/src/session/unexpected-stop-classifier.ts` (`classifyNeedsUser`), `packages/coding-agent/src/prompts/judge/needs-user.json`, `packages/coding-agent/src/modes/controllers/extension-ui-controller.ts`, `packages/coding-agent/src/modes/controllers/session-focus-controller.ts`, and `packages/coding-agent/src/modes/interactive-mode.ts` (`#hidePlanReview`).
 - **Checks:** `packages/coding-agent/test/modes/controllers/event-controller-abort-guard.test.ts`, `packages/coding-agent/test/modes/controllers/event-controller-ide-state.test.ts`, and `packages/coding-agent/test/unexpected-stop-classifier.test.ts`.
@@ -389,10 +396,12 @@ The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple
 - **Decision:** A `strict` session never moves to another account. After its account is removed, it fails until that account signs in again or the provider's set of accounts changes. The hold persists with the session pin, survives a restart, follows subagents, and respects session account pools.
 - **Decision:** `getApiKey(model, { withinTurn })` in the agent loop and the gateway keeps the account for a request whose last message is a tool result. Key checks do not move rotation, weight, sink, or learn-once state. For an auth-gateway client scoped to accounts, the key lookups and the `strict` check use the client's credential session (`gatewayCredentialSessionId`), so all conversations on that client share one `stays` pin and one `strict` hold. This is upstream's client scope. `ModelRegistry.getApiKey` and `getApiKeyForProvider` throw unless the caller passes `{ skipMissing: true }`.
 - **Decision:** A credential peek never moves the round-robin cursor in any routing mode. Upstream scans stored credentials in order. In `smart` mode, a peek for a session starts at that session's hashed index.
+- **Decision:** `omp usage --json` reports each account's policy in cap terms: `disabled`, `priority`, `weight`, `capPct`, `capSource` (`global`, `override`, or `order`), `windowCapPct`, `reclaimAbovePct`, `state` (`unknown`, `exhausted`, `eligible`, or `inside-cap`), and `remainingPct`.
 - **Why:** The fork ports magpie's account pool policies. Upstream has only the `smart` selection.
 - **Key paths:** `packages/ai/src/auth/` (`routing.ts`, `select.ts`, `affinity.ts`, `rank.ts`, `rotation.ts`, `health.ts`), `packages/ai/src/auth-storage.ts`, `packages/ai/src/auth-gateway/dispatch.ts`, `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, `packages/coding-agent/src/session/credential-pin.ts`, `packages/coding-agent/src/session/turn-recovery.ts`, and `packages/coding-agent/src/config/model-registry.ts`.
-- **Checks:** `packages/ai/test/auth-storage-routing-modes.test.ts`, `packages/ai/test/auth-gateway-account-routing.test.ts`, `packages/ai/test/auth-gateway-within-turn.test.ts`, `packages/ai/test/auth-storage-session-restriction.test.ts`, `packages/agent/test/agent.test.ts`, `packages/coding-agent/test/credential-pin.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, `packages/coding-agent/test/sdk-credential-disabled-bridge.test.ts`, `packages/coding-agent/test/agent-session-retry-cap.test.ts`, and `packages/coding-agent/test/advisor-toggle.test.ts`.
+- **Checks:** `packages/ai/test/auth-storage-routing-modes.test.ts`, `packages/ai/test/auth-gateway-account-routing.test.ts`, `packages/ai/test/auth-gateway-within-turn.test.ts`, `packages/ai/test/auth-storage-session-restriction.test.ts`, `packages/agent/test/agent.test.ts`, `packages/coding-agent/test/credential-pin.test.ts`, `packages/coding-agent/test/sdk-subagent-auth-inheritance.test.ts`, `packages/coding-agent/test/sdk-credential-disabled-bridge.test.ts`, `packages/coding-agent/test/agent-session-retry-cap.test.ts`, `packages/coding-agent/test/advisor-toggle.test.ts`, and `packages/coding-agent/test/usage-cli.test.ts`.
 - **Known gap:** `packages/coding-agent/src/extensibility/skill-descriptions.ts`, `packages/coding-agent/src/eval/completion-bridge.ts`, and `packages/coding-agent/src/session/session-advisors.ts` send real requests with a key from `ModelRegistry.getApiKey`, which is a key check. Their requests therefore never move routing state. In `smart` without a session ID, they stay on one account until another request moves the turn. Follow-up: move them to `getApiKeyWithCredentialForProvider`.
+- **Known gap:** `resolveModelOverrideWithAuthFallback` and the `streamSimple` resolver catch in `packages/ai/src/stream.ts` predate this merge. The first calls `getApiKey` without `skipMissing`, so a strict, disabled, or restricted account throws instead of trying the next pattern. The second wraps `MissingApiKeyError` in `ConfigurationError`.
 - **Retire when:** Upstream ships equivalent per-provider routing and stays modes.
 
 ### /loop fixed interval and replace

@@ -705,6 +705,8 @@ describe("AgentSession retry delay cap", () => {
 			/** Make `small` promote to `large` on overflow (needs `contextPromotion.enabled`). */
 			promote?: boolean;
 			ttsr?: boolean;
+			/** Prompt text; a compaction that does not shrink the context is refused. */
+			prompt?: string;
 			arrange?: (session: AgentSession) => void;
 			/** User action that retries after the failure settles. */
 			resume?: (session: AgentSession) => Promise<unknown>;
@@ -721,6 +723,7 @@ describe("AgentSession retry delay cap", () => {
 			"context-promotion-incomplete": { failure: emptyLength, settings: promotion, promote: true },
 			"compaction-retry": {
 				failure: overflow,
+				prompt: `Use the tool. ${"Earlier context worth summarizing. ".repeat(40)}`,
 				settings: { "compaction.methodOrder": ["soft"], "compaction.keepRecentTokens": 1 },
 				arrange: () =>
 					vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
@@ -808,7 +811,7 @@ describe("AgentSession retry delay cap", () => {
 					await realWait(0, options);
 				});
 				try {
-					await current.prompt("Use the tool");
+					await current.prompt(scenario.prompt ?? "Use the tool");
 					await current.waitForIdle();
 					if (scenario.resume) {
 						await scenario.resume(current);
@@ -4006,17 +4009,20 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it.each([
-		["sub", 2],
-		["main", 1],
+		["sub", 2, 1],
+		["main", 2, 0],
 	] as const)(
-		"a %s session treats partial text as replay-%s for the Anthropic envelope error",
-		async (agentKind, expectedStreamCalls) => {
+		"a %s session recovers the partial-text Anthropic envelope error with %s stream call(s)",
+		async (agentKind, expectedStreamCalls, expectedRetryStarts) => {
 			// Production 2026-09-21: `scout` subagents whose stream died with
 			// "stream ended before message_stop" after streaming prose exited 1
 			// instead of retrying. A subagent's streamed text reaches no output
 			// sink (the parent only ever sees the yield), so it is replay-safe
-			// without the print-mode `setTextOutputCommitted(false)` dance; a
-			// main session keeps the veto because the text is already rendered.
+			// without the print-mode `setTextOutputCommitted(false)` dance and the
+			// provider replay retries it. A main session keeps the replay veto
+			// because the text is already rendered, so it continues from the
+			// partial answer instead — the same recovery a stall, an HTTP/2 reset
+			// or a gateway's in-band `error` frame gets, and no auto-retry.
 			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 			if (!model) {
 				throw new Error("Expected bundled Anthropic test model to exist");
@@ -4111,15 +4117,10 @@ describe("AgentSession retry delay cap", () => {
 			await session.waitForIdle();
 
 			expect(streamCalls).toBe(expectedStreamCalls);
-			expect(retryStartEvents).toHaveLength(expectedStreamCalls - 1);
+			expect(retryStartEvents).toHaveLength(expectedRetryStarts);
 			const last = lastAssistant(session);
-			if (agentKind === "sub") {
-				expect(last.stopReason).toBe("stop");
-				expect(last.content).toContainEqual({ type: "text", text: "recovered after envelope retry" });
-			} else {
-				expect(last.stopReason).toBe("error");
-				expect(last.errorMessage).toBe(envelopeError);
-			}
+			expect(last.stopReason).toBe("stop");
+			expect(last.content).toContainEqual({ type: "text", text: "recovered after envelope retry" });
 		},
 	);
 

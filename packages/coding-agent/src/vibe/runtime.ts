@@ -1305,6 +1305,7 @@ export class VibeSessionRegistry {
 		const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(session.settings));
 		return {
 			cwd: session.cwd,
+			costGate: session.costGate,
 			agent: record.agent,
 			task: message,
 			assignment: message,
@@ -1334,6 +1335,7 @@ export class VibeSessionRegistry {
 			inheritedSessionAgents: session.getSessionAgents?.(),
 			mcpManager: session.mcpManager ?? MCPManager.instance(),
 			contextFiles: session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
+			noContextFiles: session.noContextFiles,
 			skills: [...(session.skills ?? [])],
 			workspaceTree: session.workspaceTree,
 			promptTemplates: session.promptTemplates,
