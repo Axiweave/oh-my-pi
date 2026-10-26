@@ -89,7 +89,12 @@ describe("createAgentSession defaultInactive tool activation", () => {
 	beforeAll(async () => {
 		registryAuthDir = path.join(os.tmpdir(), `pi-sdk-tool-activation-auth-${Snowflake.next()}`);
 		fs.mkdirSync(registryAuthDir, { recursive: true });
-		modelRegistry = new ModelRegistry(await discoverAuthStorage(registryAuthDir));
+		// Bound to isolated settings: a bash tool call initializes the global
+		// `Settings` from the real agent dir, whose `disabledProviders` would then
+		// leak into every later key check through an unbound registry.
+		modelRegistry = new ModelRegistry(await discoverAuthStorage(registryAuthDir), undefined, {
+			settings: Settings.isolated(),
+		});
 	});
 
 	// Shared options for every session. `rules: []` and `workspaceTree` short-circuit

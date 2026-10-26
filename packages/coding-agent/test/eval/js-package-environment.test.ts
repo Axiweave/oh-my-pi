@@ -46,19 +46,23 @@ function canResolve(specifier: string, fromDir: string): boolean {
 }
 
 /**
- * Picks a package OMP itself resolves but the workspace cannot. Prefers `@babel/parser`; a stray
- * `node_modules` above the temp dir (e.g. `npm i` run in the Windows profile dir) legitimately puts
- * it in the workspace's ancestry, so fall back to any other package installed for OMP.
+ * Picks a package OMP itself resolves but neither the workspace nor its managed package environment
+ * can. Prefers `@babel/parser`; a stray `node_modules` above the temp dir or the agent dir (e.g.
+ * `npm i` run in the home or Windows profile dir) legitimately puts it in either ancestry, so fall
+ * back to any other package installed for OMP.
  */
 function ompOnlyPackage(workspaceDir: string): string {
 	const ompDir = path.resolve(import.meta.dir, "../..");
 	const repoModules = path.resolve(ompDir, "../../node_modules");
+	const environmentRoot = resolveJsPackageEnvironment(workspaceDir).root;
 	const candidates = [
 		"@babel/parser",
 		...fsSync.readdirSync(repoModules).filter(name => !name.startsWith(".") && !name.startsWith("@")),
 	];
-	const picked = candidates.find(name => canResolve(name, ompDir) && !canResolve(name, workspaceDir));
-	if (!picked) throw new Error(`Every OMP dependency is also resolvable from ${workspaceDir}`);
+	const picked = candidates.find(
+		name => canResolve(name, ompDir) && !canResolve(name, workspaceDir) && !canResolve(name, environmentRoot),
+	);
+	if (!picked) throw new Error(`Every OMP dependency is also resolvable from ${workspaceDir} or ${environmentRoot}`);
 	return picked;
 }
 

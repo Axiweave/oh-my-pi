@@ -19,7 +19,11 @@ These merge gaps were fixed:
 - `/plan debate` uses upstream's renamed `runWithDetachedDraft`.
 - Fork tests follow upstream contracts: `xdevPolicyKey` replaces `xdevApproved`, the event-controller fake gets `setWorkingMessage`, and the `compaction-retry` routing case has history that a compaction can shrink (upstream now refuses a compaction that does not reduce context).
 - Bun 1.4.4 `bun link` fails with EEXIST over the `omp` wrapper link, so a repeat `bun run setup` failed. `scripts/setup.ts` now drops that link first.
-1465 test files ran in separate processes. The set covered every divergence check, every test file that both sides changed, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed. After the fixes, all pass except 3 that also fail at the pre-merge commit: `sdk-tool-activation` (5 Cursor cases), `eval/js-package-environment`, and `tools/browser-queries`.
+1465 test files ran in separate processes. The set covered every divergence check, every test file that both sides changed, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed. After the fixes, all pass.
+Three of them also failed at the pre-merge commit because of host state. The fixes:
+- `sdk-tool-activation`: its shared `ModelRegistry` now uses isolated settings. A bash tool call starts the global `Settings` from the real agent dir, and that dir disables `cursor`.
+- `eval/js-package-environment`: the test package must not resolve from the managed environment either. A `~/node_modules` sits above the agent dir.
+- `tools/browser-queries`: headless Chromium now starts with the `en-US` UI locale (`--lang`, and `-AppleLanguages` on macOS), which matches the stealth profile. Before, a `zh-Hant` macOS named the submit input `提交`.
 `bun run test:rs` passed all 4023 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
 The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
