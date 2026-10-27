@@ -442,6 +442,27 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(saved()?.run?.hold?.kind).toBe("user");
 		});
 
+		it("checks the user's reply to the phase's question as an answer, and other free text as a side request", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			turnSettles({ ...CLEAN, waits: true });
+			await tick();
+			expect(saved()?.run?.hold?.kind).toBe("user");
+
+			await turnStarts("ok 1");
+			turnSettles({ ...CLEAN, completed: undefined });
+			await tick();
+			expect(classify.mock.calls.at(-1)?.[3]).toMatchObject({ request: "ok 1", answers: true });
+			expect(saved()?.run?.hold?.kind).toBe("needs-you");
+
+			// The run now holds on `needs-you`, not on a question, so the next free text is a side request.
+			await turnStarts("commit this");
+			turnSettles();
+			await tick();
+			expect(classify.mock.calls.at(-1)?.[3]).toMatchObject({ request: "commit this" });
+			expect(classify.mock.calls.at(-1)?.[3]?.answers).toBeUndefined();
+		});
+
 		it("forgets the own-turn marker after a failed own submit, so the same text from the user is a user turn", async () => {
 			await start();
 			await startRun("/speckit.implement");

@@ -870,6 +870,21 @@ describe("classifySpeckitTurn", () => {
 		expect(decideSpeckitStep(run, own)).toMatchObject({ kind: "start", phase: "converge" });
 	});
 
+	it("advances a plan turn that answers the phase's own question on the judge's word", async () => {
+		judgeSays(0.9);
+		const run = newSpeckitRun("plan", 3);
+		// The reply after `ok 1` in a held plan: no `plan.md`, and "failure" reads as an error cue.
+		const reply = message(
+			"Option 1 is now recorded in the spec's Clarifications, in `specs/llm-contract-gaps/spec.md`.\n\n" +
+				'- The scope line now says "every verified audit finding, except the dashboard answers after an OpenBao failure".\n\n' +
+				"The plan is complete, and no open questions remain.\n\nNext action: run `/speckit.tasks`.",
+		);
+		const side = await classifySpeckitTurn("plan", reply, deps, { request: "ok 1" });
+		expect(decideSpeckitStep(run, side)).toMatchObject({ kind: "hold", hold: { kind: "needs-you" } });
+		const answer = await classifySpeckitTurn("plan", reply, deps, { request: "ok 1", answers: true });
+		expect(decideSpeckitStep(run, answer)).toMatchObject({ kind: "start", phase: "tasks" });
+	});
+
 	it("keeps a readable analyze report or converge result completed when the judge reads it as a failure", async () => {
 		judgeSays(0.1, [], "added");
 		expect((await classifySpeckitTurn("analyze", message(text), deps)).completed).toBe(true);

@@ -46,6 +46,8 @@ export interface SpeckitRun {
 	/** The user started implement or converge: the run goes through every phase in any scope. */
 	editing: boolean;
 	hold?: SpeckitHold;
+	/** The open turn is the user's reply to a `user` hold, so it goes on with the phase instead of a side request. */
+	answering?: boolean;
 }
 
 /** How far a run goes: `full` runs every phase; `tasks` ends the run before implement unless the user starts it. */
@@ -236,6 +238,7 @@ function parseRun(data: unknown): SpeckitRun | undefined {
 			(saved?.kind === "user" || saved?.kind === "needs-you") && typeof saved.reason === "string"
 				? { kind: saved.kind, reason: saved.reason }
 				: undefined,
+		answering: run.answering === true || undefined,
 	};
 }
 
@@ -526,16 +529,17 @@ export type SpeckitJudgeDeps = ClassifyUnexpectedStopDeps;
  * completed, waits, routine, ready, fixed, and the converge result from one
  * judge call, or from the text fallback when the judge cannot answer. The
  * fallback has no converge result. `turn.request` is the user's own text that
- * opened the turn, if the user started it. `turn.earlier` is the text of the
- * turn's earlier assistant messages. Never throws.
+ * opened the turn, if the user started it. `turn.answers` marks that text as the
+ * reply to a question the phase asked. `turn.earlier` is the text of the turn's
+ * earlier assistant messages. Never throws.
  */
 export async function classifySpeckitTurn(
 	phase: SpeckitPhase,
 	message: AssistantMessage,
 	deps: SpeckitJudgeDeps,
-	turn: { request?: string; earlier?: string } = {},
+	turn: { request?: string; answers?: boolean; earlier?: string } = {},
 ): Promise<SpeckitVerdict> {
-	const { request, earlier } = turn;
+	const { request, answers: answersHold, earlier } = turn;
 	const verdict = readSpeckitTextVerdict(phase, message, earlier);
 	if (verdict.failed) return verdict;
 	// Only a user turn in analyze without a report can be a user-requested fix.
@@ -590,9 +594,10 @@ export async function classifySpeckitTurn(
 		return {
 			...verdict,
 			// A user turn can be a side request (a commit, a question): only the phase's own report proves the
-			// phase finished, so the judge alone cannot start the next phase.
+			// phase finished, so the judge alone cannot start the next phase. An answer to the phase's own
+			// question goes on with the phase, so its reply needs no report.
 			completed:
-				completed && request !== undefined && REPORT_CUES[phase] && verdict.completed !== true
+				completed && request !== undefined && !answersHold && REPORT_CUES[phase] && verdict.completed !== true
 					? undefined
 					: completed,
 			waits: yes("waits"),

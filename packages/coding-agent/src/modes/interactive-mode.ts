@@ -4281,7 +4281,11 @@ export class InteractiveMode implements InteractiveModeContext {
 					telemetry: this.session.agent.telemetry,
 					signal: abort.signal,
 				},
-				{ request: this.#speckitRequest, earlier: speckitEarlierText(this.session.messages, message) },
+				{
+					request: this.#speckitRequest,
+					answers: run.answering,
+					earlier: speckitEarlierText(this.session.messages, message),
+				},
 			);
 		} finally {
 			clearTimeout(timeout);
@@ -4408,6 +4412,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#bumpSpeckitGeneration();
 		run.turnOpen = true;
 		run.hold = undefined;
+		// The reply now belongs to the agent's phase, so it must show that phase's report.
+		run.answering = undefined;
 		if (!noted) this.showStatus(notice);
 		this.#saveSpeckitAutoState();
 		this.#updateSpeckitAutoStatus();
@@ -4467,7 +4473,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#speckitOwnTurn = undefined;
 			// Answer and continue turns keep the phase; a continue also keeps the request of the turn it resumes.
 			const resumes = text === renderSpeckitContinue(own.phase);
-			if (!resumes) this.#speckitRequest = undefined;
+			if (!resumes) {
+				this.#speckitRequest = undefined;
+				run.answering = undefined;
+			}
 			if (text === SPECKIT_ANSWER_TEXT) run.autoAnswered = true;
 			else if (!resumes) {
 				// Rounds count when their phase turn starts, so a dropped start costs none.
@@ -4481,6 +4490,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#bumpSpeckitGeneration();
 			const phase = parseSpeckitPhaseCommand(text)?.phase;
 			this.#speckitRequest = phase ? undefined : text;
+			// Free text while the phase waits on its own question answers it; the reply goes on with the phase.
+			const answers = !phase && run?.hold?.kind === "user";
 			if (phase === "specify" || (phase && !run)) {
 				run = this.#startSpeckitRun(phase);
 			} else if (phase && run) {
@@ -4491,6 +4502,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// A paused run stays paused through other turns.
 				return;
 			}
+			run.answering = answers || undefined;
 		}
 		run.turnOpen = true;
 		run.hold = undefined;
