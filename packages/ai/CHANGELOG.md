@@ -32,6 +32,13 @@
 - Anthropic server compaction now accepts custom endpoints when `remoteCompaction.enabled` is true. Model capability checks and explicit opt-outs still apply.
 - `streamSimple` with an API key resolver now fails with the resolver's `MissingApiKeyError` (strict sign-out, disabled account, or restricted pool). Before, it wrapped that error in a `ConfigurationError` with the message "Failed to resolve API key". Other resolver errors are still wrapped.
 
+## [18.13.1] - 2026-10-27
+
+### Fixed
+
+- Codex accounts whose spend cap is used up are no longer picked through credit overage or from usage cached before the upgrade ([#16973](https://github.com/can1357/oh-my-pi/pull/16973) by [@DusKing1](https://github.com/DusKing1))
+- Fixed Codex capacity 429s (`turn_rate_limit_exceeded`, "Codex is at capacity") reporting "Try again in ~N min" from the plan's usage-window reset, which made retries wait hours instead of the response's Retry-After ([#17087](https://github.com/can1357/oh-my-pi/pull/17087) by [@H4vC](https://github.com/H4vC))
+
 ## [18.13.0] - 2026-10-26
 
 ### Breaking Changes

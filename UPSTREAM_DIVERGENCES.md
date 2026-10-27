@@ -3,30 +3,16 @@
 This file records behavior that this fork intentionally keeps different from `can1357/oh-my-pi`.
 It is not a changelog. Each entry describes a current decision that upstream merges must preserve or retire explicitly.
 
-**Reviewed against:** `v18.13.0` on 2026-10-26.
+**Reviewed against:** `v18.13.1` on 2026-10-27.
 
 **Verification:** Source setup, launcher checks, and `omp --smoke-test` passed.
-The launcher targets this checkout and reports `18.13.0`. `bun check` passes.
-The merge had conflicts in 16 files. The resolutions preserve every fork decision and keep upstream behavior:
-- `omp usage --json` takes upstream's structured policy object in the fork's cap terms (`capPct`, `capSource`, `windowCapPct`, state `inside-cap`).
-- `resolveModelOverrideWithAuthFallback` keeps the fork's ordered loop, which already tries every configured pattern before the parent. Upstream's second loop was dropped.
-- Upstream's background-job wait row and Esc stop join the fork's `working` state during job waits.
-- The eval `agent()` and `workpool()` prompt keeps the fork's `model` parameter on upstream's new text.
-- `background_window_pointer` takes upstream's caller-read `EntryFront` on both the window and the desktop-root background paths.
-These merge gaps were fixed:
-- Upstream's live working label clamp now counts the fork's extra icon cell, so the wait row stays on one row.
-- The composer packet edits mark the Vim dot-repeat session untracked, as upstream's host edits do.
-- `/plan debate` uses upstream's renamed `runWithDetachedDraft`.
-- Fork tests follow upstream contracts: `xdevPolicyKey` replaces `xdevApproved`, the event-controller fake gets `setWorkingMessage`, and the `compaction-retry` routing case has history that a compaction can shrink (upstream now refuses a compaction that does not reduce context).
-- Bun 1.4.4 `bun link` fails with EEXIST over the `omp` wrapper link, so a repeat `bun run setup` failed. `scripts/setup.ts` now drops that link first.
-1465 test files ran in separate processes. The set covered every divergence check, every test file that both sides changed, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed. After the fixes, all pass.
-Three of them also failed at the pre-merge commit because of host state. The fixes:
-- `sdk-tool-activation`: its shared `ModelRegistry` now uses isolated settings. A bash tool call starts the global `Settings` from the real agent dir, and that dir disables `cursor`.
-- `eval/js-package-environment`: the test package must not resolve from the managed environment either. A `~/node_modules` sits above the agent dir.
-- `tools/browser-queries`: headless Chromium now starts with the `en-US` UI locale (`--lang`, and `-AppleLanguages` on macOS), which matches the stealth profile. Before, a `zh-Hant` macOS named the submit input `提交`.
-`bun run test:rs` passed all 4023 tests, with 5 skipped.
+The launcher targets this checkout and reports `18.13.1`. `bun check` passes.
+The merge had one conflict, in the `event-controller.ts` imports. The resolution keeps the fork's `classifyNeedsUser` import and takes upstream's `approvalRestrictions` import.
+Upstream now coalesces registry changes through a 100 ms observer timer. Three fork tests in `subagent-hud-render.test.ts` registered an agent before they started fake timers, so a real timer absorbed every later sync. They now start fake timers before the registration, as upstream's own tests do (`f0d4176cc8`).
+1053 test files ran in separate processes. The set covered every divergence check, every test file that upstream added or changed in this release, and the tests that import each source file that both sides changed. After the fix, all pass except `gc-cli.test.ts`. Its six APFS compression cases fail the same way at the pre-merge commit, and upstream did not change that path.
+`bun run test:rs` passed all 4024 tests, with 5 skipped.
 The full `bun run test` plan did not run for this merge.
-The build reports that this host lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
+Xcode now refuses to link until its license is accepted, so the checks used the Command Line Tools SDK (`DEVELOPER_DIR=/Library/Developer/CommandLineTools`). That SDK lacks Swift 6.4 with the macOS 27 SDK, so Apple Foundation Models support remains unavailable.
 
 ## Maintenance
 

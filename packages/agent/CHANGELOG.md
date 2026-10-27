@@ -8,6 +8,12 @@
 - `getApiKey(model, context)` in `AgentLoopConfig` and `AgentOptions` now gets `{ withinTurn }`. The loop sets `withinTurn: true` when the last message of the request is a tool result, so account routing can keep the turn's account.
 - Added `Agent.startNewTurn()`. The next request then gets `withinTurn: false`, so a retry after an error selects its account again under `stays: turn`.
 
+## [18.13.1] - 2026-10-27
+
+### Added
+
+- Hosts can distinguish safely paused agents from turns still draining with `Agent.isPaused` ([#17073](https://github.com/can1357/oh-my-pi/pull/17073) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+
 ## [18.13.0] - 2026-10-26
 
 ### Added

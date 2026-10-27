@@ -49,7 +49,12 @@ import {
 	USER_INTERRUPT_LABEL,
 } from "../../session/messages";
 import { classifyNeedsUser } from "../../session/unexpected-stop-classifier";
-import { formatApprovalPrompt, resolveApproval, sessionApprovalScope } from "../../tools/approval";
+import {
+	approvalRestrictions,
+	formatApprovalPrompt,
+	resolveApproval,
+	sessionApprovalScope,
+} from "../../tools/approval";
 import { getApprovalGrants } from "../../tools/approval-cache";
 import { recoverAskQuestions } from "../../tools/ask";
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -2058,7 +2063,14 @@ export class EventController {
 			mode === "always-ask-cached"
 				? getApprovalGrants(settings.getAgentDir(), this.ctx.sessionManager.getSessionId())
 				: undefined;
-		const approval = resolveApproval(tool, args, mode, userPolicies, grants);
+		const approval = resolveApproval(
+			tool,
+			args,
+			mode,
+			userPolicies,
+			grants,
+			approvalRestrictions(settings, this.ctx.sessionManager.getCwd()),
+		);
 		if (approval.policy !== "prompt") return undefined;
 		// Approved for this session: the wrapper runs it without asking.
 		const scope = sessionApprovalScope(approval, tool.name);
