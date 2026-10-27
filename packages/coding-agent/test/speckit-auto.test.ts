@@ -19,6 +19,7 @@ import {
 	type SpeckitPhase,
 	type SpeckitRun,
 	speckitEarlierText,
+	speckitPhaseLoad,
 	speckitScopeAllows,
 	type SpeckitConverge,
 	type SpeckitVerdict,
@@ -263,6 +264,95 @@ describe("parseSpeckitPhaseCommand", () => {
 		["run /speckit.plan", undefined],
 	] as const)("%s", (text, expected) => {
 		expect(parseSpeckitPhaseCommand(text)).toEqual(expected);
+	});
+});
+
+describe("speckitPhaseLoad", () => {
+	it.each([
+		['specify project command speckit.tasks --json > /tmp/tk.json; echo "exit=$?"', "tasks"],
+		["~/.local/bin/specify project command speckit-plan", "plan"],
+		["cd repo && specify project command 'speckit.analyze'", "analyze"],
+		["specify project command speckit.plan && specify project command speckit.tasks", "tasks"],
+		["grep -rn speckit.tasks .specify/", undefined],
+		["specify check", undefined],
+		["specify project command speckit.checklist", undefined],
+		["echo specify speckit.tasks", undefined],
+		["uvx --from spec-kit specify project command speckit.tasks", undefined],
+		["FOO=1 specify project command speckit.tasks", undefined],
+	] as const)("bash %s", (command, expected) => {
+		expect(speckitPhaseLoad("bash", { command })).toBe(expected);
+	});
+
+	it("never counts an async bash job, whose end comes before any output", () => {
+		expect(
+			speckitPhaseLoad("bash", { command: "specify project command speckit.tasks", async: true }),
+		).toBeUndefined();
+	});
+
+	it.each([
+		[".omp/commands/speckit.tasks.md", "tasks"],
+		[".omp/commands/speckit.plan.md:1-120", "plan"],
+		[".omp/commands/speckit.plan.md:raw:2-4", "plan"],
+		[".omp/commands/speckit.plan.md:-60", "plan"],
+		["skill://speckit-implement", "implement"],
+		["skill://speckit-clarify/SKILL.md", "clarify"],
+		[".omp/skills/speckit-converge/SKILL.md", "converge"],
+		["specs/017-x/tasks.md", undefined],
+		[".omp/commands/speckit.checklist.md", undefined],
+		[".omp/commands/notspeckit.tasks.md", undefined],
+	] as const)("read %s", (path, expected) => {
+		expect(speckitPhaseLoad("read", { path })).toBe(expected);
+	});
+
+	it.each(["write", "edit", "grep", "glob"])("never counts %s, so writes and searches stay out", tool => {
+		const args = {
+			command: "specify speckit.tasks",
+			path: ".omp/commands/speckit.tasks.md",
+			pattern: "speckit.tasks",
+		};
+		expect(speckitPhaseLoad(tool, args)).toBeUndefined();
+	});
+
+	it.each([undefined, null, "specify speckit.tasks", { command: 1 }, { path: ["speckit.tasks.md"] }])(
+		"rejects the argument shape %p",
+		args => {
+			expect(speckitPhaseLoad("bash", args)).toBeUndefined();
+			expect(speckitPhaseLoad("read", args)).toBeUndefined();
+		},
+	);
+
+	const SEED = 0x5eed_0017;
+	/** A shell command with one `specify … speckit<sep><phase>` segment among unrelated ones. */
+	function generate(random: () => number, head: string) {
+		const pick = <T>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
+		const phase = pick(SPECKIT_PHASE_COMMANDS);
+		const quote = pick(["", "'", '"']);
+		const word = `${quote}speckit${pick([".", "-"])}${phase}${quote}`;
+		const flags = Array.from({ length: Math.floor(random() * 3) }, () => pick(["--json", "-v", "--force"]));
+		const segment = [head, pick(["project command", "command", ""]), word, ...flags].filter(Boolean).join(" ");
+		const noise = () => Array.from({ length: Math.floor(random() * 3) }, () => pick(["echo x", "cd repo", "ls -la"]));
+		const parts = [...noise(), segment, ...noise()];
+		const command = parts.reduce((joined, part) => `${joined}${pick([";", " && ", " || ", " | ", "\n"])}${part}`);
+		return { phase, command };
+	}
+
+	it(`finds the phase of any wrapped specify call (seed ${SEED})`, () => {
+		const random = seeded(SEED);
+		for (let index = 0; index < 500; index++) {
+			const head = ["specify", "/usr/local/bin/specify", "~/.local/bin/specify"][index % 3]!;
+			const { phase, command } = generate(random, head);
+			if (speckitPhaseLoad("bash", { command }) !== phase) throw new Error(`seed=${SEED} case=${index}\n${command}`);
+		}
+	});
+
+	it(`ignores the same commands when specify is not the program (seed ${SEED + 1})`, () => {
+		const random = seeded(SEED + 1);
+		for (let index = 0; index < 500; index++) {
+			const head = ["grep -rn", "echo", "cat", "rg", "./specify.sh"][index % 5]!;
+			const { command } = generate(random, head);
+			if (speckitPhaseLoad("bash", { command }) !== undefined)
+				throw new Error(`seed=${SEED + 1} case=${index}\n${command}`);
+		}
 	});
 });
 

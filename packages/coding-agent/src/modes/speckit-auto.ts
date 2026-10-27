@@ -156,6 +156,41 @@ export function parseSpeckitPhaseCommand(text: string): { name: string; phase?: 
 	return { name, phase: SPECKIT_PHASE_COMMANDS.find(phase => phase === name) };
 }
 
+const PHASE_NAMES = SPECKIT_PHASE_COMMANDS.join("|");
+const LOAD_WORD = new RegExp(`^speckit[.-](${PHASE_NAMES})$`);
+const LOAD_PATH = new RegExp(
+	`(?:^|/)speckit\\.(${PHASE_NAMES})\\.md$|(?:^|/)speckit-(${PHASE_NAMES})/SKILL\\.md$|^skill://speckit-(${PHASE_NAMES})(?:/SKILL\\.md)?$`,
+);
+
+/**
+ * The phase whose instructions a tool call loads: a `specify … speckit.<phase>` shell command, or a `read` of
+ * `speckit.<phase>.md` or the `speckit-<phase>` skill. Searches and writes never count (contracts/phase-load.md).
+ */
+export function speckitPhaseLoad(toolName: string, args: unknown): SpeckitPhase | undefined {
+	if (typeof args !== "object" || args === null) return undefined;
+	const { command, path, async } = args as { command?: unknown; path?: unknown; async?: unknown };
+	if (toolName === "bash" && typeof command === "string" && async !== true) {
+		let phase: SpeckitPhase | undefined;
+		for (const segment of command.split(/;|&&|\|\||\||\n/)) {
+			const words = segment
+				.trim()
+				.split(/\s+/)
+				.map(word => word.replace(/^(['"])(.*)\1$/, "$2"));
+			if (words[0]?.split("/").at(-1) !== "specify") continue;
+			for (const word of words.slice(1)) {
+				const match = LOAD_WORD.exec(word)?.[1] as SpeckitPhase | undefined;
+				if (match) phase = match;
+			}
+		}
+		return phase;
+	}
+	if (toolName === "read" && typeof path === "string") {
+		const match = LOAD_PATH.exec(path.replace(/(?::(?:raw|conflicts|img|-?\d[\d+,-]*))+$/, ""));
+		return (match?.[1] ?? match?.[2] ?? match?.[3]) as SpeckitPhase | undefined;
+	}
+	return undefined;
+}
+
 export function newSpeckitRun(phase: SpeckitPhase, convergeLimit: number): SpeckitRun {
 	return {
 		phase,

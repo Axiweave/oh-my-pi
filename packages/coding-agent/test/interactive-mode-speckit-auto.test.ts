@@ -1617,4 +1617,218 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(notify).toHaveBeenCalledTimes(1);
 		});
 	});
+
+	describe("phase loads by the agent", () => {
+		let callId = 0;
+		/** One tool call of the main session: its start, then its end. */
+		async function toolRuns(toolName: string, args: Record<string, unknown>, isError = false): Promise<void> {
+			const toolCallId = `call-${++callId}`;
+			session.agent.emitExternalEvent({ type: "tool_execution_start", toolCallId, toolName, args });
+			session.agent.emitExternalEvent({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName,
+				result: TOOL_RESULT,
+				isError,
+			});
+			await flush();
+		}
+		const TOOL_RESULT = { content: [{ type: "text", text: "ok" }] };
+		const specifyCall = (phase: string) => ({ command: `specify project command speckit.${phase} --json` });
+		const commandRead = (phase: string) => ({ path: `.omp/commands/speckit.${phase}.md` });
+
+		it("follows the phase the agent starts, so the settle check reads it and the next phase follows", async () => {
+			await start();
+			await startRun("/speckit.plan");
+
+			await toolRuns("bash", specifyCall("tasks"));
+			expect(saved()?.run).toMatchObject({ phase: "tasks", history: ["plan", "tasks"] });
+			expect(mode.getSpeckitAutoDescription()).toBe("Speckit auto: on (tasks)");
+
+			turnSettles();
+			await tick(3);
+			expect(classify.mock.calls.at(-1)?.[0]).toBe("tasks");
+			expect(texts()).toEqual(["/speckit.analyze"]);
+		});
+
+		it("ignores failed loads, searches, and a load of the current phase", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			const shown = vi.spyOn(mode, "showStatus");
+
+			await toolRuns("bash", specifyCall("tasks"), true);
+			await toolRuns("bash", { command: "grep -rn speckit.tasks .specify/" });
+			await toolRuns("grep", { pattern: "speckit.tasks" });
+			await toolRuns("read", commandRead("plan"));
+
+			expect(saved()?.run).toMatchObject({ phase: "plan", history: ["plan"] });
+			expect(shown).not.toHaveBeenCalled();
+		});
+
+		it("does not count a remediation round for an analyze load inside analyze", async () => {
+			await start();
+			await startRun("/speckit.analyze");
+			await toolRuns("read", commandRead("analyze"));
+			expect(saved()?.run).toMatchObject({ phase: "analyze", history: ["analyze"], remediationRounds: 0 });
+		});
+
+		it("counts a converge round when the agent goes back to implement", async () => {
+			await start();
+			await startRun("/speckit.converge");
+			await toolRuns("read", commandRead("implement"));
+			expect(saved()?.run).toMatchObject({ phase: "implement", convergeRounds: 1 });
+		});
+
+		it("records every move of one turn in order, with one notice each", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			const shown = vi.spyOn(mode, "showStatus");
+
+			await toolRuns("bash", specifyCall("tasks"));
+			await toolRuns("read", { path: "skill://speckit-analyze" });
+			expect(shown.mock.calls.map(call => call[0])).toEqual([
+				"Speckit auto: the agent started tasks.",
+				"Speckit auto: the agent started analyze.",
+			]);
+
+			mode.setSpeckitAutoMode("off");
+			expect(shown.mock.calls.at(-1)?.[0]).toContain("Phases: plan → tasks → analyze.");
+		});
+
+		it("moves a paused run without ending the pause", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			mode.pauseSpeckitAuto();
+			await toolRuns("bash", specifyCall("tasks"));
+			expect(saved()?.run).toMatchObject({ phase: "tasks", paused: true });
+
+			turnSettles();
+			await tick(3);
+			expect(classify).not.toHaveBeenCalled();
+			expect(submitted).toHaveLength(0);
+		});
+
+		it("starts a run for a load in a free-text turn and checks it with the free text as the request", async () => {
+			await start();
+			mode.setSpeckitAutoMode("full");
+			await turnStarts("write the plan");
+			await toolRuns("read", commandRead("plan"));
+			expect(saved()?.run).toMatchObject({ phase: "plan", history: ["plan"] });
+
+			turnSettles();
+			await tick(3);
+			expect(classify.mock.calls.at(-1)?.[3]?.request).toBe("write the plan");
+			expect(texts()).toEqual(["/speckit.tasks"]);
+		});
+
+		it("treats a specify load as a new feature, and keeps a pause across it", async () => {
+			await start();
+			await startRun("/speckit.tasks");
+			const shown = vi.spyOn(mode, "showStatus");
+			await toolRuns("bash", specifyCall("specify"));
+			// One line: a second status right after the summary would replace it.
+			expect(shown).toHaveBeenCalledTimes(1);
+			expect(shown.mock.calls[0]?.[0]).toStartWith("Speckit auto run stopped. Phases: tasks.");
+			expect(shown.mock.calls[0]?.[0]).toEndWith("Speckit auto: the agent started specify.");
+			expect(saved()?.run).toMatchObject({ phase: "specify", history: ["specify"], paused: false });
+
+			mode.pauseSpeckitAuto();
+			await toolRuns("bash", specifyCall("specify"));
+			expect(saved()?.run).toMatchObject({ phase: "specify", history: ["specify"], paused: true });
+		});
+
+		it("keeps the moved phase across a resume", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			await toolRuns("bash", specifyCall("tasks"));
+			await reload(userText("/speckit.plan"), {
+				...createAssistantMessage("done"),
+				stopReason: "stop",
+				timestamp: ++clock,
+			});
+			expect(mode.getSpeckitAutoDescription()).toBe("Speckit auto: paused (tasks)");
+		});
+
+		describe("stop before implement", () => {
+			let streaming: boolean;
+			let abort: Mock<AgentSession["abort"]>;
+			beforeEach(() => {
+				streaming = true;
+				setStreaming(() => streaming);
+				abort = vi.spyOn(session, "abort").mockImplementation(async () => {
+					streaming = false;
+				});
+			});
+
+			it.each(["implement", "converge"])("stops the turn when the agent loads %s", async phase => {
+				await start();
+				mode.setSpeckitAutoMode("tasks");
+				await turnStarts("/speckit.analyze");
+				const shown = vi.spyOn(mode, "showStatus");
+
+				const toolCallId = `stop-${phase}`;
+				session.agent.emitExternalEvent({
+					type: "tool_execution_start",
+					toolCallId,
+					toolName: "read",
+					args: commandRead(phase),
+				});
+				session.agent.emitExternalEvent({
+					type: "tool_execution_end",
+					toolCallId,
+					toolName: "read",
+					result: TOOL_RESULT,
+				});
+				// The abort is requested inside the end event, before the agent loop can start another tool call.
+				expect(abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+				await flush();
+
+				expect(saved()?.run).toBeUndefined();
+				expect(shown).toHaveBeenCalledTimes(1);
+				expect(shown.mock.calls[0]?.[0]).toStartWith("Speckit auto run stopped before implement. Phases: analyze.");
+				expect(shown.mock.calls[0]?.[0]).toContain(`The agent started /speckit.${phase}`);
+				turnSettles();
+				await tick(3);
+				expect(submitted).toHaveLength(0);
+				expect(abort).toHaveBeenCalledTimes(1);
+			});
+
+			it("lets a run the user moved into editing go on to converge", async () => {
+				await start();
+				mode.setSpeckitAutoMode("tasks");
+				await turnStarts("/speckit.implement");
+				await toolRuns("read", commandRead("converge"));
+				expect(abort).not.toHaveBeenCalled();
+				expect(saved()?.run).toMatchObject({ phase: "converge", editing: true });
+			});
+
+			it("lets a paused run follow the user's own turn into implement", async () => {
+				await start();
+				mode.setSpeckitAutoMode("tasks");
+				await turnStarts("/speckit.analyze");
+				mode.pauseSpeckitAuto();
+				await toolRuns("read", commandRead("implement"));
+				expect(abort).not.toHaveBeenCalled();
+				expect(saved()?.run).toMatchObject({ phase: "implement", paused: true, editing: false });
+			});
+
+			it("starts an editing run for an implement load with no run, as a typed command does", async () => {
+				await start();
+				mode.setSpeckitAutoMode("tasks");
+				await turnStarts("implement the tasks");
+				await toolRuns("read", commandRead("implement"));
+				expect(abort).not.toHaveBeenCalled();
+				expect(saved()?.run).toMatchObject({ phase: "implement", editing: true });
+			});
+
+			it("moves a full-scope run into implement without making it a user editing run", async () => {
+				await start();
+				mode.setSpeckitAutoMode("full");
+				await turnStarts("/speckit.analyze");
+				await toolRuns("read", commandRead("implement"));
+				expect(abort).not.toHaveBeenCalled();
+				expect(saved()?.run).toMatchObject({ phase: "implement", editing: false });
+			});
+		});
+	});
 });

@@ -455,6 +455,7 @@ import {
 	SPECKIT_SUCCESSOR,
 	type SpeckitAutoScope,
 	speckitRunScope,
+	speckitPhaseLoad,
 	speckitScopeAllows,
 	type SpeckitAction,
 	type SpeckitEndResult,
@@ -1490,6 +1491,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#speckitRequest: string | undefined;
 	/** True from `agent_start` until the first `message_start`, which opens the turn. */
 	#speckitAwaitOpener = false;
+	/** Phase loads by the agent (contracts/phase-load.md), from a tool call's start to its end. */
+	#speckitPendingLoads = new Map<string, SpeckitPhase>();
 	/** When the latest phase turn started; a job started since then is the phase's own work. */
 	#speckitTurnStartedAt = 0;
 	/** The hold an unfinished phase reply gets if its own background jobs end without a wake reply. */
@@ -3827,10 +3830,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		TERMINAL.sendNotification({ title, body, type: "completion", actions: "focus" });
 	}
 
-	#finishSpeckitRun(run: SpeckitRun, result: SpeckitEndResult): void {
+	/** `note` joins the summary line: a status right after it would replace it. */
+	#finishSpeckitRun(run: SpeckitRun, result: SpeckitEndResult, note?: string): void {
 		this.#speckitRun = undefined;
 		const summary = formatSpeckitSummary(run, result);
-		this.showStatus(summary);
+		this.showStatus(note ? `${summary} ${note}` : summary);
 		this.#notifySpeckitAuto("Speckit auto finished", summary);
 		this.#saveSpeckitAutoState();
 		this.#updateSpeckitAutoStatus();
@@ -4229,9 +4233,71 @@ export class InteractiveMode implements InteractiveModeContext {
 		run.paused = false;
 	}
 
+	/** A typed `/speckit.specify`, or a phase start with no run: the old run ends (its summary gets `note`), a new one starts. */
+	#startSpeckitRun(phase: SpeckitPhase, note?: string): SpeckitRun {
+		if (this.#speckitRun) this.#finishSpeckitRun(this.#speckitRun, "stopped", note);
+		const run = newSpeckitRun(phase, normalizeConvergeRounds(cfgSpeckitAutoConvergeRounds.get(this.settings)));
+		this.#speckitRun = run;
+		return run;
+	}
+
+	/** The agent loaded a phase's instructions itself (data-model.md): the run follows it, or the tasks scope stops it. */
+	#applySpeckitPhaseLoad(phase: SpeckitPhase): void {
+		let run = this.#speckitRun;
+		if (
+			run &&
+			!run.paused &&
+			speckitRunScope(run, this.#speckitScope) === "tasks" &&
+			!speckitScopeAllows("tasks", phase)
+		) {
+			this.#bumpSpeckitGeneration();
+			this.#finishSpeckitRun(run, "planned", `The agent started /speckit.${phase}, so the turn stopped.`);
+			// The user's scope choice stops the turn, so no automatic resume may restart it.
+			if (this.session.isStreaming) void this.session.abort({ reason: USER_INTERRUPT_LABEL });
+			return;
+		}
+		const notice = `Speckit auto: the agent started ${phase}.`;
+		// The old run's summary carries the notice; a second status line would replace that summary.
+		let noted = false;
+		if (phase === "specify" || !run) {
+			// The user drives a paused run's turns, so a new feature started in one stays paused.
+			const paused = run?.paused ?? false;
+			noted = run !== undefined;
+			run = this.#startSpeckitRun(phase, notice);
+			run.paused = paused;
+		} else if (phase === run.phase) {
+			return;
+		} else {
+			if (phase === "implement" && run.phase === "converge") run.convergeRounds++;
+			// Unlike a typed command, the agent's move keeps the pause and the editing flag.
+			run.phase = phase;
+			run.history.push(phase);
+			run.autoAnswered = false;
+		}
+		// The same as a typed phase command: steps that the old phase left pending no longer apply.
+		this.#bumpSpeckitGeneration();
+		run.turnOpen = true;
+		run.hold = undefined;
+		if (!noted) this.showStatus(notice);
+		this.#saveSpeckitAutoState();
+		this.#updateSpeckitAutoStatus();
+	}
+
 	/** Research R4/R5: every turn start (`message_start`) moves the run; `agent_end` arms the tick. */
 	#handleSpeckitSessionEvent(event: AgentSessionEvent): void {
+		if (event.type === "tool_execution_end") {
+			// The end always drops the entry, so a load the mode no longer follows cannot stay behind.
+			const phase = this.#speckitPendingLoads.get(event.toolCallId);
+			this.#speckitPendingLoads.delete(event.toolCallId);
+			if (phase && this.speckitAutoEnabled && event.isError !== true) this.#applySpeckitPhaseLoad(phase);
+			return;
+		}
 		if (!this.speckitAutoEnabled) return;
+		if (event.type === "tool_execution_start") {
+			const phase = speckitPhaseLoad(event.toolName, event.args);
+			if (phase) this.#speckitPendingLoads.set(event.toolCallId, phase);
+			return;
+		}
 		if (event.type === "agent_end") {
 			this.#armSpeckitTick();
 			return;
@@ -4286,9 +4352,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const phase = parseSpeckitPhaseCommand(text)?.phase;
 			this.#speckitRequest = phase ? undefined : text;
 			if (phase === "specify" || (phase && !run)) {
-				if (run) this.#finishSpeckitRun(run, "stopped");
-				run = newSpeckitRun(phase, normalizeConvergeRounds(cfgSpeckitAutoConvergeRounds.get(this.settings)));
-				this.#speckitRun = run;
+				run = this.#startSpeckitRun(phase);
 			} else if (phase && run) {
 				// A phase command the user types past analyze starts editing: the run goes on as `full`.
 				if (!speckitScopeAllows("tasks", phase)) run.editing = true;
