@@ -12,6 +12,7 @@ import {
 	parseSpeckitPhaseCommand,
 	readSpeckitTextVerdict,
 	SPECKIT_PHASE_COMMANDS,
+	SPECKIT_REMEDIATION_ROUNDS,
 	type SpeckitAction,
 	type SpeckitAutoScope,
 	type SpeckitAutoState,
@@ -128,6 +129,7 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 						{ critical: 2, high: 1 },
 					] as const),
 					fixed: pick([true, false, undefined]),
+					offers: random() < 0.3,
 					converge: pick(["complete", "added", "added", "added", "none", undefined] as const),
 				};
 				sequence.push(verdict);
@@ -188,6 +190,31 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 		expect(drive(run, Array(40).fill(added))).toBe("open-tasks");
 		expect(count(run, "converge")).toBe(converges);
 		expect(run.convergeRounds).toBe(limit);
+	});
+
+	it("remediates an analyze offer to make its own edits up to the round limit, then holds for the user", () => {
+		const offer: SpeckitVerdict = {
+			completed: true,
+			waits: true,
+			routine: false,
+			analyze: { critical: 0, high: 0 },
+			offers: true,
+		};
+		const done: SpeckitVerdict = { completed: true, waits: false, routine: false };
+		const run = newSpeckitRun("analyze", 3);
+		const actions: SpeckitAction[] = [];
+		for (const verdict of [offer, done, offer, done, offer]) {
+			const action = decideSpeckitStep(run, verdict);
+			actions.push(action);
+			applyAction(run, action);
+		}
+		expect(actions.map(action => action.kind)).toEqual(["remediate", "start", "remediate", "start", "hold"]);
+		expect(actions.at(-1)).toMatchObject({ hold: { kind: "user" } });
+		expect(run.remediationRounds).toBe(SPECKIT_REMEDIATION_ROUNDS);
+
+		// A real decision, even one that asks to proceed with the recommendation, still goes to the user.
+		const decision = { ...offer, routine: true, offers: false };
+		expect(decideSpeckitStep(newSpeckitRun("analyze", 3), decision)).toMatchObject({ hold: { kind: "user" } });
 	});
 
 	const scopeVerdict = (random: () => number): SpeckitVerdict => {
@@ -653,7 +680,7 @@ describe("classifySpeckitTurn", () => {
 	it("takes completed, waits, and routine from the judge and the report counts from the text", async () => {
 		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
 			judge: async () => ({
-				answers: { completed: { noul: 0.9 }, waits: { noul: 0.1 }, routine: { noul: 0.5 } },
+				answers: { completed: { noul: 0.9 }, waits: { noul: 0.1 }, routine: { noul: 0.5 }, offers: { noul: 0.1 } },
 			}),
 		} as unknown as judgment.ChainJudge);
 		expect(await classifySpeckitTurn("analyze", message(text), deps)).toMatchObject({
@@ -770,6 +797,7 @@ describe("classifySpeckitTurn", () => {
 						completed: { noul: completed },
 						waits: { noul: 0.1 },
 						routine: { noul: 0.1 },
+						offers: { noul: 0.1 },
 						converge: { type: "choice", choice: converge },
 					},
 				};

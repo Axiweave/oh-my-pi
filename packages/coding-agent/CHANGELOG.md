@@ -75,6 +75,7 @@
 
 ### Fixed
 
+- Speckit-auto mode now fixes the analyze findings itself when analyze asks leave to make the edits that its report recommends, for example "Do you want me to write the edits for I1, I2, I3 and C1?". The mode starts a remediation round that makes those edits to the feature documents and then runs `/speckit.analyze` again. Before, the run held with "answer the question". The offer counts toward the limit of 2 remediation rounds, and after that limit the run holds for you. A question that asks you to choose an option or to decide scope still holds.
 - Speckit-auto mode now continues the phase when you answer a question that the phase asked. Before, the mode treated your answer as a side request. A reply such as "The plan is complete. Next action: run `/speckit.tasks`." then held with "cannot tell if the phase finished", because it did not name `plan.md`. Now the judge's answer decides, as for a turn that the mode starts. Other free text still needs the phase's own report.
 - A subagent model override, the SDK `modelPatternAuthFallback`, and the job-widget model pick now move to the next model when an account is strict, disabled, or outside the session's pool. Before, the key check threw and the pick failed.
 - The headless browser now uses the `en-US` UI locale on every host, which matches its `en-US` stealth profile. Before, Chromium on a non-English macOS named controls in the host language, for example `提交` for a submit input.

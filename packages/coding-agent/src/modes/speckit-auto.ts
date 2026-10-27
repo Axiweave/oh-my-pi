@@ -73,6 +73,8 @@ export interface SpeckitVerdict {
 	analyze?: { critical: number; high: number } | "unreadable";
 	/** Analyze only, judge only: the user asked to fix the analyze findings and the reply reports the fixes. */
 	fixed?: boolean;
+	/** Analyze only, judge only: the only blocking question offers to make the report's own fixes to the feature documents. */
+	offers?: boolean;
 	/** Converge only, judge only. */
 	converge?: SpeckitConverge;
 }
@@ -291,6 +293,15 @@ function decideFullStep(run: SpeckitRun, verdict: SpeckitVerdict): SpeckitAction
 	const { phase } = run;
 	if (verdict.failed) return hold("needs-you", verdict.failed);
 	if (verdict.waits === true) {
+		// Analyze asking leave to make the fixes its report recommends is a remediation round, not a user decision.
+		if (
+			phase === "analyze" &&
+			verdict.offers &&
+			verdict.completed !== false &&
+			run.remediationRounds < SPECKIT_REMEDIATION_ROUNDS
+		) {
+			return { kind: "remediate" };
+		}
 		if (!ASKS_USER[phase] && verdict.routine && !run.autoAnswered) return { kind: "answer" };
 		return hold("user", "answer the question");
 	}
@@ -544,6 +555,8 @@ export async function classifySpeckitTurn(
 	if (verdict.failed) return verdict;
 	// Only a user turn in analyze without a report can be a user-requested fix.
 	const askFixed = request !== undefined && verdict.analyze === "unreadable";
+	// Only a readable analyze report has fixes of its own to offer.
+	const askOffers = typeof verdict.analyze === "object";
 	try {
 		const judge = resolveJudge({
 			settings: deps.settings,
@@ -561,7 +574,11 @@ export async function classifySpeckitTurn(
 			if (id === "converge") {
 				if (phase === "converge")
 					questions[id] = { type: "choice", instructions: template, criteria: CONVERGE_OUTCOMES };
-			} else if ((id !== "ready" || phase === "clarify") && (id !== "fixed" || askFixed)) {
+			} else if (
+				(id !== "ready" || phase === "clarify") &&
+				(id !== "fixed" || askFixed) &&
+				(id !== "offers" || askOffers)
+			) {
 				questions[id] = {
 					type: "noul",
 					instructions: prompt.render(template, { phase, blocking: JUDGE_BLOCKING }),
@@ -606,6 +623,7 @@ export async function classifySpeckitTurn(
 			routine: yes("routine") && verdict.completed !== false && !offersOtherPhase(phase, tail),
 			ready: phase === "clarify" ? yes("ready") : undefined,
 			...(askFixed ? { fixed: yes("fixed") } : {}),
+			...(askOffers ? { offers: yes("offers") } : {}),
 			...(converge !== undefined ? { converge } : {}),
 		};
 	} catch (error) {
