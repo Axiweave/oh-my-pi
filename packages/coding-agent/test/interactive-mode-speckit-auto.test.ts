@@ -463,6 +463,27 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(classify.mock.calls.at(-1)?.[3]?.answers).toBeUndefined();
 		});
 
+		it("checks free text typed while paused after an answer as a side request on resume", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			turnSettles({ ...CLEAN, waits: true });
+			await tick();
+			await turnStarts("ok 1");
+			turnSettles({ ...CLEAN, completed: undefined });
+			await tick();
+			expect(saved()?.run?.answering).toBe(true);
+
+			mode.pauseSpeckitAuto();
+			await turnStarts("commit this");
+			turnSettles();
+			// The saved run forgets the answer at once, so a reload does not bring it back.
+			expect(saved()?.run?.answering).toBeUndefined();
+			await mode.handleSpeckitAutoCommand("resume");
+			await tick(2);
+			expect(classify.mock.calls.at(-1)?.[3]).toMatchObject({ request: "commit this" });
+			expect(classify.mock.calls.at(-1)?.[3]?.answers).toBeUndefined();
+		});
+
 		it("forgets the own-turn marker after a failed own submit, so the same text from the user is a user turn", async () => {
 			await start();
 			await startRun("/speckit.implement");

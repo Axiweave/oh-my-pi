@@ -4491,7 +4491,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			const phase = parseSpeckitPhaseCommand(text)?.phase;
 			this.#speckitRequest = phase ? undefined : text;
 			// Free text while the phase waits on its own question answers it; the reply goes on with the phase.
-			const answers = !phase && run?.hold?.kind === "user";
+			const answers = !phase && run?.hold?.kind === "user" ? true : undefined;
+			// Every user turn replaces the mark, also in a paused run: resume checks this turn's reply.
+			const marked = run !== undefined && run.answering !== answers;
+			if (run) run.answering = answers;
 			if (phase === "specify" || (phase && !run)) {
 				run = this.#startSpeckitRun(phase);
 			} else if (phase && run) {
@@ -4499,10 +4502,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (!speckitScopeAllows("tasks", phase)) run.editing = true;
 				this.#enterSpeckitPhase(run, phase);
 			} else if (!run || run.paused) {
-				// A paused run stays paused through other turns.
+				// A paused run stays paused through other turns; a changed mark is saved, so a reload keeps it.
+				if (marked) this.#saveSpeckitAutoState();
 				return;
 			}
-			run.answering = answers || undefined;
 		}
 		run.turnOpen = true;
 		run.hold = undefined;
