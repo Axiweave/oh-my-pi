@@ -8,6 +8,12 @@
 - `getApiKey(model, context)` in `AgentLoopConfig` and `AgentOptions` now gets `{ withinTurn }`. The loop sets `withinTurn: true` when the last message of the request is a tool result, so account routing can keep the turn's account.
 - Added `Agent.startNewTurn()`. The next request then gets `withinTurn: false`, so a retry after an error selects its account again under `stays: turn`.
 
+## [18.13.2] - 2026-10-27
+
+### Added
+
+- `AgentTool` gained the optional `handlesToolInterrupt` flag: an interruptible tool that sets it (such as `wait`) still runs, without blocking, when a loop-owned interrupt is already queued, so it can drain the queued wake event instead of being skipped; user cancellation still skips it ([#17174](https://github.com/can1357/oh-my-pi/pull/17174) by [@alphastorm](https://github.com/alphastorm))
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

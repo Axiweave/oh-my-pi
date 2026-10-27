@@ -2445,10 +2445,12 @@ export class Editor implements Component, Focusable {
 			// Word left
 			this.#resetKillSequence();
 			this.#moveWordBackwards();
+			this.#dismissAutocomplete();
 		} else if (kb.matchesCanonical(canonical, "tui.editor.cursorWordRight")) {
 			// Word right
 			this.#resetKillSequence();
 			this.#moveWordForwards();
+			this.#dismissAutocomplete();
 		}
 		// Arrow keys
 		else if (kb.matchesCanonical(canonical, "tui.editor.cursorUp")) {
@@ -4010,6 +4012,9 @@ export class Editor implements Component, Focusable {
 		const dropSpace = this.#hasProvisionalSpace();
 		this.#historyIndex = -1; // Exit history browsing mode
 		this.#resetKillSequence();
+		// The cursor leaves the trigger token's line, so any open popup is stale:
+		// keeping it would float on the new line and Enter would submit past it.
+		this.#dismissAutocomplete();
 		this.#recordUndoState();
 
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
@@ -4311,23 +4316,27 @@ export class Editor implements Component, Focusable {
 
 	#moveToLineStart(): void {
 		this.#resetKillSequence();
+		this.#dismissAutocomplete();
 		this.#setCursorCol(0);
 	}
 
 	#moveToLineEnd(): void {
 		this.#resetKillSequence();
+		this.#dismissAutocomplete();
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 		this.#setCursorCol(currentLine.length);
 	}
 
 	#moveToMessageStart(): void {
 		this.#resetKillSequence();
+		this.#dismissAutocomplete();
 		this.#state.cursorLine = 0;
 		this.#setCursorCol(0);
 	}
 
 	#moveToMessageEnd(): void {
 		this.#resetKillSequence();
+		this.#dismissAutocomplete();
 		this.#state.cursorLine = this.#state.lines.length - 1;
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 		this.#setCursorCol(currentLine.length);
@@ -4807,6 +4816,7 @@ export class Editor implements Component, Focusable {
 
 	#moveCursor(deltaLine: number, deltaCol: number): void {
 		this.#resetKillSequence();
+		this.#dismissAutocomplete();
 		const visualLines = this.#buildVisualLineMap(this.#caretRowWidth);
 		const currentVisualLine = this.#findCurrentVisualLine(visualLines);
 
@@ -4859,6 +4869,7 @@ export class Editor implements Component, Focusable {
 
 	#pageScroll(direction: -1 | 1): void {
 		this.#resetKillSequence();
+		this.#dismissAutocomplete();
 		const visualLines = this.#buildVisualLineMap(this.#caretRowWidth);
 		const currentVisualLine = this.#findCurrentVisualLine(visualLines);
 		const step = this.#getPageScrollStep(visualLines.length);
@@ -4889,6 +4900,7 @@ export class Editor implements Component, Focusable {
 	 */
 	#jumpToChar(char: string, direction: "forward" | "backward"): void {
 		this.#resetKillSequence();
+		this.#dismissAutocomplete();
 		const isForward = direction === "forward";
 		const lines = this.#state.lines;
 
@@ -5303,6 +5315,17 @@ export class Editor implements Component, Focusable {
 		if (notifyCancel && wasAutocompleting) {
 			this.onAutocompleteCancel?.();
 		}
+	}
+
+	/**
+	 * Close the popup when the cursor leaves the token it was opened for (newline,
+	 * pure cursor motion). Its prefix no longer matches the text before the cursor,
+	 * so it could neither accept nor refresh and would linger stale.
+	 */
+	#dismissAutocomplete(): void {
+		if (this.#autocompleteState === null) return;
+		this.#cancelAutocomplete();
+		this.onAutocompleteUpdate?.();
 	}
 
 	/**

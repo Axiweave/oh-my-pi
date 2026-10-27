@@ -26,6 +26,7 @@ import {
 import { probeLiteralPathExists, resolveReadPath } from "../tools/path-utils";
 import { formatDimensionNote, resizeImage } from "./image-resize";
 import { VideoError, buildVideoContactSheetPng, formatVideoDetails, probeVideo, videoMimeForPath } from "./video";
+import { CONVERTIBLE_EXTENSIONS, convertFileWithMarkit } from "./markit";
 import { createVideoPreviewImage, isVideoPath } from "@oh-my-pi/pi-tui/prompt/video";
 
 /** Regex to match @filepath patterns in text */
@@ -192,10 +193,17 @@ export function extractFileMentions(text: string): string[] {
  * Generate a FileMentionMessage containing the contents of mentioned files.
  * Returns empty array if no files could be read.
  */
+export interface FileMentionOptions {
+	autoResizeImages?: boolean;
+	useHashLines?: boolean;
+	snapshotStore?: EditStore;
+	signal?: AbortSignal;
+}
+
 export async function generateFileMentionMessages(
 	filePaths: string[],
 	cwd: string,
-	options?: { autoResizeImages?: boolean; useHashLines?: boolean; snapshotStore?: EditStore },
+	options?: FileMentionOptions,
 ): Promise<FileMentionMessage[]> {
 	if (filePaths.length === 0) return [];
 
@@ -204,6 +212,7 @@ export async function generateFileMentionMessages(
 	const files: FileMentionMessage["files"] = [];
 
 	for (const filePath of filePaths) {
+		if (options?.signal?.aborted) return [];
 		const resolved = await resolveMentionPath(filePath, cwd);
 		if (!resolved) {
 			continue;
@@ -301,6 +310,26 @@ export async function generateFileMentionMessages(
 				});
 				continue;
 			}
+			const ext = path.extname(absolutePath).toLowerCase();
+			if (CONVERTIBLE_EXTENSIONS.has(ext)) {
+				const result = await convertFileWithMarkit(absolutePath, options?.signal);
+				if (options?.signal?.aborted) {
+					return [];
+				}
+				if (result.ok && result.content.trim().length > 0) {
+					const { output, lineCount } = buildTextOutput(result.content);
+					files.push({ path: resolvedPath, content: output, lineCount });
+				} else {
+					const reason = result.error || `cannot read ${ext} file`;
+					files.push({
+						path: resolvedPath,
+						content: `(skipped auto-read: ${reason})`,
+						byteSize: stat.size,
+						skippedReason: "binary",
+					});
+				}
+				continue;
+			}
 			if (await isProbablyBinary(absolutePath)) {
 				files.push({
 					path: filePath,
@@ -337,11 +366,12 @@ export async function generateFileMentionMessages(
 				: resolvedPath;
 			files.push({ path: label, content: output, lineCount });
 		} catch {
+			if (options?.signal?.aborted) return [];
 			// File doesn't exist or isn't readable - skip silently
 		}
 	}
 
-	if (files.length === 0) return [];
+	if (options?.signal?.aborted || files.length === 0) return [];
 
 	const message: FileMentionMessage = {
 		role: "fileMention",

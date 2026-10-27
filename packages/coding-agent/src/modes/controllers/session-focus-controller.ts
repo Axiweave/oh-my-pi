@@ -145,6 +145,7 @@ export class SessionFocusController {
 	}
 
 	dispose(): void {
+		this.ctx.syncIdleMaintenanceView(null);
 		// A pending revive — or a running attachment — must not land during
 		// teardown: invalidate both generations the way leave-main does.
 		this.#focusRequestSeq++;
@@ -184,6 +185,7 @@ export class SessionFocusController {
 	/** Retarget core, both directions: swap subscription, transcript, and status line onto `target`. */
 	async #attach(target: AgentSession): Promise<boolean> {
 		const generation = ++this.#attachGeneration;
+		this.ctx.syncIdleMaintenanceView(target);
 		try {
 			this.ctx.unsubscribe?.();
 			this.ctx.clearTransientSessionUi();

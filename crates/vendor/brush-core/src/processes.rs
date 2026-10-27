@@ -391,6 +391,7 @@ mod tests {
 				Err(std::io::Error::other("wait failed during cancellation"))
 			}),
 			reaped: false,
+			exited: None,
 			pid: None,
 			pgid: None,
 			stop_pids: None,

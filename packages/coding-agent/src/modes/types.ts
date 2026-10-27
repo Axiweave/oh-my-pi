@@ -20,7 +20,12 @@ import type {
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
-import type { CompactOptions, PlanReviewChoice, PlanReviewRequestedEvent } from "../extensibility/extensions/types";
+import type {
+	CompactOptions,
+	ExtensionSessionModes,
+	PlanReviewChoice,
+	PlanReviewRequestedEvent,
+} from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { MCPManager } from "../mcp";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
@@ -33,7 +38,7 @@ import type { SessionContext } from "../session/session-context";
 import type { SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
 import type { DictationTarget } from "../stt";
-import type { SessionInfo } from "../session/session-listing";
+import type { SessionContinuation, SessionInfo } from "../session/session-listing";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { LspStartupServerInfo } from "../tools";
@@ -83,6 +88,8 @@ export type SubmittedUserInput = {
 	 *  it). Normal user Enter carries "steer" to match the streaming-branch Enter;
 	 *  background/continuation submits omit it and default to "followUp". */
 	streamingBehavior?: "steer" | "followUp";
+	/** Set by `submitInteractiveInput` for a custom-message submission: the session took it (started a turn or queued it into one). */
+	dispatched?: boolean;
 	cancelled: boolean;
 	started: boolean;
 };
@@ -100,6 +107,21 @@ export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &
 	Pick<HookSelectorOptions, "disabledIndices" | "inline">;
 
 export type SessionPickHandler = (session: SessionInfo) => void | Promise<void>;
+
+/** How {@link InteractiveModeContext.handleResumeSession} picks the file it opens. */
+export interface ResumeSessionOptions {
+	/**
+	 * The user chose this session to resume (picker, `/resume <id>`, welcome
+	 * card): when its conversation went on in another file, resume that copy.
+	 * Restoring a session the process itself left (collab) opens the path as given.
+	 */
+	followContinuation?: boolean;
+	/**
+	 * The copy to resume, already found by the caller (`resolveResumeTarget`):
+	 * `sessionPath` is that copy, and the notice names the file it came from.
+	 */
+	continuation?: SessionContinuation;
+}
 
 export interface RenderSessionContextOptions {
 	updateFooter?: boolean;
@@ -167,6 +189,8 @@ export interface InteractiveModeContext {
 	readonly sessionName: string | undefined;
 	/** Session the transcript/editor/status are attached to: the focused agent's, else `session`. */
 	readonly viewSession: AgentSession;
+	/** Bind idle maintenance to the given view (default: the current one), or release the UI activity binding on null. */
+	syncIdleMaintenanceView(target?: AgentSession | null): void;
 	/** Id of the focused agent, undefined when the main session is attached. */
 	readonly focusedAgentId: string | undefined;
 	/** Set while a tool-approval dialog owns the composer: its drafts steer the main session awaiting that approval, even from a focused agent's view. */
@@ -548,7 +572,7 @@ export interface InteractiveModeContext {
 	showSessionSelector(source?: ForeignSessionSource, onSelect?: SessionPickHandler): void;
 	/** Settle side requests before replacing the session or deleting its artifacts. */
 	prepareSessionSwitch(): Promise<void>;
-	handleResumeSession(sessionPath: string): Promise<void>;
+	handleResumeSession(sessionPath: string, options?: ResumeSessionOptions): Promise<void>;
 	handleSessionDeleteCommand(): Promise<void>;
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showSessionPinSelector(): Promise<void>;
@@ -671,6 +695,7 @@ export interface InteractiveModeContext {
 	readonly planReviewActive: boolean;
 	/** True while a `/guided-goal` or `/guided-loop` interview waits for an answer; a clean stop is a question, so the IDE reads `needs-input`. */
 	readonly interviewActive: boolean;
+	readonly sessionModes: ExtensionSessionModes;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;
