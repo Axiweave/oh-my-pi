@@ -35,7 +35,7 @@ When the field `request` is present, the user typed it to start this turn instea
 The message has exactly one blocking question. That question asks permission to proceed with the agent's own recommendation, such as the implement checklist gate "Do you want to proceed with implementation anyway? (yes/no)". It needs no new scope or requirement decision, and the message reports no error. A question that asks the user to choose between options, or to decide what the feature covers, is not this. An offer to run another /speckit command is not this: it is auxiliary.
 
 ## remediate
-The analyze report has at least one CRITICAL finding, or every blocking question asks leave for the agent to make fixes that the report itself recommends, as edits to the feature documents (spec.md, plan.md, tasks.md, quickstart.md, and the like), for example "Would you like me to suggest concrete fixes for the top 5 issues?" or "Reply `fix I1-I3` and I will make these edits." Pick this also when one fix may need a user decision later: the fix round asks the user and stops at that fix. Do not pick this when, before any fix can start, the message asks the user to choose between options, to give input that only the user has, or to approve edits that change behavior, for example "Edits 2 and 6 change behavior. Reply `apply all` or list the numbers.".
+The analyze report has at least one CRITICAL finding, or every blocking question asks leave for the agent to make fixes that the report itself recommends, as edits to the feature documents (spec.md, plan.md, tasks.md, quickstart.md, and the like), for example "Would you like me to suggest concrete fixes for the top 5 issues?" or "Reply `fix I1-I3` and I will make these edits." Pick this also when one fix may need a user decision later: the fix round asks the user and stops at that fix. Do not pick this when, before any fix can start, the message makes the user decide: choose between options, give input that only the user has, pick which fixes to make ("confirm all, or name the ones to apply"), or approve fixes that the message says change behavior, scope, order, or what ships. Such a gate is `ask`, for example "Edits 2 and 6 change behavior. Reply `apply all` or list the numbers.".
 
 ## recheck
 `request` asks the agent to fix findings from the analyze report, and the message reports that the agent changed the feature documents to fix them, with no open question and no error. Analyze must run again to check the fixes.
@@ -47,7 +47,7 @@ The converge report says that the implementation meets the spec, plan, and tasks
 The converge report says that it appended or added one or more tasks to tasks.md for remaining gaps, for example under a "Convergence" phase, so another implement pass must do them.
 
 ## ask
-The message has a blocking question, or it waits for a blocking action from the user, and no step above fits.
+The message has a blocking question, or it waits for a blocking action from the user, and no step above fits. A question that makes the user pick which fixes to make, or approve fixes that change behavior, scope, order, or what ships, is always this, even when the report has a CRITICAL finding.
 
 ## error
 The message reports an error, a failed step, or an early stop that the user must fix. A stop only to ask a question is not an error. Auxiliary work left undone, such as uncommitted changes, is not an early stop.
