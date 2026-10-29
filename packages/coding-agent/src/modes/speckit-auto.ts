@@ -87,7 +87,8 @@ export interface SpeckitVerdict {
 /** Text-pattern hints for the judge; the judge decides, the hints only help it read the reply. */
 export interface SpeckitEvidence {
 	analyze?: { critical: number; high: number } | "unreadable";
-	errorCue: boolean;
+	/** Lines with an error word, so the judge can tell a reported failure from a feature's failure case. */
+	errorLines: string[];
 	reportCue?: boolean;
 	readyCue?: boolean;
 	closingOffers: string[];
@@ -482,7 +483,12 @@ export function readSpeckitEvidence(phase: SpeckitPhase, message: AssistantMessa
 	const cues = REPORT_CUES[phase];
 	return {
 		...(phase === "analyze" ? { analyze: readTurnAnalyzeReport(text, earlier) } : {}),
-		errorCue: ERROR_CUE.test(tail.replace(TABLE_LABEL, "").replace(ZERO_COUNT, "")),
+		errorLines: tail
+			.replace(TABLE_LABEL, "")
+			.replace(ZERO_COUNT, "")
+			.split("\n")
+			.filter(line => ERROR_CUE.test(line))
+			.map(line => line.trim()),
 		...(cues ? { reportCue: cues.every(cue => cue.test(tail)) } : {}),
 		// Clarify can print its readiness in an earlier message of the turn and end with a short summary.
 		...(phase === "clarify"

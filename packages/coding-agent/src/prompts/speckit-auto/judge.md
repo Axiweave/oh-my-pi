@@ -21,7 +21,7 @@ This message ends the /speckit.{{phase}} step of a spec-kit workflow. Pick the n
 The state field `message` is the end of the step's last reply. The field `earlier`, when present, holds the step's earlier replies in the same turn: the step can print its report there and end with a short summary. Read both.
 The field `evidence` holds hints that text patterns found. A pattern can be wrong, so read the messages and use a hint only to check what you read:
 - `analyze`: the CRITICAL and HIGH counts from the analyze findings table, or `unreadable` when the patterns found no findings report.
-- `errorCue`: true when a line such as `ERROR:` or `T012 failed` was found. Zero counts such as "0 failed" do not count.
+- `errorLines`: lines with an error word, such as `ERROR:`, `failed`, or `blocked`. Zero counts such as "0 failed" are left out. Read each line: it is an error only when it reports that the step itself failed or stopped, such as "T012 failed: the API returns 403". A line that describes how the feature handles a failure, such as "A timeout failure retries once", or a task or test about failures, is not an error.
 - `reportCue`: true when the step's own completion report was found, such as "Created tasks.md with 24 tasks".
 - `readyCue`: clarify only. True when clarify reported no critical ambiguity or recommended /speckit.plan, with no blocking Deferred item.
 - `closingOffers`: closing sentences that offer to run another /speckit command or to suggest remediation edits.

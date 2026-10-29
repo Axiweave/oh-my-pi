@@ -23,7 +23,7 @@ What the tests prove:
 |---|---|
 | decision, seeded sequences | SC-004 bounds. No start after a failed turn (SC-008). No start when the judge picks `ask`, `error`, or `unclear`, or gives no answer (SC-002). No implement while the CRITICAL count is above 0. At most one automatic answer per phase run. |
 | decision, converge limit 0, 1, 3 | FR-021 and FR-036 boundaries. |
-| text evidence | Analyze counts with zero rows, CRITICAL rows, a larger `Critical Issues Count`, and no report. Normal-text errors set `errorCue`. The analyze fix offer and phase handoffs show in `closingOffers`. The evidence never picks the step. |
+| text evidence | Analyze counts with zero rows, CRITICAL rows, a larger `Critical Issues Count`, and no report. Normal-text errors show in `errorLines`. The analyze fix offer and phase handoffs show in `closingOffers`. The evidence never picks the step. |
 | saved state | A restored run is paused. Garbage data gives "mode off". |
 | interactive | A settled turn submits the next phase after the grace period. Draft text parks the start, and clearing it submits with no new decision (FR-012). A user turn start drops the start (SC-003). Esc pauses (SC-005). The other modes refuse while the mode is on, and the reverse. |
 

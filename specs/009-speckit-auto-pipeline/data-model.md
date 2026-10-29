@@ -74,7 +74,7 @@ interface SpeckitVerdict {
 // Text-pattern hints in the judge state. The judge decides. The hints only help it read the reply.
 interface SpeckitEvidence {
 	analyze?: { critical: number; high: number } | "unreadable"; // analyze only
-	errorCue: boolean;       // an error line such as `ERROR:` or `T012 failed`; zero counts do not count
+	errorLines: string[];    // tail lines with an error word such as `ERROR:` or `failed`; zero counts do not count
 	reportCue?: boolean;     // specify, plan, tasks, implement, remediation: the phase's own completion report
 	readyCue?: boolean;      // clarify only: no critical ambiguity, or /speckit.plan recommended, with no blocking Deferred item
 	closingOffers: string[]; // handoff sentences, questions that name another phase, and the analyze fix offer

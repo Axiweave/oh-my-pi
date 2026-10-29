@@ -494,8 +494,10 @@ describe("readSpeckitEvidence", () => {
 		["T012 failed.", true],
 		["Blocked: the API key is missing.", true],
 		["| Task | Status |\n|---|---|\n| T012 | failed |", true],
-	])("errorCue: %s → %p", (text, error) => {
-		expect(readSpeckitEvidence("implement", message(`All tasks completed. ${text}`)).errorCue).toBe(error);
+	])("errorLines: %s → %p", (text, error) => {
+		expect(readSpeckitEvidence("implement", message(`All tasks completed. ${text}`)).errorLines.length > 0).toBe(
+			error,
+		);
 	});
 
 	const SEED = 0x5eed_0020;
