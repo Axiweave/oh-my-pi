@@ -483,11 +483,10 @@ export function readSpeckitEvidence(phase: SpeckitPhase, message: AssistantMessa
 	const cues = REPORT_CUES[phase];
 	return {
 		...(phase === "analyze" ? { analyze: readTurnAnalyzeReport(text, earlier) } : {}),
+		// Match on the line without its label cell and zero counts, but give the judge the whole line.
 		errorLines: tail
-			.replace(TABLE_LABEL, "")
-			.replace(ZERO_COUNT, "")
 			.split("\n")
-			.filter(line => ERROR_CUE.test(line))
+			.filter(line => ERROR_CUE.test(line.replace(TABLE_LABEL, "").replace(ZERO_COUNT, "")))
 			.map(line => line.trim()),
 		...(cues ? { reportCue: cues.every(cue => cue.test(tail)) } : {}),
 		// Clarify can print its readiness in an earlier message of the turn and end with a short summary.

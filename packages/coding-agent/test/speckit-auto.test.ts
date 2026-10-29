@@ -483,21 +483,20 @@ describe("readSpeckitEvidence", () => {
 	});
 
 	it.each([
-		["610 passed, 2 skipped, 0 failed.", false],
-		["| Category | Status |\n|---|---|\n| Edge cases and failure handling | Clear |", false],
-		["Committed as `HEAD` (3 files, zero `Error:` lines in the staged diff).", false],
-		["Tests: 0 tests failed, 0 checks failed.", false],
-		["No tests failed.", false],
-		["0 checks failed, 2 tests failed.", true],
-		["Created 0 files and failed to write plan.md.", true],
-		["ERROR: build broke.", true],
-		["T012 failed.", true],
-		["Blocked: the API key is missing.", true],
-		["| Task | Status |\n|---|---|\n| T012 | failed |", true],
-	])("errorLines: %s → %p", (text, error) => {
-		expect(readSpeckitEvidence("implement", message(`All tasks completed. ${text}`)).errorLines.length > 0).toBe(
-			error,
-		);
+		["610 passed, 2 skipped, 0 failed.", []],
+		["| Category | Status |\n|---|---|\n| Edge cases and failure handling | Clear |", []],
+		["Committed as `HEAD` (3 files, zero `Error:` lines in the staged diff).", []],
+		["Tests: 0 tests failed, 0 checks failed.", []],
+		["No tests failed.", []],
+		["0 checks failed, 2 tests failed.", ["0 checks failed, 2 tests failed."]],
+		["Created 0 files and failed to write plan.md.", ["Created 0 files and failed to write plan.md."]],
+		["ERROR: build broke.", ["ERROR: build broke."]],
+		["T012 failed.", ["T012 failed."]],
+		["Blocked: the API key is missing.", ["Blocked: the API key is missing."]],
+		["| Task | Status |\n|---|---|\n| T012 | failed |", ["| T012 | failed |"]],
+		["| US5 | 3 | A failed kill keeps the row. |", ["| US5 | 3 | A failed kill keeps the row. |"]],
+	] as const)("errorLines: %s → %p", (text, lines) => {
+		expect(readSpeckitEvidence("implement", message(`All tasks completed.\n${text}`)).errorLines).toEqual([...lines]);
 	});
 
 	const SEED = 0x5eed_0020;
