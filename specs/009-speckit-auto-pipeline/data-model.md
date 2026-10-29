@@ -54,17 +54,41 @@ interface SpeckitAutoState {
 ## Turn verdict
 
 ```ts
+type SpeckitNext =
+	| "advance"   // the phase finished: start the successor (analyze: implement)
+	| "proceed"   // the only blocking question asks to proceed with the agent's recommendation
+	| "remediate" // analyze: a CRITICAL finding, or leave to make the fixes the report recommends
+	| "recheck"   // analyze, user-started turn: the reply reports the fixes the user asked for
+	| "complete"  // converge: the work meets the spec, no task added
+	| "added"     // converge: tasks added for remaining gaps
+	| "ask"       // a blocking question for the user
+	| "error"     // a reported error or early stop
+	| "unclear";  // the reply does not show the outcome
+
 interface SpeckitVerdict {
-	failed?: string;                 // stopReason error, length, or aborted (an abort that did not come from Esc pause or next), with the reason
-	completed: boolean | undefined;  // false: reported error or early stop. undefined: cannot tell.
-	waits: boolean | undefined;
-	routine: boolean;                // the only open question asks to proceed with the recommendation
-	ready?: boolean;                 // clarify only
+	failed?: string;      // stopReason error, length, or aborted (an abort that did not come from Esc pause or next), with the reason
+	next?: SpeckitNext;   // the judge's pick; undefined when the judge could not answer
+	analyze?: { critical: number; high: number } | "unreadable"; // analyze only, from the text: the CRITICAL bound and the HIGH notice
+}
+
+// Text-pattern hints in the judge state. The judge decides. The hints only help it read the reply.
+interface SpeckitEvidence {
 	analyze?: { critical: number; high: number } | "unreadable"; // analyze only
-	fixed?: boolean;                 // analyze only, judge only: the user asked to fix the findings and the reply reports the fixes
-	converge?: "complete" | "added" | "none";                    // converge only
+	errorCue: boolean;       // an error line such as `ERROR:` or `T012 failed`; zero counts do not count
+	reportCue?: boolean;     // specify, plan, tasks, implement, remediation: the phase's own completion report
+	readyCue?: boolean;      // clarify only: no critical ambiguity, or /speckit.plan recommended, with no blocking Deferred item
+	closingOffers: string[]; // handoff sentences, questions that name another phase, and the analyze fix offer
 }
 ```
+
+**Options per phase** (`speckitOutcomes(phase, userTurn)`): the judge picks from these only.
+
+| Phase | Options |
+|---|---|
+| analyze | advance, remediate, recheck (only on a user-started turn), ask, error, unclear |
+| converge | complete, added, proceed, ask, error, unclear |
+| specify, clarify, remediation | advance, ask, error, unclear |
+| plan, tasks, implement | advance, proceed, ask, error, unclear |
 
 ## Actions
 
@@ -78,44 +102,39 @@ type SpeckitAction =
 	| { kind: "notice"; text: string; after: SpeckitAction };        // HIGH-only analyze notice
 ```
 
-## Decision table: `decideSpeckitStep(run, verdict)`
+## Decision table: `decideSpeckitStep(run, verdict, scope)`
 
-Checks run top to bottom. The first match wins. "Any" means every phase.
+Checks run top to bottom. The first match wins. "Any" means every phase. The judge picks `next`. The rows only apply the deterministic bounds.
 
 | # | Condition | Action |
 |---|---|---|
 | 1 | any, `failed` | hold needs-you: the failure reason |
-| 2 | any, `waits === true`, phase specify, clarify, analyze, or remediation | hold user: "answer the question" |
-| 3 | any, `waits === true`, `routine`, not `autoAnswered` (plan, tasks, implement, converge) | answer |
-| 4 | any, `waits === true` | hold user |
-| 5 | any, `completed === false` | hold needs-you: "the phase reported an error or stopped early" |
-| 6 | specify or clarify, `waits === undefined` | hold needs-you: "cannot tell if the phase waits; `/speckit-auto next` advances" |
-| 7 | specify, plan, tasks, implement, or remediation, `completed !== true` | hold needs-you: "cannot tell if the phase finished; `/speckit-auto next` advances" |
-| 8 | specify | start clarify |
-| 9 | clarify, `ready === true` | start plan |
-| 10 | clarify | hold needs-you: "clarify did not report the spec ready" |
-| 11a | analyze, `analyze` is `"unreadable"` or missing, `fixed === true`, `remediationRounds < 2` | start analyze (counts a remediation round when its turn starts) |
-| 11b | analyze, `analyze` is `"unreadable"` or missing, `fixed === true` | hold needs-you: "fixes applied after 2 rounds; run /speckit.analyze to check them" |
-| 11 | analyze, `analyze` is `"unreadable"` or missing | hold needs-you: "no readable analyze report" |
-| 12 | analyze, `critical > 0`, `remediationRounds < 2` | remediate |
-| 13 | analyze, `critical > 0` | hold needs-you: "N CRITICAL findings remain after 2 rounds" |
-| 14 | analyze, `high > 0` | notice "N HIGH findings", then start implement |
-| 15 | analyze | start implement |
-| 16 | converge, `converge === "complete"` | end complete |
-| 17 | converge, `converge === "added"`, `convergeRounds < convergeLimit` | start implement (convergeRounds + 1) |
-| 18 | converge, `converge === "added"` | end open-tasks |
-| 19 | converge | hold needs-you: "converge reported no result" |
-| 20 | plan | start tasks |
-| 21 | tasks | start analyze |
-| 22 | remediation | start analyze |
-| 23 | implement | start converge |
+| 2 | any, `next` undefined | hold needs-you: "the turn check failed; /speckit-auto next advances" |
+| 3 | any, `ask` | hold user: "answer the question" |
+| 4 | any, `error` | hold needs-you: "the phase reported an error or stopped early" |
+| 5 | any, `proceed`, phase specify, clarify, analyze, or remediation, or `autoAnswered` | hold user: "answer the question" |
+| 6 | any, `proceed` | answer |
+| 7 | analyze, `recheck`, `remediationRounds < 2` | start analyze (counts a remediation round when its turn starts) |
+| 8 | analyze, `recheck` | hold needs-you: "fixes applied after 2 rounds; run /speckit.analyze to check them" |
+| 9 | converge, `complete` | end complete |
+| 10 | converge, `added`, `convergeRounds < convergeLimit` | start implement (convergeRounds + 1) |
+| 11 | converge, `added` | end open-tasks |
+| 12 | analyze, `remediate`, or `advance` with `critical > 0`, `remediationRounds < 2` | remediate |
+| 13 | analyze, as row 12, `critical > 0` | hold needs-you: "N CRITICAL findings remain after 2 rounds" |
+| 14 | analyze, `remediate` | hold user: "answer the question" |
+| 15 | analyze, `advance`, `high > 0` | notice "N HIGH findings", then start implement |
+| 16 | analyze, `advance` | start implement |
+| 17 | specify, clarify, plan, tasks, implement, or remediation, `advance` | start the successor: clarify, plan, tasks, analyze, converge, or analyze |
+| 18 | any other pick (`unclear`, or a pick outside the phase) | hold needs-you: "cannot tell if the phase finished; /speckit-auto next advances" |
+
+After the table, the scope applies: in a `tasks` scope run that the user did not move into editing, a start or remediation outside the scope (implement, converge) ends the run as `planned`. A notice before such a start drops.
 
 Notes:
 
-- Row 2 comes first among the question rows: a question in specify, clarify, analyze, or remediation always goes to the user.
-- Row 3 comes before row 5: the implement checklist gate stops before the work is done (`completed: false`) but is a routine question that FR-019 answers once. `routine` is true only when the message reports no error (research R6), so an error with a "proceed?" question still holds at row 4.
-- Row 5 holds every phase on a reported error, including clarify, analyze, and converge, before any automatic start.
-- Clarify, analyze, and converge do not need `completed === true`: their outcome cues (`ready`, the report, the converge result) are the proof.
+- No row reads text cues to pick a step. The judge sees the whole message tail (6000 characters), the earlier assistant text of the turn, and the evidence. Without a judge answer, row 2 holds every phase. No text fallback exists.
+- Row 5 keeps the automatic answer out of specify, clarify, analyze, and remediation, and limits it to one per phase run (FR-019).
+- Rows 12 and 13 are the CRITICAL bound: the text count stops an `advance` past a CRITICAL finding, even when the judge picked `advance` (FR-017). Row 14 is the analyze fix offer after the round limit: it goes to the user.
+- A missing analyze report counts as zero findings in rows 12 to 16. The judge's `advance` criterion for analyze requires a printed findings report, so the judge picks `unclear` or `ask` for a turn without one.
 
 ## State transitions
 
@@ -154,7 +173,7 @@ stateDiagram-v2
 
 Without user input, one run has at most:
 
-- 1 clarify start (only row 8 starts clarify),
+- 1 clarify start (only row 17 from specify starts clarify),
 - 3 analyze turns (1 from tasks + 2 from remediation),
 - 2 remediation rounds,
 - 1 + `convergeLimit` implement turns,

@@ -10,20 +10,21 @@ import {
 	normalizeConvergeRounds,
 	parseSpeckitAutoState,
 	parseSpeckitPhaseCommand,
-	readSpeckitTextVerdict,
+	readSpeckitEvidence,
 	SPECKIT_PHASE_COMMANDS,
 	SPECKIT_REMEDIATION_ROUNDS,
 	type SpeckitAction,
 	type SpeckitAutoScope,
 	type SpeckitAutoState,
 	type SpeckitEndResult,
+	type SpeckitNext,
 	type SpeckitPhase,
 	type SpeckitRun,
+	type SpeckitVerdict,
 	speckitEarlierText,
+	speckitOutcomes,
 	speckitPhaseLoad,
 	speckitScopeAllows,
-	type SpeckitConverge,
-	type SpeckitVerdict,
 } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
@@ -81,14 +82,14 @@ function applyAction(run: SpeckitRun, action: SpeckitAction): SpeckitEndResult |
 	return undefined;
 }
 
-/** Drives verdicts until the run ends; returns the result, or undefined when the verdicts run out. */
+/** Drives the judge's picks for the run's current phase until the run ends, at most 40 steps. */
 function drive(
 	run: SpeckitRun,
-	verdicts: Iterable<SpeckitVerdict>,
+	judge: (run: SpeckitRun) => SpeckitVerdict,
 	scope: SpeckitAutoScope = "full",
 ): SpeckitEndResult | undefined {
-	for (const verdict of verdicts) {
-		const result = applyAction(run, decideSpeckitStep(run, verdict, scope));
+	for (let step = 0; step < 40; step++) {
+		const result = applyAction(run, decideSpeckitStep(run, judge(run), scope));
 		if (result) return result;
 	}
 	return undefined;
@@ -96,12 +97,31 @@ function drive(
 
 const count = (run: SpeckitRun, phase: SpeckitPhase): number => run.history.filter(entry => entry === phase).length;
 
+const NEXTS: readonly (SpeckitNext | undefined)[] = [
+	"advance",
+	"proceed",
+	"remediate",
+	"recheck",
+	"complete",
+	"added",
+	"ask",
+	"error",
+	"unclear",
+	undefined,
+];
+const HOLDING: readonly (SpeckitNext | undefined)[] = ["ask", "error", "unclear", undefined];
+/** The judge's clean pick: every phase finishes its work. */
+const cleanFor = (run: SpeckitRun): SpeckitVerdict => ({
+	next: run.phase === "converge" ? "complete" : "advance",
+	...(run.phase === "analyze" ? { analyze: { critical: 0, high: 0 } } : {}),
+});
+
 describe("decideSpeckitStep over seeded verdict sequences", () => {
 	const SEED = 0x5eed_0009;
 	const RUNS = 1500;
 	const MAX_STEPS = 120;
 
-	it.each([0, 1, 3, 7])("keeps the safety rules and the SC-004 bounds with convergeLimit %i", limit => {
+	it.each([0, 1, 3, 7])("keeps the judge's holds, the bounds, and the SC-004 limits with convergeLimit %i", limit => {
 		const random = seeded(SEED + limit);
 		const pick = <T>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
 		for (let index = 0; index < RUNS; index++) {
@@ -116,10 +136,7 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 			for (let step = 0; step < MAX_STEPS; step++) {
 				const verdict: SpeckitVerdict = {
 					failed: random() < 0.08 ? "provider error" : undefined,
-					completed: pick([true, true, true, false, undefined]),
-					waits: pick([false, false, false, true, undefined]),
-					routine: random() < 0.5,
-					ready: pick([true, true, false, undefined]),
+					next: pick(NEXTS),
 					analyze: pick([
 						"unreadable",
 						undefined,
@@ -128,32 +145,29 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 						{ critical: 0, high: 2 },
 						{ critical: 2, high: 1 },
 					] as const),
-					fixed: pick([true, false, undefined]),
-					offers: random() < 0.3,
-					converge: pick(["complete", "added", "added", "added", "none", undefined] as const),
 				};
 				sequence.push(verdict);
 				const phase = run.phase;
 				const action = decideSpeckitStep(run, verdict);
 				if (verdict.failed && action.kind !== "hold") fail("acted after a failed turn");
-				if (
-					verdict.completed === false &&
-					action.kind !== "hold" &&
-					!(action.kind === "answer" && verdict.waits === true && verdict.routine)
-				) {
-					fail("acted after completed === false");
-				}
-				if ((phase === "specify" || phase === "clarify") && verdict.waits !== false && action.kind !== "hold") {
-					fail(`automatic action in ${phase} with waits ${verdict.waits}`);
+				if (HOLDING.includes(verdict.next) && action.kind !== "hold") fail(`acted on the judge's ${verdict.next}`);
+				if (action.kind === "answer" && verdict.next !== "proceed") fail("answered without a proceed pick");
+				if (action.kind === "answer" && (phase === "specify" || phase === "clarify" || phase === "analyze")) {
+					fail(`answered in ${phase}`);
 				}
 				if (action.kind === "answer" && ++answersInPhaseRun > 1) fail("second answer in one phase run");
 				if (
 					phase === "analyze" &&
 					action.kind === "start" &&
 					action.phase === "analyze" &&
-					verdict.fixed !== true
+					verdict.next !== "recheck"
 				) {
-					fail("re-ran analyze without a user-requested fix");
+					fail("re-ran analyze without a judged re-check");
+				}
+				const critical = typeof verdict.analyze === "object" && verdict.analyze.critical > 0;
+				const started = action.kind === "notice" ? action.after : action;
+				if (phase === "analyze" && critical && started.kind === "start" && started.phase === "implement") {
+					fail("started implement past a CRITICAL finding");
 				}
 				const result = applyAction(run, action);
 				if (run.phase !== phase) answersInPhaseRun = 0;
@@ -166,17 +180,9 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 		}
 	});
 
-	it("runs every phase in order and ends complete on clean verdicts", () => {
+	it("runs every phase in order and ends complete on clean picks", () => {
 		const run = newSpeckitRun("specify", 3);
-		const clean: SpeckitVerdict = {
-			completed: true,
-			waits: false,
-			routine: false,
-			ready: true,
-			analyze: { critical: 0, high: 0 },
-			converge: "complete",
-		};
-		expect(drive(run, Array(SPECKIT_PHASE_COMMANDS.length).fill(clean))).toBe("complete");
+		expect(drive(run, cleanFor)).toBe("complete");
 		expect(run.history).toEqual([...SPECKIT_PHASE_COMMANDS]);
 	});
 
@@ -186,55 +192,55 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 		[3, 4],
 	])("with convergeLimit %i ends with open tasks after %i converge turns that add tasks", (limit, converges) => {
 		const run = newSpeckitRun("implement", limit);
-		const added: SpeckitVerdict = { completed: true, waits: false, routine: false, converge: "added" };
-		expect(drive(run, Array(40).fill(added))).toBe("open-tasks");
+		const pick = (run: SpeckitRun): SpeckitVerdict => ({ next: run.phase === "converge" ? "added" : "advance" });
+		expect(drive(run, pick)).toBe("open-tasks");
 		expect(count(run, "converge")).toBe(converges);
 		expect(run.convergeRounds).toBe(limit);
 	});
 
-	it("remediates an analyze offer to make its own edits up to the round limit, then holds for the user", () => {
-		const offer: SpeckitVerdict = {
-			completed: true,
-			waits: true,
-			routine: false,
-			analyze: { critical: 0, high: 0 },
-			offers: true,
-		};
-		const done: SpeckitVerdict = { completed: true, waits: false, routine: false };
+	it("turns an analyze advance past a CRITICAL count into fix rounds, then holds with the count", () => {
 		const run = newSpeckitRun("analyze", 3);
 		const actions: SpeckitAction[] = [];
-		for (const verdict of [offer, done, offer, done, offer]) {
+		for (let step = 0; step < 5; step++) {
+			const verdict: SpeckitVerdict =
+				run.phase === "analyze" ? { next: "advance", analyze: { critical: 1, high: 0 } } : { next: "advance" };
 			const action = decideSpeckitStep(run, verdict);
 			actions.push(action);
 			applyAction(run, action);
 		}
 		expect(actions.map(action => action.kind)).toEqual(["remediate", "start", "remediate", "start", "hold"]);
-		expect(actions.at(-1)).toMatchObject({ hold: { kind: "user" } });
+		expect(actions.at(-1)).toMatchObject({
+			hold: { kind: "needs-you", reason: expect.stringContaining("CRITICAL") },
+		});
 		expect(run.remediationRounds).toBe(SPECKIT_REMEDIATION_ROUNDS);
+		// A judged fix offer with no CRITICAL count holds for the user once the rounds are used.
+		expect(decideSpeckitStep(run, { next: "remediate", analyze: { critical: 0, high: 0 } })).toMatchObject({
+			hold: { kind: "user" },
+		});
+	});
 
-		// A real decision, even one that asks to proceed with the recommendation, still goes to the user.
-		const decision = { ...offer, routine: true, offers: false };
-		expect(decideSpeckitStep(newSpeckitRun("analyze", 3), decision)).toMatchObject({ hold: { kind: "user" } });
+	it("holds the run when the judge cannot answer, in every phase", () => {
+		for (const phase of [...SPECKIT_PHASE_COMMANDS, "remediation"] as const) {
+			expect(decideSpeckitStep(newSpeckitRun(phase, 3), {})).toMatchObject({
+				kind: "hold",
+				hold: { kind: "needs-you", reason: expect.stringContaining("turn check failed") },
+			});
+		}
 	});
 
 	const scopeVerdict = (random: () => number): SpeckitVerdict => {
 		const pick = <T>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
 		return {
-			completed: pick([true, true, undefined]),
-			waits: pick([false, false, true]),
-			routine: random() < 0.5,
-			ready: pick([true, false]),
+			next: pick(NEXTS),
 			analyze: pick([
 				{ critical: 0, high: 0 },
 				{ critical: 1, high: 0 },
 				{ critical: 0, high: 2 },
 			] as const),
-			fixed: pick([true, false]),
-			converge: pick(["complete", "added", "none"] as const),
 		};
 	};
 
-	it("in the tasks scope never starts implement or converge, and clean verdicts end planned after analyze", () => {
+	it("in the tasks scope never starts implement or converge, and clean picks end planned after analyze", () => {
 		const SCOPE_SEED = 0x5eed_0010;
 		const random = seeded(SCOPE_SEED);
 		const starts = SPECKIT_PHASE_COMMANDS.filter(phase => speckitScopeAllows("tasks", phase));
@@ -251,14 +257,7 @@ describe("decideSpeckitStep over seeded verdict sequences", () => {
 			}
 		}
 		const run = newSpeckitRun("specify", 3);
-		const clean: SpeckitVerdict = {
-			completed: true,
-			waits: false,
-			routine: false,
-			ready: true,
-			analyze: { critical: 0, high: 0 },
-		};
-		expect(drive(run, Array(10).fill(clean), "tasks")).toBe("planned");
+		expect(drive(run, cleanFor, "tasks")).toBe("planned");
 		expect(run.history).toEqual(["specify", "clarify", "plan", "tasks", "analyze"]);
 	});
 
@@ -427,170 +426,99 @@ describe("normalizeConvergeRounds", () => {
 	});
 });
 
-describe("readSpeckitTextVerdict", () => {
-	it.each(["error", "length", "aborted"] as const)("marks a %s stop as failed", stopReason => {
-		expect(readSpeckitTextVerdict("plan", message("Generated plan.md.", stopReason)).failed).toBeString();
+describe("speckitEarlierText", () => {
+	it("reads only the assistant messages after the turn opener", () => {
+		const previous = message("Outcome: `tasks_appended`.");
+		const opener: UserMessage = { role: "user", content: "/speckit.converge", timestamp: 1 };
+		const outcome = message("Added T027–T029 under Phase 7.");
+		const summary = message("Only Phase 7 was appended.");
+
+		expect(speckitEarlierText([previous, opener, outcome, summary], summary)).toBe("Added T027–T029 under Phase 7.");
+		expect(speckitEarlierText([previous, opener, summary], summary)).toBe("");
+	});
+});
+
+describe("readSpeckitEvidence", () => {
+	it.each([
+		["No critical ambiguities detected worth formal clarification.", true],
+		["Coverage is good. Suggested next command: /speckit.plan", true],
+		["Proceed with /speckit.plan, or run /speckit.clarify again later.", false],
+		[
+			"| Category | Status |\n|---|---|\n| Performance | Deferred | high impact, quota reached |\nNext: /speckit.plan",
+			false,
+		],
+		[
+			"| Category | Status |\n|---|---|\n| Performance | Deferred | better suited for planning |\nNext: /speckit.plan",
+			true,
+		],
+		["| Category | Status |\n|---|---|\n| Logging | Outstanding | low impact |\nNext: /speckit.plan", true],
+		["I updated the spec.", false],
+	])("clarify readyCue: %s → %p", (text, ready) => {
+		expect(readSpeckitEvidence("clarify", message(text)).readyCue).toBe(ready);
 	});
 
-	it("does not mark a normal stop as failed", () => {
-		expect(readSpeckitTextVerdict("plan", message("Generated plan.md.")).failed).toBeUndefined();
+	it("reads the clarify readiness from an earlier message, and the final message's readiness wins", () => {
+		const ready = "Proceed to planning. **No critical ambiguities detected worth formal clarification.**";
+		expect(readSpeckitEvidence("clarify", message("Ready for the plan."), ready).readyCue).toBe(true);
+		const blocking = "| Security | Deferred | High-impact access policy unresolved. |";
+		expect(
+			readSpeckitEvidence("clarify", message("No critical ambiguities detected. Run /speckit.plan next."), blocking)
+				.readyCue,
+		).toBe(true);
+		expect(readSpeckitEvidence("clarify", message("Ready for the plan."), blocking).readyCue).toBe(false);
 	});
 
-	describe("clarify ready", () => {
-		it.each([
-			["No critical ambiguities detected worth formal clarification.", true],
-			["Coverage is good. Suggested next command: /speckit.plan", true],
-			["Proceed with /speckit.plan, or run /speckit.clarify again later.", undefined],
-			[
-				"| Category | Status |\n|---|---|\n| Performance | Deferred | high impact, quota reached |\nNext: /speckit.plan",
-				undefined,
-			],
-			[
-				"| Category | Status |\n|---|---|\n| Performance | Deferred | better suited for planning |\nNext: /speckit.plan",
-				true,
-			],
-			["| Category | Status |\n|---|---|\n| Logging | Outstanding | low impact |\nNext: /speckit.plan", true],
-			[
-				"| Category | Status |\n|---|---|\n| Security | Deferred | High-impact access policy unresolved. Must resolve before planning. |\nNext: /speckit.plan",
-				undefined,
-			],
-			["I updated the spec.", undefined],
-		])("%s → %p", (text, ready) => {
-			expect(readSpeckitTextVerdict("clarify", message(text)).ready).toBe(ready as boolean | undefined);
-		});
-
-		it("waits only with a question, does not wait only with a ready cue, and is unknown otherwise (row 6)", () => {
-			const waits = (text: string) => readSpeckitTextVerdict("clarify", message(text)).waits;
-			expect(waits("No critical ambiguities detected.")).toBe(false);
-			expect(waits("**Question:** Which export formats matter?")).toBe(true);
-			expect(waits("I updated the spec.")).toBeUndefined();
-			const unknown = readSpeckitTextVerdict("clarify", message("I updated the spec."));
-			expect(decideSpeckitStep(newSpeckitRun("clarify", 3), unknown)).toMatchObject({
-				kind: "hold",
-				hold: { reason: expect.stringContaining("waits") },
-			});
-			// Real reply: the readiness line is in an earlier message of the turn.
-			const earlier = readSpeckitTextVerdict(
-				"clarify",
-				message("Ready for the implementation plan."),
-				"Proceed to planning. **No critical ambiguities detected worth formal clarification.**",
-			);
-			expect(earlier).toMatchObject({ waits: false, ready: true });
-			// The final message's readiness wins over an older blocking row from an earlier message.
-			const blocking = "| Security | Deferred | High-impact access policy unresolved. |";
-			expect(
-				readSpeckitTextVerdict(
-					"clarify",
-					message("No critical ambiguities detected. Run /speckit.plan next."),
-					blocking,
-				).ready,
-			).toBe(true);
-			expect(readSpeckitTextVerdict("clarify", message("Ready for the implementation plan."), blocking).ready).toBe(
-				undefined,
-			);
-		});
+	it.each([
+		["plan", "Generated plan.md, research.md, and data-model.md.", true],
+		["plan", "I will create plan.md next.", false],
+		["tasks", "Created tasks.md with 24 tasks.", true],
+		["tasks", "Review [tasks.md](specs/029-x/tasks.md). It contains **26 tasks**.", true],
+		["tasks", "I will create tasks.md next.", false],
+		["implement", "All 26 implementation tasks are marked complete.", true],
+		["implement", "I will now work through all tasks in order.", false],
+		["remediation", "Changed spec.md and tasks.md.\n\nRemediation complete.", true],
+		["remediation", "I will fix the findings in spec.md.", false],
+	] as const)("%s reportCue: %s → %p", (phase, text, reported) => {
+		expect(readSpeckitEvidence(phase, message(text)).reportCue).toBe(reported);
 	});
 
-	describe("specify waits", () => {
-		it.each([
-			["Wrote spec.md. Next: /speckit.clarify", false],
-			["Wrote spec.md. Which export formats matter?", true],
-			["I looked at the repository layout.", undefined],
-		])("%s → %p", (text, waits) => {
-			expect(readSpeckitTextVerdict("specify", message(text)).waits).toBe(waits as boolean | undefined);
-		});
+	it.each([
+		["610 passed, 2 skipped, 0 failed.", false],
+		["| Category | Status |\n|---|---|\n| Edge cases and failure handling | Clear |", false],
+		["Committed as `HEAD` (3 files, zero `Error:` lines in the staged diff).", false],
+		["Tests: 0 tests failed, 0 checks failed.", false],
+		["No tests failed.", false],
+		["0 checks failed, 2 tests failed.", true],
+		["Created 0 files and failed to write plan.md.", true],
+		["ERROR: build broke.", true],
+		["T012 failed.", true],
+		["Blocked: the API key is missing.", true],
+		["| Task | Status |\n|---|---|\n| T012 | failed |", true],
+	])("errorCue: %s → %p", (text, error) => {
+		expect(readSpeckitEvidence("implement", message(`All tasks completed. ${text}`)).errorCue).toBe(error);
 	});
 
-	describe("speckitEarlierText", () => {
-		it("reads only the assistant messages after the turn opener", () => {
-			const previous = message("Outcome: `tasks_appended`.");
-			const opener: UserMessage = { role: "user", content: "/speckit.converge", timestamp: 1 };
-			const outcome = message("Added T027–T029 under Phase 7.");
-			const summary = message("Only Phase 7 was appended.");
-
-			expect(speckitEarlierText([previous, opener, outcome, summary], summary)).toBe(
-				"Added T027–T029 under Phase 7.",
-			);
-			expect(speckitEarlierText([previous, opener, summary], summary)).toBe("");
-		});
-	});
-
-	describe("fallback completed", () => {
-		it.each([
-			["plan", "Generated plan.md, research.md, and data-model.md.", true],
-			["plan", "I will create plan.md next.", undefined],
-			["tasks", "Created tasks.md with 24 tasks.", true],
-			["tasks", "I will create tasks.md next.", undefined],
-			["implement", "All tasks completed. The test suite passes.", true],
-			["implement", "I will now work through all tasks in order.", undefined],
-			["remediation", "Changed spec.md and tasks.md.\n\nRemediation complete.", true],
-			["remediation", "I will fix the findings in spec.md.", undefined],
-			["plan", "Generated plan.md.\nERROR: constitution gate failed.", false],
-			["tasks", "ERROR: constitution gate failed.", false],
-			["implement", "ERROR: constitution gate failed.", false],
-			["remediation", "ERROR: constitution gate failed.", false],
-			["implement", "All 26 implementation tasks are marked complete.", true],
-			[
-				"tasks",
-				"**Completion report**\n\n- Tasks: `specs/029-global-concurrency-default/tasks.md`\n- Total: 27 tasks.",
-				true,
-			],
-			["tasks", "Review [tasks.md](specs/029-x/tasks.md). It contains **26 tasks**.", true],
-			["plan", "- IMPL_PLAN: `specs/029-x/plan.md`\n\nRun `/speckit.tasks` next.", true],
-			["plan", "Generated plan.md. Should I also add a quickstart?", undefined],
-		] as const)("%s: %s → %p", (phase, text, completed) => {
-			expect(readSpeckitTextVerdict(phase, message(text)).completed).toBe(completed);
-		});
-	});
-
-	describe("error cue", () => {
-		it.each([
-			["610 passed, 2 skipped, 0 failed.", true],
-			["124 passed, 0 failed.", true],
-			["| Category | Status |\n|---|---|\n| Edge cases and failure handling | Clear |", true],
-			["Committed as `HEAD` (3 files, zero `Error:` lines in the staged diff).", true],
-			["Tests: 0 tests failed, 0 checks failed.", true],
-			["No tests failed.", true],
-			["0 checks failed, 2 tests failed.", false],
-			["Created 0 files and failed to write plan.md.", false],
-			["ERROR: build broke.", false],
-			["Error: tasks.md is missing.", false],
-			["3 failed.", false],
-			["T012 failed.", false],
-			["The constitution gate failed.", false],
-			["Blocked: the API key is missing.", false],
-			["| Task | Status |\n|---|---|\n| T012 | failed |", false],
-		])("All tasks completed. %s → completed %p", (text, completed) => {
-			expect(readSpeckitTextVerdict("implement", message(`All tasks completed. ${text}`)).completed).toBe(completed);
-		});
-	});
-
-	describe("implement checklist gate", () => {
-		const gate =
-			"| Checklist | Total | Completed | Incomplete | Status |\n|---|---|---|---|---|\n| ux.md | 12 | 9 | 3 | ✗ FAIL |\n\n**STOP**: Some checklists have unchecked items. Do you want to proceed with implementation anyway? (yes/no)";
-
-		it("is a routine question that waits", () => {
-			expect(readSpeckitTextVerdict("implement", message(gate))).toMatchObject({ waits: true, routine: true });
-		});
-
-		it("is not routine next to a reported error", () => {
-			expect(readSpeckitTextVerdict("implement", message(`ERROR: build broke.\n\n${gate}`))).toMatchObject({
-				waits: true,
-				routine: false,
-				completed: false,
-			});
-		});
-
-		it("is not routine next to another question", () => {
-			expect(
-				readSpeckitTextVerdict("implement", message(`${gate}\n\nShould the export include private records too?`)),
-			).toMatchObject({ waits: true, routine: false });
-		});
-
-		it("stays routine when the reply only mentions another phase command", () => {
-			const mention = `The previous /speckit.analyze report has no CRITICAL findings.\n\n${gate}`;
-			expect(readSpeckitTextVerdict("implement", message(mention))).toMatchObject({ waits: true, routine: true });
-		});
+	const SEED = 0x5eed_0020;
+	it(`lists every generated closing offer and no other sentence (seed ${SEED})`, () => {
+		const random = seeded(SEED);
+		const pick = <T>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
+		for (let index = 0; index < 300; index++) {
+			const phase = pick(["plan", "tasks", "analyze", "implement"] as const);
+			const other = pick(SPECKIT_PHASE_COMMANDS.filter(name => name !== phase));
+			const offer =
+				phase === "analyze" && random() < 0.5
+					? `Would you like me to ${pick(["suggest", "propose"])} ${pick(["concrete remediation edits", "concrete fixes", "fixes", "edits"])} for the top ${1 + Math.floor(random() * 9)} issues?`
+					: pick([
+							`Run \`/speckit.${other}\` next.`,
+							`Next: /speckit.${other}`,
+							`Shall I run /speckit.${other} now?`,
+						]);
+			const body = pick(["Generated the report.", "The previous /speckit.plan run is recorded.", "T3 is done."]);
+			const offers = readSpeckitEvidence(phase, message(`${body}\n\n${offer}`)).closingOffers;
+			if (offers.length !== 1 || offers[0] !== offer) {
+				throw new Error(`seed=${SEED} case=${index} phase=${phase}\n${offer}\n→ ${JSON.stringify(offers)}`);
+			}
+		}
 	});
 
 	describe("analyze report", () => {
@@ -598,7 +526,7 @@ describe("readSpeckitTextVerdict", () => {
 			"| ID | Category | Severity | Location(s) | Summary | Recommendation |\n|----|----|----|----|----|----|";
 		const row = (id: string, severity: string) => `| ${id} | Coverage | ${severity} | spec.md:L10 | gap | fix |`;
 		const report = (body: string) => `## Specification Analysis Report\n\n${body}`;
-		const read = (text: string) => readSpeckitTextVerdict("analyze", message(text)).analyze;
+		const read = (text: string, earlier?: string) => readSpeckitEvidence("analyze", message(text), earlier).analyze;
 
 		it("reads a zero-findings report with Critical Issues Count: 0 as 0/0", () => {
 			expect(read(report("No issues found.\n\n**Metrics:**\n- Critical Issues Count: 0"))).toEqual({
@@ -625,343 +553,102 @@ describe("readSpeckitTextVerdict", () => {
 			expect(read(text)).toEqual({ critical: 1, high: 0 });
 		});
 
-		it("is unreadable with the metric but no table and no zero-findings line", () => {
+		it("is unreadable with the metric but no table, or without the heading", () => {
 			expect(read(report("**Metrics:**\n- Critical Issues Count: 0"))).toBe("unreadable");
-		});
-
-		it("is unreadable without the heading", () => {
 			expect(read(`${header}\n${row("C1", "CRITICAL")}\n- Critical Issues Count: 1`)).toBe("unreadable");
 		});
 
-		it("does not treat the closing remediation offer as a question", () => {
-			const offer = "Would you like me to suggest concrete remediation edits for the top 3 issues?";
-			expect(readSpeckitTextVerdict("analyze", message(report(`${header}\n\n${offer}`))).waits).toBe(false);
-			expect(
-				readSpeckitTextVerdict(
-					"analyze",
-					message(report(`${header}\n\nShould the export cover PDF too?\n\n${offer}`)),
-				).waits,
-			).toBe(true);
-			expect(
-				readSpeckitTextVerdict(
-					"analyze",
-					message(
-						report(
-							`${header}\n\nWould you like me to suggest concrete remediation edits for the top 0 issues? Should exports include private records too?`,
-						),
-					),
-				).waits,
-			).toBe(true);
-		});
-
-		it("reads the report from an earlier message of the turn when the final message has none", () => {
-			const opener: UserMessage = { role: "user", content: "/speckit.analyze", timestamp: 1 };
-			const found = message(report(`${header}\n${row("C1", "CRITICAL")}\n${row("A1", "HIGH")}`));
-			const final = message(
-				"Analysis is complete.\n\nWould you like me to suggest concrete remediation edits for the three findings?",
-			);
-			const earlier = speckitEarlierText([opener, found, final], final);
-			const verdict = readSpeckitTextVerdict("analyze", final, earlier);
-
-			expect(verdict.analyze).toEqual({ critical: 1, high: 1 });
-			expect(decideSpeckitStep(newSpeckitRun("analyze", 3), verdict)).toEqual({ kind: "remediate" });
-			expect(readSpeckitTextVerdict("analyze", final).analyze).toBe("unreadable");
-			// The final message's own report wins.
-			const own = message(report(`${header}\n${row("A2", "HIGH")}`));
-			expect(readSpeckitTextVerdict("analyze", own, earlier).analyze).toEqual({ critical: 0, high: 1 });
+		it("reads the report from an earlier message of the turn, and the final message's own report wins", () => {
+			const earlier = report(`${header}\n${row("C1", "CRITICAL")}\n${row("A1", "HIGH")}`);
+			expect(read("Analysis is complete.", earlier)).toEqual({ critical: 1, high: 1 });
+			expect(read("Analysis is complete.")).toBe("unreadable");
+			expect(read(report(`${header}\n${row("A2", "HIGH")}`), earlier)).toEqual({ critical: 0, high: 1 });
 		});
 	});
 });
 
 describe("classifySpeckitTurn", () => {
 	const deps = { settings: {} as Settings, registry: {} as ModelRegistry, sessionId: "s" };
-	const text = `## Specification Analysis Report\n\n| ID | Severity |\n|---|---|\n| C1 | CRITICAL |\n\nI will create plan.md.`;
+	const header = "| ID | Category | Severity | Summary |\n|---|---|---|---|";
+	/** The analyze reply that held a real run: one CRITICAL row and a closing offer worded "fixes". */
+	const offer = "Would you like me to suggest concrete fixes for the top 5 issues (C1, I1, I2, G1, G2)?";
+	const analyzeReply = `## Specification Analysis Report\n\n${header}\n| C1 | Constitution | CRITICAL | no test map |\n| I1 | Inconsistency | HIGH | MVP order |\n\n${offer}`;
 
-	it("takes completed, waits, and routine from the judge and the report counts from the text", async () => {
+	interface JudgeCall {
+		state: Record<string, unknown> & { message: string; evidence: Record<string, unknown> };
+		questions: { next: { type: string; criteria: Record<string, string> } };
+	}
+	const judgePicks = (pick: SpeckitNext | Error, calls: JudgeCall[] = []) =>
 		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-			judge: async () => ({
-				answers: { completed: { noul: 0.9 }, waits: { noul: 0.1 }, routine: { noul: 0.5 }, offers: { noul: 0.1 } },
-			}),
-		} as unknown as judgment.ChainJudge);
-		expect(await classifySpeckitTurn("analyze", message(text), deps)).toMatchObject({
-			completed: true,
-			waits: false,
-			routine: true,
-			analyze: { critical: 1, high: 0 },
-		});
-	});
-
-	it("falls back to the text verdict when the judge fails", async () => {
-		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-			judge: async () => {
-				throw new Error("no judge model");
-			},
-		} as unknown as judgment.ChainJudge);
-		expect(await classifySpeckitTurn("analyze", message(text), deps)).toEqual(
-			readSpeckitTextVerdict("analyze", message(text)),
-		);
-	});
-
-	it("hides a closing offer to run another phase from the judge and never auto-answers one", async () => {
-		const seen: string[] = [];
-		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-			judge: async (input: { state: { message: string } }) => {
-				seen.push(input.state.message);
-				return { answers: { completed: { noul: 0.9 }, waits: { noul: 0.9 }, routine: { noul: 0.9 } } };
-			},
-		} as unknown as judgment.ChainJudge);
-		const report = "**Completion report**\n\n- Total: 27 tasks.";
-		const offer = "Run `/speckit.implement`, or say `go` and I will run the phases with one agent per US1 slice.";
-
-		const offered = await classifySpeckitTurn("tasks", message(`${report}\n\n${offer}`), deps);
-		expect(seen.at(-1)).toContain("Completion report");
-		expect(seen.at(-1)).not.toContain(offer);
-		// Even a judge that still reads a question there never gets the "proceed" answer.
-		expect(offered.routine).toBe(false);
-		expect(decideSpeckitStep(newSpeckitRun("tasks", 3), offered).kind).not.toBe("answer");
-		expect(readSpeckitTextVerdict("tasks", message(`${report}\n\n${offer}`)).waits).toBe(false);
-
-		// An offer with a question cue reaches the judge, and the mode holds instead of answering it.
-		const asked = await classifySpeckitTurn(
-			"tasks",
-			message(`${report}\n\nShall I run /speckit.implement now?`),
-			deps,
-		);
-		expect(seen.at(-1)).toContain("/speckit.implement");
-		expect(asked.routine).toBe(false);
-		expect(decideSpeckitStep(newSpeckitRun("tasks", 3), asked)).toMatchObject({ kind: "hold" });
-
-		// Clarify keeps its recommended next command for the ready check.
-		await classifySpeckitTurn(
-			"clarify",
-			message("No critical ambiguities detected.\n\nNext: run /speckit.plan."),
-			deps,
-		);
-		expect(seen.at(-1)).toContain("/speckit.plan");
-
-		// The reply's own phase command is not an offer: the implement checklist gate stays routine.
-		const gate =
-			"Checklists are incomplete; /speckit.implement stopped.\n\nDo you want to proceed with implementation anyway? (yes/no)";
-		expect((await classifySpeckitTurn("implement", message(gate), deps)).routine).toBe(true);
-		expect(readSpeckitTextVerdict("implement", message(gate)).routine).toBe(true);
-		expect(readSpeckitTextVerdict("implement", message(`Then run /speckit.converge.\n\n${gate}`)).routine).toBe(
-			false,
-		);
-	});
-
-	it("hides only the handoff sentence from the judge and keeps the rest of the paragraph", async () => {
-		const seen: string[] = [];
-		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-			judge: async (input: { state: { message: string } }) => {
-				seen.push(input.state.message);
-				return { answers: { completed: { noul: 0.9 }, waits: { noul: 0.9 }, routine: { noul: 0.9 } } };
-			},
-		} as unknown as judgment.ChainJudge);
-
-		await classifySpeckitTurn("tasks", message("Created tasks.md with 24 tasks. Next: /speckit.analyze."), deps);
-		expect(seen.at(-1)).toContain("Created tasks.md with 24 tasks.");
-		expect(seen.at(-1)).not.toContain("/speckit.analyze");
-
-		const scope = "Choose whether this feature stores personal data before /speckit.tasks.";
-		await classifySpeckitTurn("plan", message(`Generated plan.md.\n\n${scope}`), deps);
-		expect(seen.at(-1)).toContain(scope);
-
-		const failure = "Could not run /speckit.implement because tasks.md is missing.";
-		await classifySpeckitTurn("tasks", message(failure), deps);
-		expect(seen.at(-1)).toContain(failure);
-
-		// A mention of another phase command is not an offer: the implement checklist gate stays routine.
-		const gate = `The previous /speckit.analyze report has no CRITICAL findings.\n\nDo you want to proceed with implementation anyway? (yes/no)`;
-		expect((await classifySpeckitTurn("implement", message(gate), deps)).routine).toBe(true);
-	});
-
-	it("never takes the judge's routine answer next to the text error cue", async () => {
-		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-			judge: async () => ({
-				answers: { completed: { noul: 0.9 }, waits: { noul: 0.9 }, routine: { noul: 0.9 } },
-			}),
-		} as unknown as judgment.ChainJudge);
-		const reply = message("ERROR: build broke.\n\nDo you want to proceed with implementation anyway? (yes/no)");
-		const verdict = await classifySpeckitTurn("implement", reply, deps);
-
-		expect(verdict.routine).toBe(false);
-		expect(decideSpeckitStep(newSpeckitRun("implement", 3), verdict)).toMatchObject({ kind: "hold" });
-	});
-
-	const judgeSays = (completed: number, seen: string[] = [], converge: SpeckitConverge = "none") =>
-		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-			judge: async (input: { state: { message: string } }) => {
-				seen.push(input.state.message);
-				return {
-					answers: {
-						completed: { noul: completed },
-						waits: { noul: 0.1 },
-						routine: { noul: 0.1 },
-						offers: { noul: 0.1 },
-						converge: { type: "choice", choice: converge },
-					},
-				};
-			},
-		} as unknown as judgment.ChainJudge);
-
-	it("takes the converge result from the judge, which reads the whole turn", async () => {
-		const reports: unknown[] = [];
-		const judgeConverges = (converge: SpeckitConverge) =>
-			vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-				judge: async (input: { state: { report?: string }; questions: Record<string, unknown> }) => {
-					reports.push(input.state.report);
-					expect(input.questions.converge).toMatchObject({ type: "choice" });
-					return {
-						answers: {
-							completed: { noul: 0.1 },
-							waits: { noul: 0.1 },
-							routine: { noul: 0.1 },
-							converge: { type: "choice", choice: converge },
-						},
-					};
-				},
-			} as unknown as judgment.ChainJudge);
-		const run = newSpeckitRun("converge", 3);
-		const reply = message("✅ The implementation meets the spec, plan, and tasks. I did not change `tasks.md`.");
-
-		judgeConverges("complete");
-		const complete = await classifySpeckitTurn("converge", reply, deps, { earlier: "Checked 14 FRs." });
-		expect(reports.at(-1)).toContain("Checked 14 FRs.");
-		expect(reports.at(-1)).toContain("meets the spec");
-		expect(decideSpeckitStep(run, complete)).toEqual({ kind: "end", result: "complete" });
-
-		judgeConverges("added");
-		const added = await classifySpeckitTurn("converge", reply, deps);
-		expect(added.completed).toBe(true);
-		expect(decideSpeckitStep(run, added)).toEqual({ kind: "start", phase: "implement" });
-
-		// Other phases never ask for a converge result.
-		judgeConverges("added");
-		expect((await classifySpeckitTurn("implement", reply, deps)).converge).toBeUndefined();
-		expect(reports.at(-1)).toBeUndefined();
-
-		// No judge, no converge result: the run holds.
-		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-			judge: async () => {
-				throw new Error("no judge model");
-			},
-		} as unknown as judgment.ChainJudge);
-		expect(decideSpeckitStep(run, await classifySpeckitTurn("converge", reply, deps))).toMatchObject({
-			kind: "hold",
-		});
-	});
-
-	it("hides a 'Reply remediate' analyze offer from the judge and keeps an approval request", async () => {
-		const seen: string[] = [];
-		judgeSays(0.9, seen);
-		const offer = "Reply `remediate` and I will draft the edits for U1, U2, I1, and I3 for your approval.";
-		await classifySpeckitTurn("analyze", message(`Critical Issues Count: 0\n\n${offer}`), deps);
-		expect(seen.at(-1)).not.toContain("remediate");
-		const approve = "Edits 2 and 6 change behavior. Reply `apply all` or list the numbers.";
-		await classifySpeckitTurn("analyze", message(approve), deps);
-		expect(seen.at(-1)).toContain(approve);
-		const question = "Reply `remediate` if I should also apply the edits to the contracts?";
-		await classifySpeckitTurn("analyze", message(question), deps);
-		expect(seen.at(-1)).toContain(question);
-	});
-
-	it("never starts the next phase from the judge alone after a user turn without the phase report", async () => {
-		judgeSays(0.9);
-		const run = newSpeckitRun("implement", 3);
-		// A side request (smart-commit) after a hold: the judge reads its reply as finished.
-		const side = await classifySpeckitTurn(
-			"implement",
-			message("The index is empty. No commits were pushed."),
-			deps,
-			{
-				request: "commit this",
-			},
-		);
-		expect(side.completed).toBeUndefined();
-		expect(decideSpeckitStep(run, side)).toMatchObject({ kind: "hold" });
-		// Converge advances only on its judged outcome, and the judge reads this side request as no outcome.
-		const sideConverge = await classifySpeckitTurn(
-			"converge",
-			message("The index is empty. No commits were pushed."),
-			deps,
-			{
-				request: "commit this",
-			},
-		);
-		expect(decideSpeckitStep(newSpeckitRun("converge", 3), sideConverge)).toMatchObject({ kind: "hold" });
-		// The phase report still advances a user turn, and a phase command turn still trusts the judge.
-		const done = await classifySpeckitTurn("implement", message("All tasks completed."), deps, {
-			request: "continue",
-		});
-		expect(decideSpeckitStep(run, done)).toMatchObject({ kind: "start", phase: "converge" });
-		const own = await classifySpeckitTurn("implement", message("The work is finished."), deps);
-		expect(decideSpeckitStep(run, own)).toMatchObject({ kind: "start", phase: "converge" });
-	});
-
-	it("advances a plan turn that answers the phase's own question on the judge's word", async () => {
-		judgeSays(0.9);
-		const run = newSpeckitRun("plan", 3);
-		// The reply after `ok 1` in a held plan: no `plan.md`, and "failure" reads as an error cue.
-		const reply = message(
-			"Option 1 is now recorded in the spec's Clarifications, in `specs/llm-contract-gaps/spec.md`.\n\n" +
-				'- The scope line now says "every verified audit finding, except the dashboard answers after an OpenBao failure".\n\n' +
-				"The plan is complete, and no open questions remain.\n\nNext action: run `/speckit.tasks`.",
-		);
-		const side = await classifySpeckitTurn("plan", reply, deps, { request: "ok 1" });
-		expect(decideSpeckitStep(run, side)).toMatchObject({ kind: "hold", hold: { kind: "needs-you" } });
-		const answer = await classifySpeckitTurn("plan", reply, deps, { request: "ok 1", answers: true });
-		expect(decideSpeckitStep(run, answer)).toMatchObject({ kind: "start", phase: "tasks" });
-	});
-
-	it("keeps a readable analyze report or converge result completed when the judge reads it as a failure", async () => {
-		judgeSays(0.1, [], "added");
-		expect((await classifySpeckitTurn("analyze", message(text), deps)).completed).toBe(true);
-		expect((await classifySpeckitTurn("converge", message("Appended 1 task."), deps)).completed).toBe(true);
-		// An error cue, an unreadable report, or no converge result still holds.
-		expect((await classifySpeckitTurn("analyze", message(`${text}\nERROR: script failed.`), deps)).completed).toBe(
-			false,
-		);
-		expect((await classifySpeckitTurn("analyze", message("I looked around."), deps)).completed).toBe(false);
-		judgeSays(0.1);
-		expect((await classifySpeckitTurn("converge", message("Nothing to report."), deps)).completed).toBe(false);
-	});
-
-	it("never shows the judge the analyze remediation offer", async () => {
-		const seen: string[] = [];
-		judgeSays(0.9, seen);
-		const offer = "Would you like me to suggest concrete remediation edits for the top 1 issues?";
-		await classifySpeckitTurn("analyze", message(`${text}\n\n${offer}`), deps);
-		expect(seen).toHaveLength(1);
-		expect(seen[0]).not.toContain(offer);
-		expect(seen[0]).toContain("CRITICAL");
-	});
-
-	it("asks whether the user requested a fix only for a user turn in analyze without a readable report", async () => {
-		const calls: { state: Record<string, unknown>; questions: Record<string, unknown> }[] = [];
-		vi.spyOn(judgment, "resolveJudge").mockReturnValue({
-			judge: async (input: (typeof calls)[number]) => {
+			judge: async (input: JudgeCall) => {
 				calls.push(input);
-				const answers = Object.fromEntries(Object.keys(input.questions).map(id => [id, { noul: 0.9 }]));
-				return { answers: { ...answers, waits: { noul: 0.1 } } };
+				if (pick instanceof Error) throw pick;
+				return { answers: { next: { type: "choice", choice: pick } } };
 			},
 		} as unknown as judgment.ChainJudge);
-		const fix = "All three findings are addressed. Updated spec.md and tasks.md.";
-		const request = "Fix the analyze findings.";
 
-		expect((await classifySpeckitTurn("analyze", message(fix), deps, { request })).fixed).toBe(true);
-		expect(calls[0].state).toMatchObject({ phase: "analyze", request });
-		expect(Object.keys(calls[0].questions)).toContain("fixed");
+	it("shows the judge the whole reply with the closing offer as evidence, and follows its pick", async () => {
+		const calls: JudgeCall[] = [];
+		judgePicks("remediate", calls);
+		const verdict = await classifySpeckitTurn("analyze", message(analyzeReply), deps);
 
-		// A readable report, a turn the mode started, or another phase never asks it.
-		for (const [phase, reply, from] of [
-			["analyze", text, request],
-			["analyze", fix, undefined],
-			["tasks", fix, request],
-		] as const) {
-			calls.length = 0;
-			expect((await classifySpeckitTurn(phase, message(reply), deps, { request: from })).fixed).toBeUndefined();
-			expect(Object.keys(calls[0].questions)).not.toContain("fixed");
-			expect(calls[0].state).not.toHaveProperty("request");
+		expect(calls[0].state.message).toContain(offer);
+		expect(calls[0].state.evidence).toMatchObject({ analyze: { critical: 1, high: 1 }, closingOffers: [offer] });
+		expect(verdict).toEqual({ failed: undefined, next: "remediate", analyze: { critical: 1, high: 1 } });
+		expect(decideSpeckitStep(newSpeckitRun("analyze", 3), verdict)).toEqual({ kind: "remediate" });
+	});
+
+	it("holds when the judge fails, and never asks the judge about a failed stop", async () => {
+		const calls: JudgeCall[] = [];
+		judgePicks(new Error("no judge model"), calls);
+		const verdict = await classifySpeckitTurn("plan", message("Generated plan.md."), deps);
+		expect(verdict.next).toBeUndefined();
+		expect(decideSpeckitStep(newSpeckitRun("plan", 3), verdict)).toMatchObject({
+			hold: { kind: "needs-you", reason: expect.stringContaining("turn check failed") },
+		});
+
+		calls.length = 0;
+		judgePicks("advance", calls);
+		for (const stopReason of ["error", "length", "aborted"] as const) {
+			const failed = await classifySpeckitTurn("plan", message("Generated plan.md.", stopReason), deps);
+			expect(failed.failed).toBeString();
+			expect(decideSpeckitStep(newSpeckitRun("plan", 3), failed).kind).toBe("hold");
 		}
+		expect(calls).toHaveLength(0);
+	});
+
+	it("offers each phase only the steps it can take, each with a rendered rubric", async () => {
+		const calls: JudgeCall[] = [];
+		judgePicks("unclear", calls);
+		for (const phase of [...SPECKIT_PHASE_COMMANDS, "remediation"] as const) {
+			for (const request of [undefined, "Fix the findings."]) {
+				calls.length = 0;
+				await classifySpeckitTurn(phase, message("Done."), deps, { request });
+				const options = Object.keys(calls[0].questions.next.criteria);
+				expect(options).toEqual(speckitOutcomes(phase, request !== undefined));
+				for (const rubric of Object.values(calls[0].questions.next.criteria)) {
+					expect(rubric.length).toBeGreaterThan(20);
+					expect(rubric).not.toContain("{{");
+				}
+				expect(options.includes("advance")).toBe(phase !== "converge");
+				expect(options.includes("proceed")).toBe(["plan", "tasks", "implement", "converge"].includes(phase));
+				expect(options.includes("recheck")).toBe(phase === "analyze" && request !== undefined);
+				expect(options.includes("complete")).toBe(phase === "converge");
+			}
+		}
+	});
+
+	it("gives the judge the earlier replies, and the user's text with its answer mark only on a user turn", async () => {
+		const calls: JudgeCall[] = [];
+		judgePicks("advance", calls);
+		await classifySpeckitTurn("converge", message("Done."), deps, { earlier: "Checked 14 FRs." });
+		expect(calls[0].state.earlier).toBe("Checked 14 FRs.");
+		expect(calls[0].state).not.toHaveProperty("request");
+
+		await classifySpeckitTurn("plan", message("Recorded option 1."), deps, { request: "ok 1", answers: true });
+		expect(calls[1].state).toMatchObject({ request: "ok 1", answers: true });
+		expect(calls[1].state).not.toHaveProperty("earlier");
+		await classifySpeckitTurn("plan", message("Committed."), deps, { request: "commit this" });
+		expect(calls[2].state).toMatchObject({ request: "commit this", answers: false });
 	});
 });

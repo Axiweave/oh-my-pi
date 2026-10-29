@@ -13,6 +13,8 @@ description: "Task list for Speckit-Auto Mode"
 
 **Organization**: Tasks are grouped by user story. US1 and US2 are P1. US3 and US4 are P2. US5 is P3. Line numbers are from `6bf8b58531` and can drift. Find the named function first.
 
+**Superseded design**: T003, T009, T010, T011, T012, T013, and T032 record the first turn verdict: four yes/no judge questions, closing-offer removal before the judge, a text fallback, and decision rows 1-23. FR-037 replaced it. One judge `choice` question, `next`, decides the step for every phase. Text patterns give the judge evidence only, and a failed check holds the run. research.md R6 and data-model.md have the current shape.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependency on an open task)

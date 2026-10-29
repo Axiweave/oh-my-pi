@@ -8,6 +8,7 @@ Auxiliary examples:
 - "I can also add tests for the edge cases if you like."
 - "Let me know if you want a walkthrough of the changes."
 - "Run /speckit.analyze next, or say go."
+- "Shall I run /speckit.implement now?"
 Blocking examples:
 - "Should the cache be per user or global?"
 - "Q1: Which auth method? A) OAuth B) API key"
@@ -15,30 +16,41 @@ Blocking examples:
 - "I need the staging database URL to run the migration tests."
 - "T12 fails because the API returns 403. How should I handle it?"
 
-## completed
-This message ends the /speckit.{{phase}} step of a spec-kit workflow. Answer yes if the message reports that the step finished its work, with no error, no failed step, and no early stop. A stop only to ask the user a question is not an error. Auxiliary work left undone, such as uncommitted changes, is not an early stop.
+## next
+This message ends the /speckit.{{phase}} step of a spec-kit workflow. Pick the next step of the workflow.
+The state field `message` is the end of the step's last reply. The field `earlier`, when present, holds the step's earlier replies in the same turn: the step can print its report there and end with a short summary. Read both.
+The field `evidence` holds hints that text patterns found. A pattern can be wrong, so read the messages and use a hint only to check what you read:
+- `analyze`: the CRITICAL and HIGH counts from the analyze findings table, or `unreadable` when the patterns found no findings report.
+- `errorCue`: true when a line such as `ERROR:` or `T012 failed` was found. Zero counts such as "0 failed" do not count.
+- `reportCue`: true when the step's own completion report was found, such as "Created tasks.md with 24 tasks".
+- `readyCue`: clarify only. True when clarify reported no critical ambiguity or recommended /speckit.plan, with no blocking Deferred item.
+- `closingOffers`: closing sentences that offer to run another /speckit command or to suggest remediation edits.
+When the field `request` is present, the user typed it to start this turn instead of a /speckit command. `answers: true` means that `request` replies to the step's own question, so the reply goes on with the step. Otherwise `request` can be a side request, such as a commit or a question about the code. Then pick a step that goes on only if the reply also finishes the step's own work.
 {{blocking}}
 
-## waits
-This message ends the /speckit.{{phase}} step of a spec-kit workflow. Answer yes if the message has a blocking question or waits for a blocking action from the user. Answer no if every question and offer in it is auxiliary, even when it ends with a question mark.{{#when phase "==" "analyze"}} The closing offer to suggest remediation edits is auxiliary.{{/when}}
-{{blocking}}
+## advance
+{{#when phase "==" "clarify"}}Clarify finished: its report says that the spec is ready for planning (no critical ambiguity, or it recommends /speckit.plan), and no high-impact item is left unasked. Items deferred to planning and low-impact Outstanding items do not block.{{/when}}{{#when phase "==" "analyze"}}Analyze printed its findings report, the report has no CRITICAL finding, and no blocking question remains. HIGH and lower findings do not block.{{/when}}{{#when phase "==" "remediation"}}The fix round changed the feature documents, reports that it finished, and asks no blocking question.{{/when}}{{#when phase "==" "specify"}}Specify wrote spec.md and asks no blocking question.{{/when}}{{#when phase "==" "plan"}}Plan wrote plan.md and asks no blocking question.{{/when}}{{#when phase "==" "tasks"}}Tasks wrote tasks.md and asks no blocking question.{{/when}}{{#when phase "==" "implement"}}Implement finished every task, with no failed task and no blocking question.{{/when}} The message reports no error, no failed step, and no early stop. Auxiliary offers, including an offer to run the next /speckit command, do not count.
 
-## routine
-This message ends the /speckit.{{phase}} step of a spec-kit workflow. Answer yes only if the message has exactly one blocking question, that question asks permission to proceed with the agent's own recommendation, it needs no new scope or requirement decision, and the message reports no error or failed step. Do not count auxiliary questions. An auxiliary question is never routine. A question that asks the user to choose between options, or to decide what the feature covers, is a scope decision. Answer no when the message has no blocking question.
-{{blocking}}
+## proceed
+The message has exactly one blocking question. That question asks permission to proceed with the agent's own recommendation, such as the implement checklist gate "Do you want to proceed with implementation anyway? (yes/no)". It needs no new scope or requirement decision, and the message reports no error. A question that asks the user to choose between options, or to decide what the feature covers, is not this. An offer to run another /speckit command is not this: it is auxiliary.
 
-## ready
-This message ends the /speckit.{{phase}} step of a spec-kit workflow. Answer yes if the report recommends /speckit.plan or finds no critical ambiguity, and no high-impact item is left unasked.
+## remediate
+The analyze report has at least one CRITICAL finding, or every blocking question asks leave for the agent to make fixes that the report itself recommends, as edits to the feature documents (spec.md, plan.md, tasks.md, quickstart.md, and the like), for example "Would you like me to suggest concrete fixes for the top 5 issues?" or "Reply `fix I1-I3` and I will make these edits." Pick this also when one fix may need a user decision later: the fix round asks the user and stops at that fix. Do not pick this when, before any fix can start, the message asks the user to choose between options, to give input that only the user has, or to approve edits that change behavior, for example "Edits 2 and 6 change behavior. Reply `apply all` or list the numbers.".
 
-## fixed
-This message ends a user turn in the /speckit.analyze step of a spec-kit workflow. The state field `request` is the user's text that started the turn. Answer yes only if `request` asks the agent to fix findings from the analyze report, and the message reports that the agent changed the feature documents to fix them, with no open question and no error.
+## recheck
+`request` asks the agent to fix findings from the analyze report, and the message reports that the agent changed the feature documents to fix them, with no open question and no error. Analyze must run again to check the fixes.
 
-## offers
-This message ends the /speckit.analyze step of a spec-kit workflow. Answer yes only if every blocking question in the message asks leave for the agent to make fixes that the analyze report itself recommends, as edits to the feature documents (spec.md, plan.md, tasks.md, quickstart.md, and the like), for example "Do you want me to write the edits for I1 and C1?" or "Reply `fix I1-I3` and I will make these edits." Answer no if a question asks the user to choose between options, to make a scope or requirement decision, or to give input that only the user has. Answer no if the message says that some edits change behavior and asks for approval, for example "Edits 2 and 6 change behavior. Reply `apply all` or list the numbers.": that is an approval gate. Answer no if the user must pick which edits to make, or if a question asks whether to also apply edits beyond the report's recommendations, for example "Should I also apply the edits to the contracts?"
-{{blocking}}
+## complete
+The converge report says that the implementation meets the spec, plan, and tasks, or that it found no gap, and it added no task to tasks.md. A zero findings count, an accepted difference that gets no task, or an offer to commit, push, review, or open a pull request does not change this. Read the meaning, not the words: the report can use any heading, wording, emoji, or markdown.
 
-## converge
-This is the /speckit.converge step of a spec-kit workflow. The state field `report` holds the agent text of the whole step turn, in order. Converge compares the implementation with spec.md, plan.md, and tasks.md. If it finds gaps, it appends new tasks to tasks.md for the next implement pass. Pick the outcome that the report states. Read the meaning, not the words: the report can use any heading, wording, emoji, or markdown.
-- complete: the report says that the implementation meets the spec, plan, and tasks, or that it found no gap, and it added no task to tasks.md. A zero findings count, an accepted difference that gets no task, or an offer to commit, push, review, or open a pull request does not change this.
-- added: the report says that it appended or added one or more tasks to tasks.md for remaining gaps, for example under a "Convergence" phase, so another implement pass must do them.
-- none: the report states neither outcome or states both, stops early, reports an error, asks a blocking question, or is about other work, such as a commit.
+## added
+The converge report says that it appended or added one or more tasks to tasks.md for remaining gaps, for example under a "Convergence" phase, so another implement pass must do them.
+
+## ask
+The message has a blocking question, or it waits for a blocking action from the user, and no step above fits.
+
+## error
+The message reports an error, a failed step, or an early stop that the user must fix. A stop only to ask a question is not an error. Auxiliary work left undone, such as uncommitted changes, is not an early stop.
+
+## unclear
+The messages do not show the step's outcome: the step stops before its work is done without a question, the reply is about other work (for example a commit after `request`), or the messages state conflicting outcomes.

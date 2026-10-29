@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - The repo at `/Users/fuyu0425/agents/oh-my-pi` with the feature built in. The `omp` launcher runs the source directly.
-- A model with credentials for the session. A judge model is optional (the fallback path runs without one).
+- A model with credentials for the session. A judge model is optional: with no judge role, the turn check uses the session model. When the check fails, the run holds.
 
 ## 1. Automated checks
 
@@ -21,9 +21,9 @@ What the tests prove:
 
 | Test | Property |
 |---|---|
-| decision, seeded sequences | SC-004 bounds. No start after a failed turn (SC-008). No start in specify or clarify while `waits` is true (SC-002). At most one automatic answer per phase run. |
+| decision, seeded sequences | SC-004 bounds. No start after a failed turn (SC-008). No start when the judge picks `ask`, `error`, or `unclear`, or gives no answer (SC-002). No implement while the CRITICAL count is above 0. At most one automatic answer per phase run. |
 | decision, converge limit 0, 1, 3 | FR-021 and FR-036 boundaries. |
-| text cues | Analyze counts with zero rows, CRITICAL rows, a larger `Critical Issues Count`, and no report. The converge cues. Normal-text errors give `completed: false` in the fallback. The analyze edit offer is not a question. |
+| text evidence | Analyze counts with zero rows, CRITICAL rows, a larger `Critical Issues Count`, and no report. Normal-text errors set `errorCue`. The analyze fix offer and phase handoffs show in `closingOffers`. The evidence never picks the step. |
 | saved state | A restored run is paused. Garbage data gives "mode off". |
 | interactive | A settled turn submits the next phase after the grace period. Draft text parks the start, and clearing it submits with no new decision (FR-012). A user turn start drops the start (SC-003). Esc pauses (SC-005). The other modes refuse while the mode is on, and the reverse. |
 

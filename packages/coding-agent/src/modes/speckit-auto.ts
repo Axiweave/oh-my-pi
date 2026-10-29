@@ -4,7 +4,7 @@
  * module reads a settled turn and decides the next step.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ChoiceAnswer, NoulAnswer, Question, StopReason } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ChoiceAnswer, ChoiceQuestion, StopReason } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { resolveJudge, sharedJudgmentCache } from "../judgment";
 import answerPrompt from "../prompts/speckit-auto/answer.md" with { type: "text" };
@@ -59,28 +59,39 @@ export interface SpeckitAutoState {
 	run?: SpeckitRun;
 }
 
+/**
+ * The next step that the judge picks for a settled phase turn. `advance` starts the successor phase, `proceed`
+ * sends the automatic answer, `remediate` and `recheck` are analyze fix rounds, `complete` and `added` are the
+ * converge outcomes, and `ask`, `error`, and `unclear` hold the run.
+ */
+export type SpeckitNext =
+	| "advance"
+	| "proceed"
+	| "remediate"
+	| "recheck"
+	| "complete"
+	| "added"
+	| "ask"
+	| "error"
+	| "unclear";
+
 export interface SpeckitVerdict {
 	/** stopReason error, length, or aborted, with the reason. */
 	failed?: string;
-	/** false: reported error or early stop. undefined: cannot tell. */
-	completed: boolean | undefined;
-	waits: boolean | undefined;
-	/** The only open question asks to proceed with the recommendation. */
-	routine: boolean;
-	/** Clarify only. */
-	ready?: boolean;
-	/** Analyze only. */
+	/** The judge's pick; `undefined` when the judge could not answer. */
+	next?: SpeckitNext;
+	/** Analyze only: the report counts from the text, for the CRITICAL bound and the HIGH notice. */
 	analyze?: { critical: number; high: number } | "unreadable";
-	/** Analyze only, judge only: the user asked to fix the analyze findings and the reply reports the fixes. */
-	fixed?: boolean;
-	/** Analyze only, judge only: the only blocking question offers to make the report's own fixes to the feature documents. */
-	offers?: boolean;
-	/** Converge only, judge only. */
-	converge?: SpeckitConverge;
 }
 
-export type SpeckitConverge = "complete" | "added" | "none";
-const CONVERGE_OUTCOMES: Record<SpeckitConverge, null> = { complete: null, added: null, none: null };
+/** Text-pattern hints for the judge; the judge decides, the hints only help it read the reply. */
+export interface SpeckitEvidence {
+	analyze?: { critical: number; high: number } | "unreadable";
+	errorCue: boolean;
+	reportCue?: boolean;
+	readyCue?: boolean;
+	closingOffers: string[];
+}
 
 export type SpeckitEndResult = "complete" | "open-tasks" | "stopped" | "planned";
 
@@ -133,8 +144,6 @@ export const speckitRunScope = (run: SpeckitRun, scope: SpeckitAutoScope): Speck
 const DEFAULT_CONVERGE_ROUNDS = 3;
 /** Characters of the message end that the judge and the text cues read. */
 const TAIL_CHARS = 6000;
-/** Yes-probability at or above which a judge answer counts as yes. */
-const JUDGE_THRESHOLD = 0.5;
 
 export const SPECKIT_ANSWER_TEXT = prompt.render(answerPrompt);
 export const SPECKIT_REMEDIATION_TEXT = prompt.render(remediationPrompt);
@@ -254,23 +263,23 @@ export function parseSpeckitAutoState(data: unknown): SpeckitAutoState | undefin
 
 const hold = (kind: SpeckitHold["kind"], reason: string): SpeckitAction => ({ kind: "hold", hold: { kind, reason } });
 const start = (phase: SpeckitPhase): SpeckitAction => ({ kind: "start", phase });
-/** Phases where any question goes to the user (row 2). */
+/** Phases where any question goes to the user: the automatic answer never runs there. */
 const ASKS_USER: Partial<Record<SpeckitPhase, true>> = {
 	specify: true,
 	clarify: true,
 	analyze: true,
 	remediation: true,
 };
-/** Phases that need `completed === true` to advance (row 7). */
-const NEEDS_COMPLETED: Partial<Record<SpeckitPhase, true>> = {
-	specify: true,
-	plan: true,
-	tasks: true,
-	implement: true,
-	remediation: true,
-};
+const HOLDS: readonly SpeckitNext[] = ["ask", "error", "unclear"];
 
-/** The decision table in data-model.md, rows 1-23, then the scope stop. Pure. */
+/** The steps the judge may pick in `phase`; `userTurn` adds the analyze re-check of a user-requested fix. */
+export function speckitOutcomes(phase: SpeckitPhase, userTurn: boolean): SpeckitNext[] {
+	if (phase === "analyze") return ["advance", "remediate", ...(userTurn ? (["recheck"] as const) : []), ...HOLDS];
+	if (phase === "converge") return ["complete", "added", "proceed", ...HOLDS];
+	return ["advance", ...(ASKS_USER[phase] ? [] : (["proceed"] as const)), ...HOLDS];
+}
+
+/** The judge's next step within the run bounds (data-model.md decision table), then the scope stop. Pure. */
 export function decideSpeckitStep(
 	run: SpeckitRun,
 	verdict: SpeckitVerdict,
@@ -289,71 +298,61 @@ function limitToScope(action: SpeckitAction, scope: SpeckitAutoScope): SpeckitAc
 	return phase && !speckitScopeAllows(scope, phase) ? { kind: "end", result: "planned" } : action;
 }
 
+const unclear = (): SpeckitAction =>
+	hold("needs-you", "cannot tell if the phase finished; /speckit-auto next advances");
+
+/** The judge's pick within the run bounds: round limits, one automatic answer, and no implement past a CRITICAL count. */
 function decideFullStep(run: SpeckitRun, verdict: SpeckitVerdict): SpeckitAction {
 	const { phase } = run;
 	if (verdict.failed) return hold("needs-you", verdict.failed);
-	if (verdict.waits === true) {
-		// Analyze asking leave to make the fixes its report recommends is a remediation round, not a user decision.
-		if (
-			phase === "analyze" &&
-			verdict.offers &&
-			verdict.completed !== false &&
-			run.remediationRounds < SPECKIT_REMEDIATION_ROUNDS
-		) {
-			return { kind: "remediate" };
-		}
-		if (!ASKS_USER[phase] && verdict.routine && !run.autoAnswered) return { kind: "answer" };
-		return hold("user", "answer the question");
-	}
-	if (verdict.completed === false) return hold("needs-you", "the phase reported an error or stopped early");
-	if ((phase === "specify" || phase === "clarify") && verdict.waits === undefined) {
-		return hold("needs-you", "cannot tell if the phase waits; /speckit-auto next advances");
-	}
-	if (NEEDS_COMPLETED[phase] && verdict.completed !== true) {
-		return hold("needs-you", "cannot tell if the phase finished; /speckit-auto next advances");
-	}
-	switch (phase) {
-		case "clarify":
-			if (verdict.ready !== true) return hold("needs-you", "clarify did not report the spec ready");
+	const report = typeof verdict.analyze === "object" ? verdict.analyze : { critical: 0, high: 0 };
+	const roundsLeft = run.remediationRounds < SPECKIT_REMEDIATION_ROUNDS;
+	switch (verdict.next) {
+		case undefined:
+			return hold("needs-you", "the turn check failed; /speckit-auto next advances");
+		case "ask":
+			return hold("user", "answer the question");
+		case "error":
+			return hold("needs-you", "the phase reported an error or stopped early");
+		case "proceed":
+			return ASKS_USER[phase] || run.autoAnswered ? hold("user", "answer the question") : { kind: "answer" };
+		case "recheck":
+			if (phase !== "analyze") break;
+			return roundsLeft
+				? start("analyze")
+				: hold(
+						"needs-you",
+						`fixes applied after ${SPECKIT_REMEDIATION_ROUNDS} rounds; run /speckit.analyze to check them`,
+					);
+		case "complete":
+			if (phase === "converge") return { kind: "end", result: "complete" };
 			break;
-		case "analyze": {
-			const report = verdict.analyze;
-			if (report === undefined || report === "unreadable") {
-				// A user-requested fix is a remediation round the user started: check it with a new analyze.
-				if (verdict.fixed !== true) return hold("needs-you", "no readable analyze report");
-				return run.remediationRounds < SPECKIT_REMEDIATION_ROUNDS
-					? start("analyze")
-					: hold(
-							"needs-you",
-							`fixes applied after ${SPECKIT_REMEDIATION_ROUNDS} rounds; run /speckit.analyze to check them`,
-						);
-			}
-			if (report.critical > 0) {
-				return run.remediationRounds < SPECKIT_REMEDIATION_ROUNDS
-					? { kind: "remediate" }
-					: hold(
+		case "added":
+			if (phase !== "converge") break;
+			return run.convergeRounds < run.convergeLimit ? start("implement") : { kind: "end", result: "open-tasks" };
+		case "remediate":
+		case "advance":
+			if (phase === "converge") break;
+			if (phase !== "analyze") return verdict.next === "advance" ? start(SPECKIT_SUCCESSOR[phase]!) : unclear();
+			// The report's CRITICAL count bounds the judge: analyze never advances past one (FR-017).
+			if (verdict.next === "remediate" || report.critical > 0) {
+				if (roundsLeft) return { kind: "remediate" };
+				return report.critical > 0
+					? hold(
 							"needs-you",
 							`${report.critical} CRITICAL findings remain after ${SPECKIT_REMEDIATION_ROUNDS} rounds`,
-						);
+						)
+					: hold("user", "answer the question");
 			}
-			if (report.high > 0) {
-				return {
-					kind: "notice",
-					text: `Speckit auto: analyze found ${report.high} HIGH findings. Continuing to implement.`,
-					after: start("implement"),
-				};
-			}
-			break;
-		}
-		case "converge":
-			if (verdict.converge === "complete") return { kind: "end", result: "complete" };
-			if (verdict.converge === "added") {
-				return run.convergeRounds < run.convergeLimit ? start("implement") : { kind: "end", result: "open-tasks" };
-			}
-			return hold("needs-you", "converge reported no result");
+			return report.high > 0
+				? {
+						kind: "notice",
+						text: `Speckit auto: analyze found ${report.high} HIGH findings. Continuing to implement.`,
+						after: start("implement"),
+					}
+				: start("implement");
 	}
-	// Rows 8, 9, 15, and 20-23: every remaining phase starts its successor.
-	return start(SPECKIT_SUCCESSOR[phase]!);
+	return unclear();
 }
 
 const FAILURES: Partial<Record<StopReason, string>> = {
@@ -368,14 +367,9 @@ const ZERO_COUNT =
 	/\b(?:0|[Zz]ero|[Nn]o)\b[ \t`*_]*(?:(?!(?:and|but|or|then)\b)[A-Za-z-]+[ \t`*_]+){0,2}?(?:ERROR\b|Error:|[Ff]ail(?:ed|ures?)\b)/g;
 const ERROR_CUE = /\bERROR\b|\bError:|\b[Ff]ail(?:ed|ure)\b|\b[Bb]locked\b/;
 const QUESTION_END = /\?[*_"'`)\]]*[ \t]*$/;
-const QUESTION_CUE = new RegExp(
-	`${QUESTION_END.source}|\\*\\*Question:\\*\\*|Your choice|You can reply|Format: Short answer|Wait for user response|\\(yes/no\\)`,
-	"m",
-);
-/** The analyze offer to suggest remediation edits, or to draft them on a reply; never a sentence with a question mark in the reply form. */
+/** The analyze offer to suggest remediation edits or fixes, or to draft them on a reply. */
 const ANALYZE_OFFER =
-	/\b(?:suggest|propose)\b[^\n]*\bremediation\b|\breply\b(?![^\n]*\?)[^\n]*\bremediate\b[^\n]*\b(?:will|can)\b[^\n]*\b(?:draft|prepare|propose|apply)\b/i;
-const CHECKLIST_GATE = "Do you want to proceed with implementation anyway? (yes/no)";
+	/\b(?:suggest|propose)\b[^\n]*\b(?:remediation|fix(?:es)?|edits?)\b|\breply\b[^\n]*\bremediate\b[^\n]*\b(?:will|can)\b[^\n]*\b(?:draft|prepare|propose|apply)\b/i;
 const PHASE_COMMAND = new RegExp(`/speckit\\.(${SPECKIT_PHASE_COMMANDS.join("|")})\\b`, "g");
 /** A sentence ends at `.`, `!`, or `?` before whitespace, or at the line end; `tasks.md` and `/speckit.plan` do not end one. */
 const SENTENCE = /\S[^\n]*?(?:[.!?](?=\s|$)|$)/gm;
@@ -384,17 +378,10 @@ const HANDOFF_LEAD =
 	/^[\s>*_`-]*(?:(?:then|now)[ \t]+)?(?:run\b|next(?:[ \t]+(?:step|command))?[*_]*:|(?:suggested|recommended)[ \t]+next[ \t]+(?:step|command)[*_]*:|ready[ \t]+for\b|proceed[ \t]+(?:to|with)\b)(?![^\n]*\b(?:first|before)\b)/i;
 const namesOtherPhase = (phase: SpeckitPhase, text: string): boolean =>
 	Array.from(text.matchAll(PHASE_COMMAND)).some(match => match[1] !== phase);
-/** A closing statement that offers to start another phase, as in "Run `/speckit.implement`, or say `go`". */
-const isHandoff = (phase: SpeckitPhase, sentence: string): boolean =>
-	namesOtherPhase(phase, sentence) && HANDOFF_LEAD.test(sentence) && !QUESTION_END.test(sentence);
-/**
- * The reply offers another phase: a handoff sentence, or a question that names another phase command. The mode
- * runs the next phase itself; a "proceed" answer would run that phase inside this turn and skip the pipeline (FR-022).
- */
-const offersOtherPhase = (phase: SpeckitPhase, tail: string): boolean =>
-	(tail.match(SENTENCE) ?? []).some(
-		sentence => namesOtherPhase(phase, sentence) && (HANDOFF_LEAD.test(sentence) || QUESTION_END.test(sentence)),
-	);
+/** A closing offer: a handoff or a question that names another phase command, or the analyze remediation offer. */
+const isClosingOffer = (phase: SpeckitPhase, sentence: string): boolean =>
+	(phase === "analyze" && ANALYZE_OFFER.test(sentence)) ||
+	(namesOtherPhase(phase, sentence) && (HANDOFF_LEAD.test(sentence) || QUESTION_END.test(sentence)));
 const PAST_TENSE = "(?:wrote|written|created|generated|complete|completed)";
 /** A line that reports `file` as written, in either word order. */
 const reportsWritten = (file: string): string => `^(?=[^\\n]*\\b${file}\\b)(?=[^\\n]*\\b${PAST_TENSE}\\b)`;
@@ -488,61 +475,31 @@ export function speckitEarlierText(messages: readonly AgentMessage[], reply: Ass
 	return parts.reverse().join("\n");
 }
 
-/**
- * The reply tail without closing offers, which are never questions (FR-022): for analyze, the remediation offer
- * sentence, and after clarify, a handoff sentence that offers another phase. The rest of the paragraph stays.
- * Specify and clarify keep the handoff: their checks read the recommended next command.
- */
-const askedText = (phase: SpeckitPhase, tail: string): string =>
-	phase === "specify" || phase === "clarify"
-		? tail
-		: tail.replace(SENTENCE, sentence =>
-				(phase === "analyze" && ANALYZE_OFFER.test(sentence)) || isHandoff(phase, sentence) ? "" : sentence,
-			);
-
-/**
- * Deterministic parts of the verdict plus the text-only fallback for the judged parts (research R6).
- * `earlier` is the text of the turn's earlier assistant messages; the clarify readiness and the analyze report read it.
- */
-export function readSpeckitTextVerdict(phase: SpeckitPhase, message: AssistantMessage, earlier = ""): SpeckitVerdict {
+/** The text-pattern hints for the judge; `earlier` is the text of the turn's earlier assistant messages. */
+export function readSpeckitEvidence(phase: SpeckitPhase, message: AssistantMessage, earlier = ""): SpeckitEvidence {
 	const text = assistantText(message);
 	const tail = text.slice(-TAIL_CHARS);
-	const error = ERROR_CUE.test(tail.replace(TABLE_LABEL, "").replace(ZERO_COUNT, ""));
-	const asked = askedText(phase, tail);
-	const question = QUESTION_CUE.test(asked);
-	const reported = REPORT_CUES[phase]?.every(cue => cue.test(tail)) ?? false;
-	// Clarify can print its readiness in an earlier message of the turn and end with a short summary.
-	const ready = phase === "clarify" ? readReady(READY_EVIDENCE.test(tail) ? tail : `${earlier}\n${tail}`) : undefined;
-	// Specify and clarify ask the user: with no question, only their report proves they do not wait (row 6).
-	const settled = phase === "specify" ? reported : phase === "clarify" ? ready === true : true;
+	const cues = REPORT_CUES[phase];
 	return {
-		failed:
-			message.stopReason === "error" && message.errorMessage
-				? `${FAILURES.error}: ${message.errorMessage}`
-				: FAILURES[message.stopReason],
-		completed: error ? false : !question && reported ? true : undefined,
-		waits: question || (settled ? false : undefined),
-		// The gate must be the only question; the full tail, so a removed closing offer still forbids the answer.
-		routine:
-			!error &&
-			asked.includes(CHECKLIST_GATE) &&
-			!QUESTION_CUE.test(asked.replace(CHECKLIST_GATE, "")) &&
-			!offersOtherPhase(phase, tail),
-		ready,
-		analyze: phase === "analyze" ? readTurnAnalyzeReport(text, earlier) : undefined,
+		...(phase === "analyze" ? { analyze: readTurnAnalyzeReport(text, earlier) } : {}),
+		errorCue: ERROR_CUE.test(tail.replace(TABLE_LABEL, "").replace(ZERO_COUNT, "")),
+		...(cues ? { reportCue: cues.every(cue => cue.test(tail)) } : {}),
+		// Clarify can print its readiness in an earlier message of the turn and end with a short summary.
+		...(phase === "clarify"
+			? { readyCue: readReady(READY_EVIDENCE.test(tail) ? tail : `${earlier}\n${tail}`) === true }
+			: {}),
+		closingOffers: (tail.match(SENTENCE) ?? []).filter(sentence => isClosingOffer(phase, sentence)),
 	};
 }
 
 export type SpeckitJudgeDeps = ClassifyUnexpectedStopDeps;
 
 /**
- * Verdict for a settled phase turn: failure and analyze counts from the text;
- * completed, waits, routine, ready, fixed, and the converge result from one
- * judge call, or from the text fallback when the judge cannot answer. The
- * fallback has no converge result. `turn.request` is the user's own text that
- * opened the turn, if the user started it. `turn.answers` marks that text as the
- * reply to a question the phase asked. `turn.earlier` is the text of the turn's
- * earlier assistant messages. Never throws.
+ * Verdict for a settled phase turn: the failure from the stop reason, then one judge call that picks the next
+ * step from the reply, with the text-pattern evidence as hints. `next` stays `undefined` when the judge cannot
+ * answer, so the run holds. `turn.request` is the user's own text that opened the turn, if the user started it.
+ * `turn.answers` marks that text as the reply to a question the phase asked. `turn.earlier` is the text of the
+ * turn's earlier assistant messages. Never throws.
  */
 export async function classifySpeckitTurn(
 	phase: SpeckitPhase,
@@ -550,13 +507,14 @@ export async function classifySpeckitTurn(
 	deps: SpeckitJudgeDeps,
 	turn: { request?: string; answers?: boolean; earlier?: string } = {},
 ): Promise<SpeckitVerdict> {
-	const { request, answers: answersHold, earlier } = turn;
-	const verdict = readSpeckitTextVerdict(phase, message, earlier);
-	if (verdict.failed) return verdict;
-	// Only a user turn in analyze without a report can be a user-requested fix.
-	const askFixed = request !== undefined && verdict.analyze === "unreadable";
-	// Only a readable analyze report has fixes of its own to offer.
-	const askOffers = typeof verdict.analyze === "object";
+	const { request, answers, earlier = "" } = turn;
+	const evidence = readSpeckitEvidence(phase, message, earlier);
+	const failed =
+		message.stopReason === "error" && message.errorMessage
+			? `${FAILURES.error}: ${message.errorMessage}`
+			: FAILURES[message.stopReason];
+	const verdict: SpeckitVerdict = { failed, analyze: evidence.analyze };
+	if (failed) return verdict;
 	try {
 		const judge = resolveJudge({
 			settings: deps.settings,
@@ -569,63 +527,28 @@ export async function classifySpeckitTurn(
 			telemetry: deps.telemetry,
 			cache: sharedJudgmentCache(),
 		});
-		const questions: Record<string, Question> = {};
-		for (const [id, template] of Object.entries(JUDGE_SECTIONS)) {
-			if (id === "converge") {
-				if (phase === "converge")
-					questions[id] = { type: "choice", instructions: template, criteria: CONVERGE_OUTCOMES };
-			} else if (
-				(id !== "ready" || phase === "clarify") &&
-				(id !== "fixed" || askFixed) &&
-				(id !== "offers" || askOffers)
-			) {
-				questions[id] = {
-					type: "noul",
-					instructions: prompt.render(template, { phase, blocking: JUDGE_BLOCKING }),
-				};
-			}
-		}
-		const tail = assistantText(message).slice(-TAIL_CHARS);
-		const text = askedText(phase, tail);
-		// Converge can report its outcome in an earlier message and end with a short summary.
-		const report = phase === "converge" ? `${earlier ?? ""}\n${tail}`.slice(-TAIL_CHARS) : undefined;
-		const { answers } = await judge.judge(
+		const outcomes = speckitOutcomes(phase, request !== undefined);
+		const question: ChoiceQuestion<SpeckitNext> = {
+			type: "choice",
+			instructions: prompt.render(JUDGE_SECTIONS.next!, { phase, blocking: JUDGE_BLOCKING }),
+			criteria: Object.fromEntries(
+				outcomes.map(outcome => [outcome, prompt.render(JUDGE_SECTIONS[outcome]!, { phase }).trim()]),
+			) as Record<SpeckitNext, string>,
+		};
+		const result = await judge.judge(
 			{
 				state: {
 					phase,
-					message: text,
-					...(askFixed ? { request } : {}),
-					...(report !== undefined ? { report } : {}),
+					message: assistantText(message).slice(-TAIL_CHARS),
+					...(earlier ? { earlier: earlier.slice(-TAIL_CHARS) } : {}),
+					evidence: { ...evidence },
+					...(request !== undefined ? { request, answers: answers === true } : {}),
 				},
-				questions,
+				questions: { next: question },
 			},
 			{ signal: deps.signal },
 		);
-		const yes = (id: string): boolean => (answers[id] as NoulAnswer).noul >= JUDGE_THRESHOLD;
-		const converge = report === undefined ? undefined : (answers.converge as ChoiceAnswer<SpeckitConverge>).choice;
-		// The judge reads analyze findings and converge gaps as failures; a readable outcome with no error cue is the step's result.
-		const outcome =
-			(verdict.analyze !== undefined && verdict.analyze !== "unreadable") ||
-			(converge !== undefined && converge !== "none");
-		const completed = yes("completed") || (outcome && verdict.completed !== false);
-		return {
-			...verdict,
-			// A user turn can be a side request (a commit, a question): only the phase's own report proves the
-			// phase finished, so the judge alone cannot start the next phase. An answer to the phase's own
-			// question goes on with the phase, so its reply needs no report.
-			completed:
-				completed && request !== undefined && !answersHold && REPORT_CUES[phase] && verdict.completed !== true
-					? undefined
-					: completed,
-			waits: yes("waits"),
-			// Never routine next to the text error cue (row 3 precedes row 5). The full tail: a removed closing
-			// offer still forbids the "proceed" answer.
-			routine: yes("routine") && verdict.completed !== false && !offersOtherPhase(phase, tail),
-			ready: phase === "clarify" ? yes("ready") : undefined,
-			...(askFixed ? { fixed: yes("fixed") } : {}),
-			...(askOffers ? { offers: yes("offers") } : {}),
-			...(converge !== undefined ? { converge } : {}),
-		};
+		return { ...verdict, next: (result.answers.next as ChoiceAnswer<SpeckitNext>).choice };
 	} catch (error) {
 		logger.debug("speckit-auto: turn check failed", {
 			error: error instanceof Error ? error.message : String(error),

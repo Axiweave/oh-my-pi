@@ -35,7 +35,8 @@ import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const PHASE_COMMANDS = speckitAuto.SPECKIT_PHASE_COMMANDS.map(phase => `speckit.${phase}`);
-const CLEAN: SpeckitVerdict = { completed: true, waits: false, routine: false };
+const CLEAN: SpeckitVerdict = { next: "advance" };
+const ASKS: SpeckitVerdict = { next: "ask" };
 const IMAGE: ImageContent = { type: "image", data: "", mimeType: "image/png" };
 const ORIGINAL_WARP_PROTOCOL = process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
 
@@ -295,9 +296,12 @@ describe("InteractiveMode speckit-auto mode", () => {
 			await start();
 			mode.setSpeckitAutoMode("tasks");
 			await turnStarts("/speckit.analyze");
-			turnSettles({ ...CLEAN, analyze: "unreadable" });
+			turnSettles({ next: "unclear", analyze: "unreadable" });
 			await tick(3);
-			expect(saved()?.run).toMatchObject({ phase: "analyze", hold: { reason: "no readable analyze report" } });
+			expect(saved()?.run).toMatchObject({
+				phase: "analyze",
+				hold: { reason: expect.stringContaining("cannot tell") },
+			});
 
 			await turnStarts("/speckit.implement");
 			expect(saved()?.run).toMatchObject({ history: ["analyze", "implement"], editing: true });
@@ -435,7 +439,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		it("holds for the user when clarify waits for an answer", async () => {
 			await start();
 			await startRun("/speckit.clarify");
-			turnSettles({ completed: true, waits: true, routine: false, ready: false });
+			turnSettles(ASKS);
 			await tick(3);
 
 			expect(submitted).toHaveLength(0);
@@ -445,12 +449,12 @@ describe("InteractiveMode speckit-auto mode", () => {
 		it("checks the user's reply to the phase's question as an answer, and other free text as a side request", async () => {
 			await start();
 			await startRun("/speckit.plan");
-			turnSettles({ ...CLEAN, waits: true });
+			turnSettles(ASKS);
 			await tick();
 			expect(saved()?.run?.hold?.kind).toBe("user");
 
 			await turnStarts("ok 1");
-			turnSettles({ ...CLEAN, completed: undefined });
+			turnSettles({ next: "unclear" });
 			await tick();
 			expect(classify.mock.calls.at(-1)?.[3]).toMatchObject({ request: "ok 1", answers: true });
 			expect(saved()?.run?.hold?.kind).toBe("needs-you");
@@ -466,10 +470,10 @@ describe("InteractiveMode speckit-auto mode", () => {
 		it("checks free text typed while paused after an answer as a side request on resume", async () => {
 			await start();
 			await startRun("/speckit.plan");
-			turnSettles({ ...CLEAN, waits: true });
+			turnSettles(ASKS);
 			await tick();
 			await turnStarts("ok 1");
-			turnSettles({ ...CLEAN, completed: undefined });
+			turnSettles({ next: "unclear" });
 			await tick();
 			expect(saved()?.run?.answering).toBe(true);
 
@@ -487,7 +491,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		it("forgets the own-turn marker after a failed own submit, so the same text from the user is a user turn", async () => {
 			await start();
 			await startRun("/speckit.implement");
-			turnSettles({ completed: false, waits: true, routine: true });
+			turnSettles({ next: "proceed" });
 			await tick(2);
 			const [answer] = submitted;
 			expect(answer.text).toBe(speckitAuto.SPECKIT_ANSWER_TEXT);
@@ -529,7 +533,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		it("keeps a hold through a turn that omp starts on its own", async () => {
 			await start();
 			await startRun("/speckit.clarify");
-			turnSettles({ completed: true, waits: true, routine: false, ready: false });
+			turnSettles(ASKS);
 			await tick();
 			expect(saved()?.run?.hold?.kind).toBe("user");
 
@@ -552,7 +556,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			await tick();
 
 			// A turn that continues the phase with no opener message (for example a retry) ends with an error report.
-			turnSettles({ completed: false, waits: false, routine: false });
+			turnSettles({ next: "error" });
 			await tick(2);
 
 			expect(submitted).toHaveLength(0);
@@ -560,7 +564,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(saved()?.run?.hold).toBeDefined();
 		});
 
-		const HELD: SpeckitVerdict = { completed: false, waits: false, routine: false };
+		const HELD: SpeckitVerdict = { next: "error" };
 
 		it("checks the phase reply, not the reply to an advisor turn that follows it", async () => {
 			await start();
@@ -668,7 +672,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			await start();
 			await startRun("/speckit.clarify");
 			backgroundJobRuns();
-			turnSettles({ completed: true, waits: true, routine: false, ready: false });
+			turnSettles(ASKS);
 			await tick(3);
 
 			expect(session.hasPendingAsyncWork()).toBe(true);
@@ -707,7 +711,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		});
 
 		it("re-runs analyze after a user-requested fix and counts it as a remediation round when that turn starts", async () => {
-			const unreadable: SpeckitVerdict = { ...CLEAN, analyze: "unreadable" };
+			const unreadable: SpeckitVerdict = { next: "unclear", analyze: "unreadable" };
 			await start();
 			await startRun("/speckit.analyze");
 			turnSettles(unreadable);
@@ -716,7 +720,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(classify.mock.calls.at(-1)?.[3]?.request).toBeUndefined();
 
 			await turnStarts("Fix the analyze findings.");
-			turnSettles({ ...unreadable, fixed: true });
+			turnSettles({ ...unreadable, next: "recheck" });
 			await tick(2);
 			expect(classify.mock.calls.at(-1)?.[3]?.request).toBe("Fix the analyze findings.");
 			expect(texts()).toEqual(["/speckit.analyze"]);
@@ -761,7 +765,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 
 			setStreaming(() => true);
 			await ompTurnRuns(ASYNC_RESULT_MESSAGE_TYPE, CLEAN);
-			judged.resolve({ ...CLEAN, converge: "complete" });
+			judged.resolve({ next: "complete" });
 			await flush();
 
 			expect(saved()?.run?.phase).toBe("converge");
@@ -828,7 +832,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		});
 
 		it("keeps the user's fix request through the continue message of its interrupted turn", async () => {
-			const unreadable: SpeckitVerdict = { ...CLEAN, analyze: "unreadable" };
+			const unreadable: SpeckitVerdict = { next: "unclear", analyze: "unreadable" };
 			await start();
 			await startRun("/speckit.analyze");
 			turnSettles(unreadable);
@@ -844,7 +848,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 
 			turnSettles(unreadable);
 			classify.mockImplementation(async (_phase, _message, _deps, options) =>
-				options?.request ? { ...unreadable, fixed: true } : unreadable,
+				options?.request ? { ...unreadable, next: "recheck" } : unreadable,
 			);
 			await tick(2);
 			expect(classify.mock.calls.at(-1)?.[3]?.request).toBe("Fix the analyze findings.");
@@ -1201,7 +1205,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			turnSettles();
 			const planReply = reply;
 			if (!planReply) throw new Error("Expected the phase reply");
-			const advisorReply = await ompTurnRuns("advisor", { completed: false, waits: false, routine: false });
+			const advisorReply = await ompTurnRuns("advisor", { next: "error" });
 			const advisor: CustomMessage = {
 				role: "custom",
 				customType: "advisor",
@@ -1222,7 +1226,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		});
 
 		it("keeps the user's fix request when a reload restores its interrupted turn", async () => {
-			const unreadable: SpeckitVerdict = { ...CLEAN, analyze: "unreadable" };
+			const unreadable: SpeckitVerdict = { next: "unclear", analyze: "unreadable" };
 			await start();
 			await startRun("/speckit.analyze");
 			const command = userText("/speckit.analyze");
@@ -1242,7 +1246,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 
 			turnSettles(unreadable);
 			classify.mockImplementation(async (_phase, _message, _deps, options) =>
-				options?.request ? { ...unreadable, fixed: true } : unreadable,
+				options?.request ? { ...unreadable, next: "recheck" } : unreadable,
 			);
 			await tick(2);
 			expect(texts().at(-1)).toBe("/speckit.analyze");
@@ -1357,14 +1361,14 @@ describe("InteractiveMode speckit-auto mode", () => {
 			await startRun("/speckit.specify Build a CLI");
 			const steps: SpeckitVerdict[] = [
 				CLEAN,
-				{ ...CLEAN, ready: true },
+				CLEAN,
 				CLEAN,
 				CLEAN,
 				{ ...CLEAN, analyze: { critical: 1, high: 0 } },
 				CLEAN,
 				{ ...CLEAN, analyze: { critical: 0, high: 2 } },
 				CLEAN,
-				{ ...CLEAN, converge: "added" },
+				{ next: "added" },
 				CLEAN,
 			];
 			for (const verdict of steps) {
@@ -1372,7 +1376,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 				await tick(2);
 				await ownTurnRuns(submitted[submitted.length - 1]);
 			}
-			turnSettles({ ...CLEAN, converge: "complete" });
+			turnSettles({ next: "complete" });
 			await tick(3);
 
 			expect(texts()).toEqual([
@@ -1601,7 +1605,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 		it("sends one notification for a hold", async () => {
 			await start();
 			await startRun("/speckit.clarify");
-			turnSettles({ completed: true, waits: true, routine: false });
+			turnSettles(ASKS);
 			await tick(5);
 
 			expect(notify).toHaveBeenCalledTimes(1);
@@ -1628,7 +1632,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			expect(ide.mock.calls.map(call => call[1])).not.toContain("done");
 
 			await ownTurnRuns(submitted[0]);
-			turnSettles({ completed: true, waits: true, routine: false });
+			turnSettles(ASKS);
 			await tick(5);
 
 			expect(statusState()).toBe("user");
@@ -1640,7 +1644,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			cfgCompletionNotify.override(settings, "off");
 			await start();
 			await startRun("/speckit.clarify");
-			turnSettles({ completed: true, waits: true, routine: false });
+			turnSettles(ASKS);
 			await tick(5);
 
 			expect(saved()?.run?.hold?.kind).toBe("user");

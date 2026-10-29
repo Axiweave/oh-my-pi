@@ -44,7 +44,7 @@ The mode uses the `mode` segment, the same slot as plan, goal, and loop mode. Fo
 
 ## Messages the mode submits
 
-Each one goes through `startPendingSubmission({ text })` and shows as a user row. The prompt texts live in `packages/coding-agent/src/prompts/speckit-auto/` (`answer.md`, `continue.md`, `remediation.md`). The judge questions live in `judge.md` in the same directory.
+Each one goes through `startPendingSubmission({ text })` and shows as a user row. The prompt texts live in `packages/coding-agent/src/prompts/speckit-auto/` (`answer.md`, `continue.md`, `remediation.md`). The judge question `next` and its option criteria live in `judge.md` in the same directory.
 
 | Action | Text |
 |---|---|

@@ -13,7 +13,7 @@ The design has two parts:
 1. A pure module `src/modes/speckit-auto.ts`. It holds the run state, the phase command parser, the text cues, the judge call, the decision function `decideSpeckitStep(run, verdict)`, and the parser for the saved session state. It has no UI and no timers, so a test can drive it with a seeded random verdict sequence.
 2. Wiring in `InteractiveMode`. This part has an 800 ms self-arming tick (armed from `getUserInput()` and every `agent_end`), the settled-turn guard, a generation counter that drops stale work, a `message_start` listener that detects the start of user turns and phase turns, Esc pause, notification suppression, mutual exclusion, status-bar updates, and save/restore through a `custom` session entry.
 
-The verdict comes from text cues first: the analyze report structure and counts, and the converge "✅ Converged" line or appended convergence phase. A single `resolveJudge` call with four yes/no questions answers the rest. When the judge call fails, the module uses text cues that need positive proof. Anything it cannot prove holds the run. A reported error holds every phase.
+The judge decides the next step. A single `resolveJudge` call with one `choice` question, `next`, picks it from the options of the phase. Text patterns give the judge evidence only: the analyze report counts, error lines, phase report lines, and closing offers. The decision function applies the deterministic bounds: a failed turn, the round limits, one automatic answer, and no implement past a counted CRITICAL finding. When the judge call fails, the run holds. No text fallback exists.
 
 ## Technical Context
 
