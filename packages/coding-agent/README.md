@@ -15,7 +15,7 @@ Package-specific references:
 
 ## Move between worktrees
 
-Use `/wtmove` in an interactive session to select an existing worktree of the current Git repository.
+Use `/wtmove` (alias `/wtcd`) in an interactive session to select an existing worktree of the current Git repository.
 Type a branch or path substring to filter the list. Press Enter to select a destination, or Escape to cancel.
 
 `/wtmove <path>` accepts absolute, relative, and home-relative worktree root paths, including paths with spaces.

@@ -36,7 +36,7 @@
 - After a turn ends, the working row shows the time of that turn beside the last tok/s reading. Before, the timer showed only while the agent ran. The `tui.workingTimer` and `tui.workingTimerMinSeconds` settings apply to it. `/clear` resets it.
 - Added the verified Ghostel OSC 5522 image receiver. It checks request identity, byte count, SHA-256, and expiry before the editor commit. Busy, canceled, or incomplete transfers cannot replace the active image. Legacy terminal paste and local paste keep their existing routes.
 - Inline `@file:N` and `@file:N-M` mentions now attach selected saved lines before the first conversation model request. Literal filenames, whole-file mentions, existing limits, and full-source hashline snapshots retain their behavior.
-- Added `/wtmove` to select an existing worktree with branch/path completion while preserving session history and artifacts. It leaves checkout files and branches unchanged.
+- Added `/wtmove` (alias `/wtcd`) to select an existing worktree with branch/path completion while preserving session history and artifacts. It leaves checkout files and branches unchanged.
 - Model-profile keys now open a searchable picker by default. Set `modelProfileSwitchStyle: cycling` to keep forward and backward cycling; `/model-profile` remains unchanged.
 - Added `cyberModels` and `cyberMode` to constrain role selection, model switches, and recovery to an operator-defined allowlist. Startup and live notices identify substitutions. Session transitions restore and revalidate the recorded state.
 - Added `/cyber [on|off|status] [global|project]` and `app.model.toggleCyber` (`Alt+Shift+X`). Enable and status output list every allowed model. The scoped command forms persist the startup value.

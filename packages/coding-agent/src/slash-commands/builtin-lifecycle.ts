@@ -782,6 +782,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 	},
 	{
 		name: "wtmove",
+		aliases: ["wtcd"],
 		icon: "folderMove",
 		description: "Move the current session to an existing worktree",
 		acpDescription: "Move the current session to an existing worktree",

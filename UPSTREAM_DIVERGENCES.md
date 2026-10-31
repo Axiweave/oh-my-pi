@@ -64,7 +64,7 @@ Xcode now refuses to link until its license is accepted, so the checks used the 
 
 ### Move into an existing worktree
 
-- **Decision:** Keep `/wtmove` to move the current session into an existing worktree without creating a branch or carrying source changes.
+- **Decision:** Keep `/wtmove` (alias `/wtcd`) to move the current session into an existing worktree without creating a branch or carrying source changes.
 - **Decision:** Match branch names and worktree paths. Preserve exact-root identity for trailing spaces and Unicode spaces.
 - **Decision:** Offer existing worktrees in slash-command completion. Do not add a move destination to the launch's exit-removal list.
 - **Why:** A session must reuse an existing checkout without creating another worktree or changing its files.
