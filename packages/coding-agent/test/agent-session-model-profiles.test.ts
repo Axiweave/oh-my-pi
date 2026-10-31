@@ -13,6 +13,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { PREWALK_MODEL_CHANGE_ROLE } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession model profiles", () => {
@@ -353,6 +354,24 @@ describe("AgentSession model profiles", () => {
 		expect(session.configWarnings).toContain(
 			"Model profile 'fast' from this session is no longer in modelProfiles; the session keeps its model.",
 		);
+		expect(session.takeStaleModelProfile()).toBeUndefined();
+		await written.dispose();
+	});
+
+	it("does not report a recorded prewalk handoff as a stale profile model", async () => {
+		const profiles = { fast: { default: selector(haiku()) } };
+		createSession({ initialModelId: sonnet45().id, modelProfiles: profiles });
+		const written = session;
+		await written.applyModelProfile("fast");
+		// Prewalk handed the planning turn on `fast`'s default over to another model.
+		written.sessionManager.appendModelChange(selector(sonnet45()), PREWALK_MODEL_CHANGE_ROLE);
+		createSession({
+			initialModelId: sonnet45().id,
+			modelProfiles: profiles,
+			sessionManager: written.sessionManager,
+			resumedConversation: true,
+		});
+		expect(session.configWarnings.some(w => w.includes("model profile 'fast' now sets"))).toBe(false);
 		expect(session.takeStaleModelProfile()).toBeUndefined();
 		await written.dispose();
 	});

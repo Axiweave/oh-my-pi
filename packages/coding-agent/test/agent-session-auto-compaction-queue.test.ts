@@ -324,7 +324,6 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
 		expect(agentEndTerminalStates).toEqual([false]);
 	});
-
 	it("marks manual compaction active before abort teardown can yield", async () => {
 		cfgCompactionKeepRecentTokens.set(session.settings, 1);
 		sessionManager.appendMessage({

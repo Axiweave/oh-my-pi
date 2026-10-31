@@ -168,10 +168,10 @@ function expandHostedCandidate(
 ): RoleChainCandidate[] {
 	if (!isHostedPlaceholder(candidate.model) || !sessionModel) return [candidate];
 	const swap = resolveConfiguredModelTarget(sessionModel.webSearchModel, sessionModel, pool);
+	const distinctSwap = swap?.provider === sessionModel.provider && swap.id === sessionModel.id ? undefined : swap;
 	// Cyber mode: the companions bypass the role chain, so they get the membership check here.
-	const models = [swap, sessionModel].filter(
-		(model, index, all): model is Model<Api> =>
-			!!model?.webSearch && all.indexOf(model) === index && cyberAllowsModel(settings, model),
+	const models = [distinctSwap, sessionModel].filter(
+		(model): model is Model<Api> => !!model?.webSearch && cyberAllowsModel(settings, model),
 	);
 	if (models.length === 0) return [candidate];
 	return models.map(model => ({ ...candidate, model }));

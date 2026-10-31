@@ -64,7 +64,7 @@ import type {
 	StaleModelProfile,
 } from "./agent-session-types";
 import { formatRoleModelValue, resolveRoleModelFull } from "./role-models";
-import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
+import { EPHEMERAL_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
 import {
@@ -345,7 +345,7 @@ export class ModelControls {
 	async setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
-		options?: { ephemeral?: boolean },
+		options?: { ephemeral?: boolean; prewalk?: boolean },
 		selection: "explicit" | "automatic" = "explicit",
 	): Promise<void> {
 		this.#assertCyberAllows(model);
@@ -361,7 +361,7 @@ export class ModelControls {
 		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
 		this.#host.sessionManager.appendModelChange(
 			`${targetModel.provider}/${targetModel.id}`,
-			options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
+			options?.prewalk ? PREWALK_MODEL_CHANGE_ROLE : options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
 			false,
 			undefined,
 			this.cyberMode,
@@ -608,7 +608,12 @@ export class ModelControls {
 		const model = this.#model;
 		if (!model || this.#host.agent.state.messages.length === 0) return;
 		const lastRole = this.#host.sessionManager.getLastModelChangeRole();
-		if (lastRole === "temporary" || lastRole === EPHEMERAL_MODEL_CHANGE_ROLE) return;
+		if (
+			lastRole === "temporary" ||
+			lastRole === EPHEMERAL_MODEL_CHANGE_ROLE ||
+			lastRole === PREWALK_MODEL_CHANGE_ROLE
+		)
+			return;
 		const settings = this.#host.settings;
 		// A recorded profile that was deleted is reported by restoreModelProfile;
 		// the startup profile is not what that session belonged to. A session

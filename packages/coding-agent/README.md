@@ -3,10 +3,12 @@
 Core implementation package for the `omp` coding agent in the `omp` monorepo.
 
 For installation, setup, provider configuration, model roles, slash commands, and full CLI reference, see:
+
 - [Monorepo README (local)](../../README.md)
 - [Monorepo README (GitHub, this fork)](https://github.com/Axiweave/oh-my-pi#readme)
 
 Package-specific references:
+
 - [CHANGELOG](./CHANGELOG.md)
 - [MCP configuration guide](../../docs/mcp-config.md)
 - [MCP runtime lifecycle](../../docs/mcp-runtime-lifecycle.md)

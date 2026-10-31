@@ -43,7 +43,7 @@ import {
 	cfgComputerMaxWidth,
 	cfgRatchetEnabled,
 } from "../tools/settings";
-import { cfgPrewalkArmNotice, cfgPrewalkInto, cfgSkillful } from "../session/settings";
+import { cfgPrewalkArmNotice, cfgPrewalkFrom, cfgPrewalkInto, cfgSkillful } from "../session/settings";
 import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
@@ -1206,20 +1206,29 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Arm, restart, or drop a one-shot model handoff",
 		allowArgs: true,
 		acpDescription: "Arm, restart, or drop prewalk",
-		acpInputHint: "[restart|off]",
+		acpInputHint: "[into] | restart [from] [into] | off",
 		subcommands: [
-			{ name: "restart", description: "Return to @default and re-arm the handoff to the prewalk.into target" },
+			{
+				name: "restart",
+				description: "Return to the planning model and re-arm the handoff (default prewalk.from → prewalk.into)",
+				usage: "[from] [into]",
+			},
 			{ name: "off", description: "Drop this session's pending handoff and stay on the active model" },
 		],
 		handle: async (command, runtime) => {
-			const arg = command.args.trim().toLowerCase();
-			if (arg && arg !== "restart" && arg !== "off") return usage("Usage: /prewalk [restart|off]", runtime);
-			if (arg === "off") {
+			const [verb, ...rest] = command.args.trim().split(/\s+/).filter(Boolean);
+			const keyword = verb?.toLowerCase();
+			const restart = keyword === "restart";
+			const args = restart || keyword === "off" ? rest : verb ? [verb, ...rest] : [];
+			if (args.length > (restart ? 2 : keyword === "off" ? 0 : 1)) {
+				return usage("Usage: /prewalk [into] | restart [from] [into] | off", runtime);
+			}
+			if (keyword === "off") {
 				// A real disarm is silent (the status-line segment clears); only the nothing-armed case needs output.
 				if (!runtime.session.disarmPrewalk()) await runtime.output("Prewalk: nothing armed.");
 				return commandConsumed();
 			}
-			const selector = cfgPrewalkInto.get(runtime.settings);
+			const selector = (restart ? args[1] : args[0]) ?? cfgPrewalkInto.get(runtime.settings);
 			// `@@` keeps the model that is active when the handoff runs; no catalog lookup.
 			const keep = parsePrewalkKeepModel(selector);
 			const resolvedTarget = keep
@@ -1234,10 +1243,11 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				}
 			}
 			const targetThinkingLevel = keep ? keep.thinkingLevel : resolvedTarget?.thinkingLevel;
-			if (arg === "restart") {
-				const source = resolveSessionModelSelector("@default", runtime.session, runtime.settings);
+			if (restart) {
+				const from = args[0] ?? cfgPrewalkFrom.get(runtime.settings);
+				const source = resolveSessionModelSelector(from, runtime.session, runtime.settings);
 				if (source.error || !source.model) {
-					return usage(source.error ?? 'Model "@default" not found', runtime);
+					return usage(source.error ?? `Model "${from}" not found`, runtime);
 				}
 				if (!runtime.session.modelRegistry.hasConfiguredAuth(source.model)) {
 					return usage(`No API key for ${source.model.provider}/${source.model.id}`, runtime);
@@ -1251,11 +1261,11 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					keep !== undefined,
 				);
 				if (result === "rejected") return commandConsumed();
-				const restartSource = `${source.model.provider}/${source.model.id}`;
+				const sourceLabel = `${from} (${source.model.provider}/${source.model.id})`;
 				await runtime.output(
 					result === "armed"
-						? `Prewalk restarted: using @default (${restartSource}) for planning, then ${keep ? "staying on" : `switching to ${selector}`} (${targetModel.provider}/${targetModel.id}) at the next edit/write (todo-gated).`
-						: `Prewalk reset: using @default (${restartSource}); ${selector} resolves to the same model and thinking level, so no handoff was armed. Set prewalk.into to @@ to plan first on the same model.`,
+						? `Prewalk restarted: using ${sourceLabel} for planning, then ${keep ? "staying on" : `switching to ${selector}`} (${targetModel.provider}/${targetModel.id}) at the next edit/write (todo-gated).`
+						: `Prewalk reset: using ${sourceLabel}; ${selector} resolves to the same model and thinking level, so no handoff was armed. Set prewalk.into to @@ to plan first on the same model.`,
 				);
 				return commandConsumed();
 			}

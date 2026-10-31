@@ -7,6 +7,8 @@ export interface ChatTranscriptDisplayPreferences {
 	showTokenUsage: boolean;
 	showTurnTime: boolean;
 	collapseCommandCards: boolean;
+	/** Max rows a collapsed advisor card shows below its header; 0 = no cap. */
+	advisorCollapsedLines: number;
 }
 
 /** Current transcript display preferences. */
@@ -18,6 +20,7 @@ export const chatTranscriptDisplayPreferences: ChatTranscriptDisplayPreferences 
 	showTokenUsage: false,
 	showTurnTime: false,
 	collapseCommandCards: true,
+	advisorCollapsedLines: 0,
 };
 
 /** Apply host display preferences without pulling settings into the renderer. */

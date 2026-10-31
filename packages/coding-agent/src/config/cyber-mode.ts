@@ -102,7 +102,9 @@ export function inspectCyberModels(
 	const roleLookup = roles && { getModelRole: (role: string) => roles[role] };
 	const matchPreferences = getModelMatchPreferences(settings);
 	for (const entry of declared) {
-		const { model } = resolveModelRoleValue(entry, availableModels, { roleLookup, matchPreferences });
+		const model =
+			resolveModelRoleValue(entry, availableModels, { roleLookup, matchPreferences }).model ??
+			globModels(entry, availableModels, settings)[0];
 		const identity = model ? formatModelString(model) : undefined;
 		if (identity === undefined) {
 			unresolved.push(entry);
@@ -118,6 +120,15 @@ export function inspectCyberModels(
 	return { notAList: false, duplicates, unresolved, declared };
 }
 
+/**
+ * Models a glob entry declares, or none for other selectors. Provider-qualified
+ * selectors resolve only exact ids, so `anthropic/*` never resolves as a role value.
+ */
+function globModels(entry: string, availableModels: Model<Api>[], settings?: Settings): Model<Api>[] {
+	if (!entry.includes("*") && !entry.includes("?") && !entry.includes("[")) return [];
+	return filterAvailableModelsByEnabledPatterns(availableModels, [entry], settings);
+}
+
 function resolveAllowlistFrom(
 	findings: CyberModeFindings,
 	availableModels: Model<Api>[],
@@ -130,20 +141,18 @@ function resolveAllowlistFrom(
 	const roleLookup = { getModelRole: (role: string) => roles[role] };
 	for (const entry of findings.declared) {
 		const resolved = resolveModelRoleValue(entry, availableModels, { roleLookup, matchPreferences });
-		if (!resolved.model) continue;
-		const identity = formatModelString(resolved.model);
-		primary ??= formatModelSelectorValue(
-			identity,
-			resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined,
-		);
-		keys.add(identity);
 		// A glob declares all matching identities. Other selectors, including
 		// aliases, declare the same single model the role resolver would choose.
-		if (entry.includes("*") || entry.includes("?") || entry.includes("[")) {
-			for (const model of filterAvailableModelsByEnabledPatterns(availableModels, [entry], settings)) {
-				keys.add(formatModelString(model));
-			}
-		}
+		const matches = globModels(entry, availableModels, settings);
+		const model = resolved.model ?? matches[0];
+		if (!model) continue;
+		const identity = formatModelString(model);
+		primary ??= formatModelSelectorValue(
+			identity,
+			resolved.model && resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined,
+		);
+		keys.add(identity);
+		for (const match of matches) keys.add(formatModelString(match));
 	}
 	if (primary === undefined) return undefined;
 	return { keys, primary, catalog: availableModels, matchPreferences };

@@ -16,6 +16,7 @@ import type { TruncationMeta } from "../tools/output-meta";
 import { resolveImageOptions } from "../render/render-utils";
 import { OutputPane } from "../render/output-pane";
 import { loadXtermTerminal, readTerminalRows, styleTerminalRow } from "../tools/terminal-output";
+import { normalizeInputForPty } from "../tools/bash-interactive";
 import { getSixelLineMask, isSixelPassthroughEnabled, sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
 import { imageContentTag } from "../prompt/image-references";
 import {
@@ -285,6 +286,11 @@ export class BashExecutionComponent extends Container {
 			});
 		}
 		this.#drainPtyQueue();
+	}
+
+	/** Bytes a terminal would send for a key event, honoring the command's cursor-key mode; "" for key releases. */
+	encodePtyInput(data: string): string {
+		return normalizeInputForPty(data, this.#ptyTerminal?.modes.applicationCursorKeysMode ?? false);
 	}
 
 	#drainPtyQueue(): void {
