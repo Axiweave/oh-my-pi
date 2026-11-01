@@ -625,11 +625,12 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "fork",
 		icon: "branch",
-		description: "Fork this session, or open it in a multiplexer pane or window",
+		description: "Fork this session, or open it in a multiplexer pane, window, or sibling session",
 		subcommands: [
 			{ name: "pane", description: "Open the fork in a new terminal pane" },
 			{ name: "window", description: "Open the fork in a new multiplexer window" },
 			{ name: "tab", description: "Alias for window" },
+			{ name: "spawn", description: "Open the fork as a sibling session in its own zmx session" },
 		],
 		subcommandOptional: true,
 		allowArgs: true,
@@ -640,7 +641,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const [keyword, ...extra] = args.split(/\s+/);
 				if (extra.length > 0) {
 					clearSubmittedText(runtime);
-					runtime.ctx.showError("Usage: /fork [pane|window|tab]");
+					runtime.ctx.showError("Usage: /fork [pane|window|tab|spawn]");
 					return;
 				}
 				switch (keyword?.toLowerCase()) {
@@ -651,9 +652,13 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					case "tab":
 						placement = "window";
 						break;
+					case "spawn":
+						clearSubmittedText(runtime);
+						await runtime.ctx.handleForkSpawnCommand();
+						return;
 					default:
 						clearSubmittedText(runtime);
-						runtime.ctx.showError("Usage: /fork [pane|window|tab]");
+						runtime.ctx.showError("Usage: /fork [pane|window|tab|spawn]");
 						return;
 				}
 			}

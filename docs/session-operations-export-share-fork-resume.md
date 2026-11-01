@@ -31,6 +31,7 @@ This document describes operator-visible behavior for session export, sharing, c
 | `/delete`                                 | Interactive slash command    | Yes (starts an empty conversation)            | Attempts to delete the current persisted session and artifacts, then switches to a lazy successor (no empty file until content)                                              | None                                                                                |
 | `/fork`                                   | Interactive slash command    | Yes (active session identity changes)         | Creates new session file and switches current session to it (persistent mode only)                                                                                           | Copies artifact directory to new session namespace when present                     |
 | `/fork pane`, `/fork window`, `/fork tab` | Interactive slash command    | No (parent session retained)                  | Opens a child OMP process from the flushed current transcript in a multiplexer pane/group (tmux window, Zellij/Herdr/Orca tab, or CMUX workspace)                            | Child receives a separate forked session                                            |
+| `/fork spawn`                             | Interactive slash command    | No (parent session retained)                  | Starts a forked top-level OMP session in its own zmx session with no model turn, and announces it to Emacs                                                                   | Child receives a separate forked session                                            |
 | `/spawn <request>`                        | Interactive slash command    | No (parent session retained)                  | The model calls `spawn_session`, which starts a new top-level OMP session in its own zmx session (fresh, fork, fork with a note, or handoff summary) and announces it to Emacs | Fork modes give the child a separate forked session                                 |
 | `/despawn`                                | Interactive slash command    | No (parent session retained)                  | Ends one zmx session that this session spawned, and applies `worktree.onExit` to a worktree that the spawn created                                                          | None                                                                                |
 | `--fork <id\|path>`                       | CLI startup                  | Yes after session creation                    | Creates a new session fork from the selected source into current cwd/session dir                                                                                             | Copies source artifacts recursively by default                                      |
@@ -295,15 +296,16 @@ session identity. `/fork pane` opens a separate OMP process in a new pane;
 `/fork window` and `/fork tab` open it in a new multiplexer group (a tmux
 window, Zellij/Herdr/Orca tab, or CMUX workspace). The child starts from the current
 persisted transcript, while the parent session stays active and continues
-running.
+running. `/fork spawn` starts the child as a sibling session in its own zmx
+session, with no model turn and no new message (see `/spawn` above).
 
-Typing `/fork ` shows `[pane|window|tab]` as dim inline text, and Enter still
+Typing `/fork ` shows `[pane|window|tab|spawn]` as dim inline text, and Enter still
 runs the bare in-place fork. Typing a prefix (`/fork w`) opens the suggestions
 with the rest of the selected argument as dim inline text; Tab accepts it.
 
 Placement commands autodetect tmux, Zellij, Herdr, CMUX, or Orca from the terminal;
-`/fork auto` is not a subcommand (valid arguments are `pane`, `window`, and
-`tab`). `window` maps to a tmux window, a Zellij/Herdr/Orca tab, or a CMUX workspace.
+`/fork auto` is not a subcommand (valid arguments are `pane`, `window`, `tab`,
+and `spawn`). `window` maps to a tmux window, a Zellij/Herdr/Orca tab, or a CMUX workspace.
 Plain terminals, `screen`, and `wmux` cannot host this fork placement and receive
 an explicit error; use bare `/fork` there instead.
 

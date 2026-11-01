@@ -11,16 +11,18 @@ import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 
 function createRuntime() {
 	const handleForkCommand = vi.fn(async (_placement?: "pane" | "window") => undefined);
+	const handleForkSpawnCommand = vi.fn(async () => undefined);
 	const setText = vi.fn();
 	const showError = vi.fn();
 	const runtime = {
 		ctx: {
 			handleForkCommand,
+			handleForkSpawnCommand,
 			editor: { setText },
 			showError,
 		} as unknown as InteractiveModeContext,
 	} as BuiltinSlashCommandRuntime;
-	return { handleForkCommand, setText, showError, runtime };
+	return { handleForkCommand, handleForkSpawnCommand, setText, showError, runtime };
 }
 
 function createForkEditor(): Editor {
@@ -114,11 +116,20 @@ describe("/fork slash command", () => {
 		expect(harness.handleForkCommand).toHaveBeenCalledWith(expectedPlacement);
 	});
 
-	it("consumes invalid placement without submitting it as a prompt", async () => {
+	it.each(["spawn", "SPAWN"])("routes /fork %s to the sibling session fork", async argument => {
 		const harness = createRuntime();
-		expect(await executeBuiltinSlashCommand("/fork pane extra", harness.runtime)).toBe(true);
+		expect(await executeBuiltinSlashCommand(`/fork ${argument}`, harness.runtime)).toBe(true);
+		expect(harness.handleForkSpawnCommand).toHaveBeenCalledTimes(1);
 		expect(harness.handleForkCommand).not.toHaveBeenCalled();
-		expect(harness.showError).toHaveBeenCalledTimes(1);
+		expect(harness.setText).toHaveBeenCalledWith("");
+	});
+
+	it.each(["pane extra", "spawn extra"])("consumes /fork %s without running a fork", async args => {
+		const harness = createRuntime();
+		expect(await executeBuiltinSlashCommand(`/fork ${args}`, harness.runtime)).toBe(true);
+		expect(harness.handleForkCommand).not.toHaveBeenCalled();
+		expect(harness.handleForkSpawnCommand).not.toHaveBeenCalled();
+		expect(harness.showError).toHaveBeenCalledWith("Usage: /fork [pane|window|tab|spawn]");
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 });

@@ -8638,9 +8638,28 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * The `spawn_session` handler: create Sibling Session B in its own zmx
-	 * session (contracts/omp-spawn.md). Throws with the reason on a refusal or
-	 * failure; the window closes at every call.
+	 * `/fork spawn`: open a pure fork as Sibling Session B. No model turn, no
+	 * spawn window, no `spawn.confirm`, and no new message in A or B.
+	 */
+	async handleForkSpawnCommand(): Promise<void> {
+		if (this.#vibeSessionTransitionBlocked()) return;
+		if (this.session.isStreaming) {
+			const confirmed = await this.showHookConfirm(
+				"Fork while a response is running?",
+				"The child may not include the partial response. Continue opening a fork? The current session will keep running here.",
+			);
+			if (!confirmed) return;
+		}
+		try {
+			await this.#spawnSibling({ mode: "fork" }, false);
+		} catch (error) {
+			this.showError(`Spawn failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * The `spawn_session` handler: one spawn per run, and the window closes at
+	 * every call. Shows a failure in A, then throws it to the tool.
 	 */
 	async #handleSpawnRequest(request: SpawnRequest): Promise<string> {
 		// Checked and set before any await, so parallel calls in one message also see it.
@@ -8648,6 +8667,20 @@ export class InteractiveMode implements InteractiveModeContext {
 			throw new Error("spawn_session already ran in this turn; run /spawn again for another session");
 		this.#spawnRunUsed = true;
 		await this.#endSpawnWindow();
+		try {
+			return await this.#spawnSibling(request, cfgSpawnConfirm.get(this.settings));
+		} catch (error) {
+			this.showError(`Spawn failed: ${error instanceof Error ? error.message : String(error)}`);
+			throw error;
+		}
+	}
+
+	/**
+	 * Create Sibling Session B in its own zmx session (contracts/omp-spawn.md).
+	 * `/spawn` and `/fork spawn` share it. Throws with the reason on a refusal
+	 * or failure; the caller shows it.
+	 */
+	async #spawnSibling(request: SpawnRequest, confirm: boolean): Promise<string> {
 		const parent = process.env.ZMX_SESSION;
 		if (!parent) throw new Error("spawn needs a zmx session");
 		// B runs A's own zmx command, the one Emacs already accepted as a known Agent (FR-011).
@@ -8700,7 +8733,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 		const branch = request.new_worktree ? (request.branch ?? defaultSessionWorktreeBranch()) : undefined;
-		if (cfgSpawnConfirm.get(this.settings)) {
+		if (confirm) {
 			const lines = [
 				`Mode: ${mode}`,
 				`Directory: ${branch ? `new worktree on branch ${branch} from ${sourceCwd}` : (request.cwd ?? sourceCwd)}`,
@@ -8750,7 +8783,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					message += `\n${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
 				}
 			}
-			this.showError(`Spawn failed: ${message}`);
 			throw new Error(message);
 		}
 		writeSpawnAnnouncement(name);

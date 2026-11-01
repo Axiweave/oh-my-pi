@@ -7,6 +7,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { FORK_API_KEY_REFUSAL } from "@oh-my-pi/pi-coding-agent/cli/fork-child";
+import { cfgSpawnConfirm } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -99,13 +100,13 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		delete process.env.OMP_SPAWN_PARENT;
 		h = await createHarness();
 		vi.spyOn(siblingSpawn, "zmxSessionExecutable").mockResolvedValue("omp");
-		vi.spyOn(siblingSpawn, "writeSpawnAnnouncement").mockImplementation(() => {});
+		const announce = vi.spyOn(siblingSpawn, "writeSpawnAnnouncement").mockImplementation(() => {});
 		const create = vi.spyOn(siblingSpawn, "createSibling").mockImplementation(async ({ startFile }) => {
 			if (startFile) startFiles.push(startFile);
 		});
 		const handler = h.session.peekSpawnHandler();
 		if (!handler) throw new Error("Expected the spawn handler after init");
-		return { h, create, handler };
+		return { h, create, announce, handler };
 	}
 
 	it("parallel calls in one run create one session and refuse the rest", async () => {
@@ -123,9 +124,9 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		expect(String((refused as PromiseRejectedResult).reason)).toContain("already ran in this turn");
 	});
 
-	it("sends the start text only through the start file, and a failed creation removes that file", async () => {
+	it("sends the start text only through the start file, and every failure shows once in A", async () => {
 		const { h, create, handler } = await spawnHarness();
-		vi.spyOn(h.mode, "showError").mockImplementation(() => {});
+		const showError = vi.spyOn(h.mode, "showError").mockImplementation(() => {});
 		const text = 'Run the checks.\n<file name="x">\n"quoted" text';
 		await startRun(h);
 		await handler({ mode: "fresh", text });
@@ -140,6 +141,15 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		await expect(handler({ mode: "fresh", text })).rejects.toThrow("zmx failed");
 		const failedFile = create.mock.calls[1]![0].startFile!;
 		expect(fs.existsSync(failedFile)).toBe(false);
+		expect(showError.mock.calls).toEqual([["Spawn failed: zmx failed"]]);
+
+		// A refusal before creation shows in A too, not only in the tool result.
+		delete process.env.ZMX_SESSION;
+		await startRun(h);
+		await expect(handler({ mode: "fresh", text })).rejects.toThrow("spawn needs a zmx session");
+		expect(showError.mock.calls.at(-1)).toEqual(["Spawn failed: spawn needs a zmx session"]);
+		expect(showError).toHaveBeenCalledTimes(2);
+		expect(create).toHaveBeenCalledTimes(2);
 	});
 
 	it("a /spawn queued into a run that already spawned still creates its one session", async () => {
@@ -188,5 +198,87 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		await startRun(h);
 		await expect(handler({ mode: "fresh", text: "work" })).rejects.toThrow(FORK_API_KEY_REFUSAL);
 		expect(create).not.toHaveBeenCalled();
+	});
+
+	describe("/fork spawn", () => {
+		/** A spawn harness whose A has a saved session file, so fork mode has something to copy. */
+		async function forkHarness() {
+			const spawn = await spawnHarness();
+			const manager = spawn.h.session.sessionManager;
+			manager.appendMessage({ role: "user", content: "keep this context", timestamp: Date.now() });
+			await manager.ensureOnDisk();
+			await manager.flush();
+			const file = manager.getSessionFile();
+			// Without a file every case below would only test the "no saved conversation" refusal.
+			expect(file !== undefined && fs.existsSync(file)).toBe(true);
+			const prompt = vi.spyOn(spawn.h.session, "prompt").mockResolvedValue(true);
+			const followUp = vi.spyOn(spawn.h.session, "followUp").mockResolvedValue();
+			const showError = vi.spyOn(spawn.h.mode, "showError").mockImplementation(() => {});
+			const showStatus = vi.spyOn(spawn.h.mode, "showStatus").mockImplementation(() => {});
+			return { ...spawn, file: file!, prompt, followUp, showError, showStatus };
+		}
+
+		it("creates one pure fork of A with no model turn and no new message", async () => {
+			const { h, create, announce, file, prompt, followUp, showError, showStatus } = await forkHarness();
+			const transcript = fs.readFileSync(file, "utf8");
+			const messages = h.session.messages.length;
+
+			await h.mode.handleForkSpawnCommand();
+
+			expect(showError).not.toHaveBeenCalled();
+			expect(create).toHaveBeenCalledTimes(1);
+			const { name, argv, labels, startFile } = create.mock.calls[0]![0];
+			expect(argv.slice(-2)).toEqual(["--fork", path.resolve(file)]);
+			expect(startFile).toBeUndefined();
+			expect(labels).toEqual({ "cci-parent": "cci-omp-spawncmd-abc123" });
+			expect(announce.mock.calls).toEqual([[name]]);
+			expect(showStatus.mock.calls).toEqual([[`Spawned ${name}`]]);
+			expect(prompt).not.toHaveBeenCalled();
+			expect(followUp).not.toHaveBeenCalled();
+			expect(h.session.messages.length).toBe(messages);
+			expect(fs.readFileSync(file, "utf8")).toBe(transcript);
+			expect(h.session.isSpawnWindowOpen()).toBe(false);
+		});
+
+		it("ignores spawn.confirm", async () => {
+			const { h, create } = await forkHarness();
+			cfgSpawnConfirm.set(h.session.settings, true);
+			const confirm = vi.spyOn(h.mode, "showHookConfirm");
+			await h.mode.handleForkSpawnCommand();
+			expect(confirm).not.toHaveBeenCalled();
+			expect(create).toHaveBeenCalledTimes(1);
+		});
+
+		it("outside zmx creates nothing and names the reason", async () => {
+			const { h, create, showError } = await forkHarness();
+			delete process.env.ZMX_SESSION;
+			await h.mode.handleForkSpawnCommand();
+			expect(create).not.toHaveBeenCalled();
+			expect(showError.mock.calls).toEqual([["Spawn failed: spawn needs a zmx session"]]);
+		});
+
+		it("leaves an open /spawn window and its spawn slot alone", async () => {
+			const { h, create, handler } = await forkHarness();
+			expect(await h.mode.handleSpawnCommand("x")).toBe(true);
+			await h.mode.handleForkSpawnCommand();
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(h.session.isSpawnWindowOpen()).toBe(true);
+			await handler({ mode: "fresh", text: "the /spawn session" });
+			expect(create).toHaveBeenCalledTimes(2);
+		});
+
+		it.each([
+			[false, 0],
+			[true, 1],
+		])("during a turn asks first; answer %p creates %p sessions", async (answer, sessions) => {
+			const { h, create } = await forkHarness();
+			Object.defineProperty(h.session, "isStreaming", { configurable: true, get: () => true });
+			const confirm = vi.spyOn(h.mode, "showHookConfirm").mockResolvedValue(answer);
+			await h.mode.handleForkSpawnCommand();
+			expect(confirm).toHaveBeenCalledTimes(1);
+			expect(confirm.mock.calls[0]![0]).toBe("Fork while a response is running?");
+			expect(create).toHaveBeenCalledTimes(sessions);
+			Reflect.deleteProperty(h.session, "isStreaming");
+		});
 	});
 });
