@@ -704,6 +704,7 @@ async function runInteractiveMode(
 	startupRestore?: () => Promise<RestoreOutcome>,
 	refreshScopedModelsAfterLogin?: () => Promise<void>,
 	startsPlanYolo = false,
+	spawnStartText?: string,
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
@@ -858,6 +859,15 @@ async function runInteractiveMode(
 							? `Restored: ${agents} going on with their interrupted turns.`
 							: "Restored: nothing was left unfinished.",
 			);
+		} catch (error: unknown) {
+			mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
+		}
+	}
+
+	if (spawnStartText !== undefined) {
+		try {
+			// Literal, like the `<file>` block it replaces: a leading `/` must not run a command in B.
+			await session.prompt(spawnStartText, { streamingBehavior: "steer", expandPromptTemplates: false });
 		} catch (error: unknown) {
 			mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
 		}
@@ -2602,7 +2612,6 @@ export async function runRootCommand(
 			}
 			// A `/spawn` child gets its first message as plain text, not as an `@file` block.
 			const spawnStartText = takeSpawnStartText();
-			if (spawnStartText !== undefined) initialArgs.messages.unshift(spawnStartText);
 			if (autoPrintNeedsArgPrompt && initialArgs.messages.length === 0 && initialArgs.fileArgs.length === 0) {
 				exitWithoutTerminal();
 			}
@@ -2924,6 +2933,7 @@ export async function runRootCommand(
 						parsedArgs.restore ? () => restoreSession(session, { eventBus, subagentEventBus }) : undefined,
 						refreshScopedModelsAfterLogin,
 						parsedArgs.planYolo === true,
+						spawnStartText,
 					);
 				} finally {
 					startupLease?.dispose();
