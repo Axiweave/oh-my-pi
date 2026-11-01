@@ -45,7 +45,7 @@ function jobsHarness(running: AsyncJobSnapshotItem[], options: { columns?: numbe
 		editor: {},
 		reportContainer,
 		commandReportRows: () => options.reportRows ?? 400,
-		viewSession: { getAsyncJobTree: () => ({ running, recent: [], agents: [] }) },
+		viewSession: { getAsyncJobTree: () => ({ running, recent: [], agents: [] }), requestJobCaptions: () => {} },
 		toolOutputExpanded: false,
 		setToolsExpanded: (expanded: boolean) => {
 			ctx.toolOutputExpanded = expanded;

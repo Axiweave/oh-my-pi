@@ -167,6 +167,19 @@ export const cfgModelProfileSwitchNotice = register({
 
 export const cfgModelProfiles = register({ id: "modelProfiles", type: "record", default: EMPTY_MODEL_PROFILES_RECORD });
 
+/** Total provider budget for one native judge candidate, including setup and retries. */
+export const cfgJudgmentAttemptTimeoutMs = register({
+	id: "judgment.attemptTimeoutMs",
+	type: "number",
+	default: 3_000,
+	validate: raw => {
+		if (raw === undefined || raw === null) return;
+		if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw <= 0) {
+			throw new Error("judgment.attemptTimeoutMs must be a positive safe integer");
+		}
+	},
+});
+
 /** Named model presets; no settings-panel UI — managed by `/modelpreset` and the model hub. */
 export const cfgModelPresets = register({
 	id: "modelPresets",

@@ -8,6 +8,7 @@ import type { Api, AssistantMessage, Model, UserMessage } from "@oh-my-pi/pi-ai"
 import { markPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { formatBytes, prompt, truncate } from "@oh-my-pi/pi-utils";
+import { cyberAllowsModel } from "../config/cyber-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, parseModelPattern, resolveModelRoleValue } from "../config/model-resolver";
 import { formatModelRoleAlias } from "../config/model-roles";
@@ -174,9 +175,10 @@ export interface ModelJobWidgetAuthorOptions {
 
 /**
  * The `widget` role's model with a usable credential: the role (configured,
- * or resolved like `smol`), then the built-in `smol` defaults.
+ * or resolved like `smol`), then the built-in `smol` defaults. Job captions
+ * use it too.
  */
-async function resolveWidgetModel(
+export async function resolveWidgetModel(
 	settings: Settings,
 	registry: ModelRegistry,
 	sessionId: string | undefined,
@@ -192,6 +194,8 @@ async function resolveWidgetModel(
 		if (model) candidates.push(model);
 	}
 	for (const model of candidates) {
+		// Cyber mode covers the built-in `smol` defaults too; the role value is filtered on resolution.
+		if (!cyberAllowsModel(settings, model)) continue;
 		if (await registry.getApiKey(model, sessionId, { signal, skipMissing: true })) return model;
 	}
 	return undefined;

@@ -168,6 +168,8 @@ export interface InteractiveModeContext {
 	ui: TUI;
 	composer: Composer;
 	chatContainer: TranscriptContainer;
+	/** `!`/`$` runs started while the agent streams, until {@link flushPendingBashComponents} moves them into the transcript. */
+	pendingShellContainer: Container;
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
 	/** Whether the status/working row rendered lines in the latest frame; the band composer's editor top gap collapses only then. */

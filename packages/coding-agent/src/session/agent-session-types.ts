@@ -79,10 +79,12 @@ export type CommandMetadataChangedListener = () => void | Promise<void>;
 /** Public summary of an asynchronous job. */
 export type AsyncJobSnapshotItem = Pick<
 	AsyncJob,
-	"id" | "type" | "status" | "label" | "startTime" | "endTime" | "agentId" | "ownerId"
+	"id" | "type" | "status" | "label" | "intent" | "startTime" | "endTime" | "agentId" | "ownerId"
 > & {
 	/** Full command line of a job that runs a process; `label` is cut to 120 characters. */
 	command?: string;
+	/** One line on what the command does and when it ends, while widgets are on (`JobWidgetRegistry.caption`). */
+	caption?: string;
 };
 
 /** One async job as a job inspector (the jobs sheet) shows it beyond its snapshot row. */
@@ -214,6 +216,12 @@ export interface AgentSessionConfig {
 	thinkingLevelCeiling?: Effort;
 	/** Parent session's review plan switch; a subagent follows it when its transcript records none. */
 	reviewPlan?: boolean;
+	/**
+	 * Disable retry fallback, context promotion and usage-aware fallback: the turn retries on, or fails
+	 * with, its own model instead. Startup model selection, and the return to the primary after a
+	 * startup fallback, are not affected.
+	 */
+	disableModelFallback?: boolean;
 	/** Retry chain ownership when startup selected one of its fallback entries. */
 	initialRetryFallback?: InitialRetryFallbackState;
 	/** Skip retry.fallbackChains validation at construction; the host calls `validateRetryFallbackChains()` later. */
@@ -227,6 +235,12 @@ export interface AgentSessionConfig {
 	prewalk?: Prewalk;
 	/** Keep `prewalk.auto` away from this session until `/new` (`--no-prewalk`). */
 	suppressAutoPrewalk?: boolean;
+	/**
+	 * Created to run an assignment its owner prompts once setup finishes (task executor spawns).
+	 * Until the first prompt, IRC messages never wake a turn the assignment would miss; see
+	 * `AgentSession.#wakeForIrc`.
+	 */
+	awaitingAssignment?: boolean;
 	/** Force read-only plan mode at start, auto-approve, then switch to the target. */
 	planYolo?: PlanYolo;
 	/** Runs the independent structured reviewer for a debate plan proposal. */

@@ -1,6 +1,4 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
-import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { ideTurnState, publishIdeSessionState } from "../../mcp/ide-state";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID, type AgentRef, type RegistryEvent } from "../../registry/agent-registry";
@@ -44,7 +42,7 @@ export class SessionFocusController {
 	#focusedAgentId: string | undefined;
 	/** Session currently attached while focused; undefined when unfocused. */
 	#attachedSession: AgentSession | undefined;
-	#focusAttachment: Promise<boolean> | undefined;
+	#focusAttachment: Promise<void> | undefined;
 	#registryUnsubscribe: (() => void) | undefined;
 	#attachGeneration = 0;
 	/** Monotonic focus-request id: a request that resolves after a newer one drops instead of clobbering the view. */
@@ -95,20 +93,13 @@ export class SessionFocusController {
 			attachment = this.#attach(session);
 			this.#focusAttachment = attachment;
 		}
-		let attached = false;
 		try {
-			attached = await attachment;
+			await attachment;
 		} catch (error) {
 			if (request !== this.#focusRequestSeq) return;
 			throw error;
 		} finally {
 			if (this.#focusAttachment === attachment) this.#focusAttachment = undefined;
-		}
-		if (request !== this.#focusRequestSeq) return;
-		if (attached && this.#focusedAgentId === id && this.#attachedSession === session) {
-			this.ctx.showStatus(
-				`Viewing agent ${id} — ${appKey(this.ctx.keybindings, "app.interrupt")} returns to main, ${formatDoubleTap("left")} hops to parent`,
-			);
 		}
 	}
 
@@ -140,8 +131,7 @@ export class SessionFocusController {
 		if (!this.#focusedAgentId) return;
 		this.#focusedAgentId = undefined;
 		this.#attachedSession = undefined;
-		const attached = await this.#attach(this.ctx.session);
-		if (attached && this.#focusedAgentId === undefined) this.ctx.showStatus("Returned to main session");
+		await this.#attach(this.ctx.session);
 	}
 
 	dispose(): void {
@@ -183,7 +173,7 @@ export class SessionFocusController {
 	}
 
 	/** Retarget core, both directions: swap subscription, transcript, and status line onto `target`. */
-	async #attach(target: AgentSession): Promise<boolean> {
+	async #attach(target: AgentSession): Promise<void> {
 		const generation = ++this.#attachGeneration;
 		this.ctx.syncIdleMaintenanceView(target);
 		try {
@@ -226,7 +216,7 @@ export class SessionFocusController {
 			});
 
 			await target.settleInFlightMessagePersistence();
-			if (generation !== this.#attachGeneration) return false;
+			if (generation !== this.#attachGeneration) return;
 			this.ctx.statusLine.setSession(target, this.#focusedAgentId);
 			// Reset run bookkeeping before replay populates pending tool handles. Speckit-auto between phases stays working.
 			// A background-job settle that the judge read as a question already settled the main run.
@@ -236,20 +226,20 @@ export class SessionFocusController {
 				(target === this.ctx.session && this.ctx.speckitAutoActing);
 			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
 			else setRunStatus({ state: busy() ? "working" : "idle" });
-			if (generation !== this.#attachGeneration) return false;
+			if (generation !== this.#attachGeneration) return;
 			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
-			if (generation !== this.#attachGeneration) return false;
+			if (generation !== this.#attachGeneration) return;
 			this.ctx.eventController.restorePendingToolResults();
 
 			const live = target.agent.state.streamMessage;
 			if (live?.role === "assistant") await restoreAssistant(live);
-			if (generation !== this.#attachGeneration) return false;
+			if (generation !== this.#attachGeneration) return;
 			for (const event of target.activeToolExecutionUpdates()) {
 				await this.ctx.eventController.handleEvent(event);
-				if (generation !== this.#attachGeneration) return false;
+				if (generation !== this.#attachGeneration) return;
 			}
 			await this.ctx.reloadTodos(target);
-			if (generation !== this.#attachGeneration) return false;
+			if (generation !== this.#attachGeneration) return;
 			this.ctx.updatePendingMessagesDisplay();
 			// Returning to the main session re-announces how its last turn ended: the
 			// controller was unsubscribed while another agent was focused, so the
@@ -262,7 +252,6 @@ export class SessionFocusController {
 			}
 			this.ctx.updateEditorBorderColor();
 			this.ctx.ui.requestRender();
-			return true;
 		} catch (error) {
 			if (generation === this.#attachGeneration) {
 				this.#focusedAgentId = undefined;
