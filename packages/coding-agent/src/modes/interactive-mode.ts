@@ -1614,6 +1614,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#loopRunStartedAt: number | undefined;
 	/** The guided first run is queued behind the tool turn; its clock starts at its own message. */
 	#loopFirstRunQueued = false;
+	/** A reset loop is starting its new session: the session switch must not end the loop. */
+	#loopResetting = false;
 	/** Due time of the armed interval run, shown in the status line only while the loop waits. */
 	#loopNextRunAt: number | undefined;
 	#pendingLoopIterations = 0;
@@ -3492,10 +3494,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		return await promise;
 	}
 
+	/** The prompt the loop may run now: none while the loop is off or paused. */
+	get #runnableLoopPrompt(): string | undefined {
+		return this.loopModeEnabled && !this.loopModePaused ? this.loopPrompt : undefined;
+	}
+
 	#scheduleLoopAutoSubmit(): void {
 		this.#cancelLoopAutoSubmit();
-		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
-		const prompt = this.loopPrompt;
+		const prompt = this.#runnableLoopPrompt;
+		if (!prompt || this.#isShuttingDown) return;
 		const loopAction = cfgLoopMode.get(settings);
 		const run = () => {
 			void this.#runLoopIteration(loopAction, prompt);
@@ -3653,7 +3660,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#submitLoopPromptWhenReady(prompt: string): void {
-		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
+		if (this.#runnableLoopPrompt !== prompt || !this.onInputCallback) return;
 		if (isLoopDurationExpired(this.loopLimit)) {
 			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
 			return;
@@ -3678,7 +3685,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
-		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
+		if (this.#runnableLoopPrompt !== prompt || !this.onInputCallback) return;
 		if (this.#isAutoSubmitBlocked()) {
 			this.#deferLoopAutoSubmit(() => {
 				void this.#runLoopIteration(action, prompt);
@@ -3733,7 +3740,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (action === "compact") {
 			await this.handleCompactCommand();
 		} else if (action === "reset") {
-			await this.handleClearCommand();
+			// The reset switches sessions on purpose: the loop must survive it.
+			this.#loopResetting = true;
+			try {
+				await this.handleClearCommand();
+			} finally {
+				this.#loopResetting = false;
+			}
 		}
 		this.#submitLoopPromptWhenReady(prompt);
 	}
@@ -3770,7 +3783,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Running the condition is an await point: Esc (pauseLoop) or a second
 		// /loop (disableLoopMode) can land mid-command, so re-check the same
 		// guards the method entry used before acting on a now-stale verdict.
-		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return false;
+		if (this.#runnableLoopPrompt !== prompt || !this.onInputCallback) return false;
 		if (verdict.kind === "continue") return true;
 		if (verdict.kind === "aborted") return false;
 		this.disableLoopMode(verdict.message);
@@ -3849,12 +3862,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * Pause the loop without exiting it: drops the captured prompt and any
-	 * pending auto-resubmit. Loop mode stays enabled — the next prompt the
-	 * user submits becomes the new loop prompt and resumes iteration.
+	 * Pause the loop without exiting it: keeps the loop prompt and drops any
+	 * pending auto-resubmit. Typed prompts run once and do not resume it;
+	 * `/loop` with arguments resumes it.
 	 */
 	pauseLoop(): void {
-		this.loopPrompt = undefined;
 		this.loopModePaused = true;
 		this.#loopRunStartedAt = undefined;
 		this.#cancelLoopAutoSubmit();
@@ -3879,8 +3891,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#enableLoopMode(parsed.limit, parsed.condition, Boolean(parsed.prompt), parsed.intervalMs);
 		if (replacing) {
 			// A new prompt goes through the dispatcher and restarts the schedule.
-			// Otherwise re-arm the kept prompt (a no-op while paused). During a turn the
-			// due timer stays hidden and `getUserInput` re-arms it when the turn ends.
+			// Otherwise re-arm the kept prompt; this also resumes a paused loop. During a
+			// turn the due timer stays hidden and `getUserInput` re-arms it when the turn ends.
 			if (!parsed.prompt) this.#scheduleLoopAutoSubmit();
 			return parsed.prompt;
 		}
@@ -4643,9 +4655,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		intervalMs?: number,
 	): void {
 		const replacing = this.loopModeEnabled;
+		this.loopModePaused = false;
 		if (!replacing) {
 			this.loopModeEnabled = true;
-			this.loopModePaused = false;
 			this.loopPrompt = undefined;
 		}
 		this.loopLimit = createLoopLimitRuntime(limit);
@@ -4668,7 +4680,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const tail = hasPrompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`Loop mode enabled.${settingsText} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; a bare /loop disables it.`,
+			`Loop mode enabled.${settingsText} ${tail} ${appKey(this.keybindings, "app.interrupt")} pauses the loop; /loop with arguments resumes it; a bare /loop disables it.`,
 		);
 	}
 
@@ -4887,10 +4899,11 @@ export class InteractiveMode implements InteractiveModeContext {
 						return async () => this.setLoopPrompt(prompt);
 					}
 					if (!this.loopModePaused) return undefined;
-					// A paused loop resumes waiting: the next prompt becomes its body again.
+					// A paused loop resumes with its kept prompt.
 					return async () => {
 						this.loopModePaused = false;
 						this.#syncLoopModeStatus();
+						this.#scheduleLoopAutoSubmit();
 					};
 				}
 				return async () => {
@@ -10787,6 +10800,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#hidePlanReview();
 		// The old session keeps its saved entry; only the in-memory mode stops.
 		if (this.#resetSpeckitAuto()) this.showStatus("Speckit-auto mode stopped: the session changed.");
+		// A loop prompt belongs to its session: a user switch ends the loop.
+		if (!this.#loopResetting && this.loopModeEnabled)
+			this.disableLoopMode("Loop mode disabled: the session changed.");
 	}
 
 	async handleClearCommand(): Promise<void> {
@@ -10852,6 +10868,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#btwController.dispose();
 			this.#omfgController.dispose();
 			this.#cleanseController.dispose();
+			if (this.loopModeEnabled) this.disableLoopMode("Loop mode disabled: the session changed.");
 		}
 		await this.#commandController.handleForkCommand(placement);
 	}

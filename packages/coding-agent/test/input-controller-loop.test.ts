@@ -8,6 +8,8 @@ function createLoopContext(options: {
 	isCompacting?: boolean;
 	extensionCommandNames?: string[];
 	onInputCallback?: (...args: never[]) => void;
+	/** The loop waits for its first prompt: no loop prompt yet. */
+	waiting?: boolean;
 }) {
 	const extensionCommandNames = options.extensionCommandNames ?? [];
 	const extensionRunner =
@@ -17,14 +19,12 @@ function createLoopContext(options: {
 					getCommand: (name: string) => (extensionCommandNames.includes(name) ? {} : undefined),
 				}
 			: undefined;
-	let loopPrompt: string | undefined = "original loop prompt";
+	let loopPrompt: string | undefined = options.waiting ? undefined : "original loop prompt";
 	const setLoopPrompt = vi.fn((prompt: string) => {
 		loopPrompt = prompt;
 	});
 	const prompt = vi.fn(async () => true);
-	const pauseLoop = vi.fn(() => {
-		loopPrompt = undefined;
-	});
+	const pauseLoop = vi.fn();
 	const editor = {
 		pendingImages: [],
 		pendingImageLinks: [],
@@ -104,9 +104,22 @@ describe("loop mode interjections", () => {
 		expect(getLoopPrompt()).toBe("original loop prompt");
 	});
 
-	it("adopts an idle submission as the new loop prompt", async () => {
+	it("runs an idle submission once and keeps the loop prompt", async () => {
 		const onInputCallback = vi.fn();
-		const { ctx, setLoopPrompt } = createLoopContext({ isStreaming: false, onInputCallback });
+		const { ctx, setLoopPrompt, getLoopPrompt } = createLoopContext({ isStreaming: false, onInputCallback });
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		await ctx.editor.onSubmit?.("side question");
+
+		expect(setLoopPrompt).not.toHaveBeenCalled();
+		expect(getLoopPrompt()).toBe("original loop prompt");
+		expect(onInputCallback).toHaveBeenCalledTimes(1);
+	});
+
+	it("adopts an idle submission while the loop waits for its first prompt", async () => {
+		const onInputCallback = vi.fn();
+		const { ctx, setLoopPrompt } = createLoopContext({ isStreaming: false, onInputCallback, waiting: true });
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
 
@@ -203,7 +216,7 @@ describe("loop mode interjections", () => {
 	});
 
 	it("parks the loop when a direct submission is consumed locally", async () => {
-		const { ctx, setLoopPrompt, pauseLoop, prompt, getLoopPrompt } = createLoopContext({ isStreaming: false });
+		const { ctx, setLoopPrompt, pauseLoop, prompt } = createLoopContext({ isStreaming: false, waiting: true });
 		prompt.mockResolvedValueOnce(false);
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
@@ -213,11 +226,10 @@ describe("loop mode interjections", () => {
 		expect(prompt).toHaveBeenCalledTimes(1);
 		expect(setLoopPrompt).toHaveBeenCalledWith("/void-cmd");
 		expect(pauseLoop).toHaveBeenCalledTimes(1);
-		expect(getLoopPrompt()).toBeUndefined();
 	});
 
 	it("arms a direct submission after dispatch succeeds", async () => {
-		const { ctx, setLoopPrompt, getLoopPrompt } = createLoopContext({ isStreaming: false });
+		const { ctx, setLoopPrompt, getLoopPrompt } = createLoopContext({ isStreaming: false, waiting: true });
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
 
@@ -248,8 +260,9 @@ describe("loop mode interjections", () => {
 	});
 
 	it("parks the loop when a direct submission is rejected", async () => {
-		const { ctx, setLoopPrompt, pauseLoop, prompt, getLoopPrompt, showError } = createLoopContext({
+		const { ctx, setLoopPrompt, pauseLoop, prompt, showError } = createLoopContext({
 			isStreaming: false,
+			waiting: true,
 		});
 		prompt.mockRejectedValueOnce(new Error("attachment too large"));
 		const controller = new InputController(ctx);
@@ -259,7 +272,6 @@ describe("loop mode interjections", () => {
 
 		expect(setLoopPrompt).toHaveBeenCalledWith("direct body");
 		expect(pauseLoop).toHaveBeenCalledTimes(1);
-		expect(getLoopPrompt()).toBeUndefined();
 		expect(showError).toHaveBeenCalledWith("attachment too large");
 	});
 });

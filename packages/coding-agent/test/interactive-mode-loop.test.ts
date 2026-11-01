@@ -768,7 +768,7 @@ describe("InteractiveMode loop auto-submit", () => {
 				expect(runs).toHaveLength(0);
 			});
 
-			it("restarts the schedule from a prompt sent during the wait", async () => {
+			it("restarts the schedule from a new /loop prompt sent during the wait", async () => {
 				const start = startIntervalLoop(MINUTE);
 				waitForRun();
 				await advance(20_000);
@@ -779,6 +779,50 @@ describe("InteractiveMode loop auto-submit", () => {
 				expect(runs).toHaveLength(1);
 				await advance(1);
 				expect(runs[1]).toEqual({ text: "new", at: start + 20_000 + MINUTE });
+			});
+
+			it("runs a prompt typed during the wait once and keeps the loop prompt", async () => {
+				new InputController(mode).setupEditorSubmitHandler();
+				const start = startIntervalLoop(MINUTE);
+				waitForRun();
+				await advance(20_000);
+				await mode.editor.onSubmit?.("side question");
+				expect(mode.loopPrompt).toBe("tick");
+				waitForRun();
+				await advance(start + MINUTE - Date.now());
+				expect(runs.map(run => run.text)).toEqual(["side question", "tick"]);
+			});
+
+			it("keeps the loop prompt through Esc; a typed prompt does not resume it, /loop with args does", async () => {
+				new InputController(mode).setupEditorSubmitHandler();
+				startIntervalLoop(MINUTE);
+				waitForRun();
+				mode.pauseLoop();
+				await mode.editor.onSubmit?.("hello");
+				expect({ prompt: mode.loopPrompt, paused: mode.loopModePaused }).toEqual({ prompt: "tick", paused: true });
+				waitForRun();
+				await advance(5 * MINUTE);
+				expect(runs.map(run => run.text)).toEqual(["hello"]);
+				expect(await mode.handleLoopCommand("every 60s")).toBeUndefined();
+				await advance(800);
+				expect(runs.map(run => run.text)).toEqual(["hello", "tick"]);
+			});
+
+			it("turns the loop off when the session changes, but a reset loop keeps running", async () => {
+				startIntervalLoop(MINUTE);
+				await mode.prepareSessionSwitch();
+				expect(mode.loopModeEnabled).toBe(false);
+
+				cfgLoopMode.set(settings, "reset");
+				const clear = vi.spyOn(mode, "handleClearCommand").mockImplementation(() => mode.prepareSessionSwitch());
+				mode.loopModeEnabled = true;
+				mode.setLoopPrompt("tick");
+				waitForRun();
+				await advance(800);
+				await advance(0);
+				expect(clear).toHaveBeenCalledTimes(1);
+				expect(mode.loopModeEnabled).toBe(true);
+				expect(runs.map(run => run.text)).toEqual(["tick"]);
 			});
 
 			it("shows the next run time only while the loop waits", async () => {

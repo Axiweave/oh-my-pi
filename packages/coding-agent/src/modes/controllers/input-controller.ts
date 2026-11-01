@@ -1388,7 +1388,10 @@ export class InputController {
 			if (text && isKnownSkillCommand(this.ctx, text)) {
 				// Capture here too: this branch's own early returns below would
 				// otherwise skip the non-skill capture further down.
-				if (this.ctx.loopModeEnabled) {
+				if (
+					this.ctx.loopModeEnabled &&
+					(submittedMode === "loop" || (this.ctx.loopPrompt === undefined && !this.ctx.loopModePaused))
+				) {
 					this.ctx.setLoopPrompt(text);
 				}
 				if (this.ctx.session.isCompacting) {
@@ -1528,13 +1531,17 @@ export class InputController {
 				return;
 			}
 			// Normal message submission
-			// While loop mode is on, an idle user-typed prompt becomes the new loop
-			// prompt that auto-resubmits after each yield. This arms synchronously,
-			// before any await: arming after a turn-length dispatch would race the
-			// reschedule timer and strand the waiter. Non-forward outcomes (local
-			// consume, rejection) park the loop at their own dispatch sites, so a
-			// failed body degrades to idle instead of looping errors.
-			if (this.ctx.loopModeEnabled) {
+			// A typed prompt becomes the loop prompt only through `/loop … <prompt>` or
+			// while the loop waits for its first prompt; otherwise it runs once and the
+			// loop keeps its prompt. This arms synchronously, before any await: arming
+			// after a turn-length dispatch would race the reschedule timer and strand
+			// the waiter. Non-forward outcomes (local consume, rejection) park the loop
+			// at their own dispatch sites, so a failed body degrades to idle instead of
+			// looping errors.
+			if (
+				this.ctx.loopModeEnabled &&
+				(submittedMode === "loop" || (this.ctx.loopPrompt === undefined && !this.ctx.loopModePaused))
+			) {
 				this.ctx.setLoopPrompt(text);
 			}
 			// First, move any pending bash components to chat

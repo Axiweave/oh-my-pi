@@ -487,16 +487,16 @@ describe("guided loop", () => {
 			await h.mode.handleGuidedLoopCommand("check CI");
 			expect(h.mode.loopModeEnabled).toBe(true);
 			expect(h.mode.loopModePaused).toBe(true);
-			expect(h.mode.loopPrompt).toBeUndefined();
+			expect(h.mode.loopPrompt).toBe("tick");
 
 			h.mode.setLoopPrompt("an answer");
-			expect(h.mode.loopPrompt).toBeUndefined();
+			expect(h.mode.loopPrompt).toBe("tick");
 			expect(h.mode.loopModePaused).toBe(true);
 
 			expect(await request(h, { op: "cancel" })).toBe("cancelled");
 			expect(h.mode.loopModeEnabled).toBe(true);
 			expect(h.mode.loopModePaused).toBe(true);
-			expect(h.mode.loopPrompt).toBeUndefined();
+			expect(h.mode.loopPrompt).toBe("tick");
 			expect(h.mode.loopLimit).toEqual(limit);
 			expect(h.mode.loopIntervalMs).toBe(120_000);
 			expect(h.mode.loopCondition).toEqual(condition);
