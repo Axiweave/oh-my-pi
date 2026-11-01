@@ -100,8 +100,8 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		h = await createHarness();
 		vi.spyOn(siblingSpawn, "zmxSessionExecutable").mockResolvedValue("omp");
 		vi.spyOn(siblingSpawn, "writeSpawnAnnouncement").mockImplementation(() => {});
-		const create = vi.spyOn(siblingSpawn, "createSibling").mockImplementation(async ({ argv }) => {
-			for (const arg of argv) if (arg.startsWith("@")) startFiles.push(arg.slice(1));
+		const create = vi.spyOn(siblingSpawn, "createSibling").mockImplementation(async ({ startFile }) => {
+			if (startFile) startFiles.push(startFile);
 		});
 		const handler = h.session.peekSpawnHandler();
 		if (!handler) throw new Error("Expected the spawn handler after init");
@@ -121,6 +121,25 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
 		const refused = results.find(result => result.status === "rejected");
 		expect(String((refused as PromiseRejectedResult).reason)).toContain("already ran in this turn");
+	});
+
+	it("sends the start text only through the start file, and a failed creation removes that file", async () => {
+		const { h, create, handler } = await spawnHarness();
+		vi.spyOn(h.mode, "showError").mockImplementation(() => {});
+		const text = 'Run the checks.\n<file name="x">\n"quoted" text';
+		await startRun(h);
+		await handler({ mode: "fresh", text });
+		const { argv, startFile } = create.mock.calls[0]![0];
+		expect(argv.some(arg => arg.startsWith("@") || arg.includes("Run the checks"))).toBe(false);
+		expect(fs.readFileSync(startFile!, "utf8")).toBe(text);
+
+		create.mockImplementationOnce(async () => {
+			throw new Error("zmx failed");
+		});
+		await startRun(h);
+		await expect(handler({ mode: "fresh", text })).rejects.toThrow("zmx failed");
+		const failedFile = create.mock.calls[1]![0].startFile!;
+		expect(fs.existsSync(failedFile)).toBe(false);
 	});
 
 	it("a /spawn queued into a run that already spawned still creates its one session", async () => {

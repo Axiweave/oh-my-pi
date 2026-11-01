@@ -2,12 +2,13 @@
  * Sibling Sessions: top-level omp sessions that `/spawn` creates in their own
  * zmx session and `/despawn` ends. zmx labels carry the parent link, the
  * spawned worktree record, and the child's working state; values are
- * `encodeURIComponent` text because labels are separated by spaces.
+ * unpadded base64url text, the charset that zmx accepts in a label value.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { writeTerminalSequence } from "@oh-my-pi/pi-tui/terminal";
 import { wrapTmuxPassthroughIfNeeded } from "@oh-my-pi/pi-tui/tmux";
 import { logger, ptree } from "@oh-my-pi/pi-utils";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { quoteOscArg } from "../utils/external-editor";
 import type { SessionWorktree } from "./session-worktree";
@@ -25,6 +26,7 @@ export interface ZmxListEntry {
 
 const ZMX_TIMEOUT_MS = 15_000;
 const WORK_MAX_CHARS = 80;
+const SPAWN_START_FILE_ENV = "OMP_SPAWN_START_FILE";
 const SUFFIX_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
 /** Six random lowercase letters or digits for {@link siblingName}. */
@@ -101,7 +103,9 @@ function zmxFailure(result: ptree.ExecResult): string {
 /**
  * Create B with `zmx attach --labels … NAME …argv`. Without a TTY on stdin zmx
  * creates the session and returns. B must not inherit A's zmx target or Emacs
- * buffer. On failure the half-made session is killed and the error is thrown.
+ * buffer. `startFile` holds B's first message (see {@link takeSpawnStartText});
+ * it is set or cleared per child, so B never passes its own on. On failure the
+ * half-made session is killed and the error is thrown.
  */
 export async function createSibling(options: {
 	name: string;
@@ -109,8 +113,9 @@ export async function createSibling(options: {
 	argv: string[];
 	env: Record<string, string | undefined>;
 	labels: ZmxLabels;
+	startFile?: string;
 }): Promise<void> {
-	const { name, dir, argv, env, labels } = options;
+	const { name, dir, argv, env, labels, startFile } = options;
 	let failure: string | undefined;
 	try {
 		const result = await ptree.exec(["zmx", "attach", "--labels", encodeLabels(labels), name, ...argv], {
@@ -122,6 +127,7 @@ export async function createSibling(options: {
 				ZMX_SESSION_PREFIX: undefined,
 				EMACS_BUFFER_NAME: undefined,
 				OMP_SPAWN_PARENT: labels["cci-parent"],
+				[SPAWN_START_FILE_ENV]: startFile,
 			},
 			allowNonZero: true,
 			timeout: ZMX_TIMEOUT_MS,
@@ -175,8 +181,8 @@ export async function killSibling(name: string): Promise<void> {
 
 /**
  * The `cci-work` text: the first line of `work` that is not empty and not only
- * a tag (such as the `<file …>` wrapper of an `@file` prompt), trimmed, at most
- * 80 characters.
+ * a tag (such as an injected `<system-notice>` line), trimmed, at most 80
+ * characters.
  */
 export function spawnWorkText(work: string | undefined): string {
 	const line = work?.split("\n").find(l => l.trim() !== "" && !/^<[^>]*>$/.test(l.trim()));
@@ -226,19 +232,25 @@ export function spawnWindowShouldClose(messages: readonly AgentMessage[]): boole
 }
 
 /**
- * B's argv for `mode`: `fresh`/`handoff_summary` start from `@start`, `fork`
- * forks the file, `fork_handoff` forks it and adds `@start`. No prompt text
- * goes on the command line, which `zmx list` prints.
+ * B's first message, from the file that the parent named in
+ * `OMP_SPAWN_START_FILE`. Its text goes on as a plain message: an `@file`
+ * argument would wrap it in a `<file>` block, and a positional message would
+ * show it in the `cmd=` that `zmx list` prints. Removes the variable and the
+ * file, so a restart or a child of B does not read it again. `undefined` when
+ * no file was named or it cannot be read.
  */
-export function spawnArgv(
-	base: readonly string[],
-	mode: SpawnMode,
-	files: { forkFile?: string; startFile?: string },
-): string[] {
-	const argv = [...base];
-	if ((mode === "fork" || mode === "fork_handoff") && files.forkFile) argv.push("--fork", files.forkFile);
-	if (mode !== "fork" && files.startFile) argv.push(`@${files.startFile}`);
-	return argv;
+export function takeSpawnStartText(): string | undefined {
+	const file = process.env[SPAWN_START_FILE_ENV];
+	delete process.env[SPAWN_START_FILE_ENV];
+	if (!file) return undefined;
+	try {
+		return fs.readFileSync(file, "utf8");
+	} catch (error) {
+		logger.warn("Spawn start file unreadable", { file, error: String(error) });
+		return undefined;
+	} finally {
+		fs.rmSync(file, { force: true });
+	}
 }
 
 /** Labels that record a worktree the spawn created. */

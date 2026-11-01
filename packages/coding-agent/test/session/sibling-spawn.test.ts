@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
 	encodeLabels,
 	listChildren,
 	parseZmxList,
-	type SpawnMode,
 	siblingName,
-	spawnArgv,
 	spawnWindowShouldClose,
+	takeSpawnStartText,
 	worktreeFromLabels,
 	type ZmxLabels,
 	spawnWorkText,
@@ -164,25 +166,30 @@ describe(`sibling-spawn properties (seed ${SEED})`, () => {
 		}
 	});
 
-	it("builds B's argv with --fork only in fork modes, @ only with a start file, and no prompt text", () => {
+	it("hands B its start text unchanged, once, and leaves no file or variable behind", () => {
 		const g = gen(prng(SEED + 4));
-		const modes: SpawnMode[] = ["fresh", "fork", "fork_handoff", "handoff_summary"];
-		for (let run = 0; run < RUNS; run++) {
-			const base = Array.from({ length: g.int(6) }, () => g.pick(["--model", "p/m", "--thinking", "high", "-x"]));
-			const mode = g.pick(modes);
-			const forkFile = g.int(2) === 0 ? `/tmp/s${run}.jsonl` : undefined;
-			const startFile = g.int(2) === 0 ? `/tmp/start-${run}.md` : undefined;
-			const argv = spawnArgv(base, mode, { forkFile, startFile });
-			const label = `seed ${SEED} run ${run} mode ${mode}`;
-			expect(argv.slice(0, base.length), label).toEqual(base);
-			const added = argv.slice(base.length);
-			const forkMode = mode === "fork" || mode === "fork_handoff";
-			expect(added.includes("--fork"), label).toBe(forkMode && forkFile !== undefined);
-			expect(
-				added.some(arg => arg.startsWith("@")),
-				label,
-			).toBe(mode !== "fork" && startFile !== undefined);
-			for (const arg of added) expect(["--fork", forkFile, `@${startFile}`], label).toContain(arg);
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-spawn-start-"));
+		const saved = process.env.OMP_SPAWN_START_FILE;
+		try {
+			for (let run = 0; run < RUNS; run++) {
+				const label = `seed ${SEED + 4} run ${run}`;
+				const text = g.pick(["", '<file name="/x">', "<system-notice>\n"]) + g.text(40);
+				const file = path.join(dir, `start-${run}.md`);
+				fs.writeFileSync(file, text);
+				process.env.OMP_SPAWN_START_FILE = file;
+				expect(takeSpawnStartText(), label).toBe(text);
+				expect(process.env.OMP_SPAWN_START_FILE, label).toBeUndefined();
+				expect(fs.existsSync(file), label).toBe(false);
+				expect(takeSpawnStartText(), label).toBeUndefined();
+			}
+			// A file that is already gone gives no text and still clears the variable.
+			process.env.OMP_SPAWN_START_FILE = path.join(dir, "gone.md");
+			expect(takeSpawnStartText()).toBeUndefined();
+			expect(process.env.OMP_SPAWN_START_FILE).toBeUndefined();
+		} finally {
+			if (saved === undefined) delete process.env.OMP_SPAWN_START_FILE;
+			else process.env.OMP_SPAWN_START_FILE = saved;
+			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 

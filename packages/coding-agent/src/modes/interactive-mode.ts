@@ -198,7 +198,6 @@ import {
 	publishState,
 	randomSiblingSuffix,
 	siblingName,
-	spawnArgv,
 	spawnWindowShouldClose,
 	worktreeFromLabels,
 	worktreeLabels,
@@ -8725,22 +8724,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const dir = worktree?.path ?? request.cwd ?? sourceCwd;
 		const name = siblingName(parent, dir, randomSiblingSuffix());
+		let startFile: string | undefined;
 		try {
-			let startFile: string | undefined;
 			if (start !== undefined) {
-				startFile = path.join(os.tmpdir(), `omp-spawn-${name}.md`);
-				// ponytail: temp file never deleted; B reads it at startup, after this call returns.
-				await fs.writeFile(startFile, start, { mode: 0o600, flag: "wx" });
+				const file = path.join(os.tmpdir(), `omp-spawn-${name}.md`);
+				// B reads and deletes it at startup (takeSpawnStartText).
+				await fs.writeFile(file, start, { mode: 0o600, flag: "wx" });
+				startFile = file;
 			}
 			await createSibling({
 				name,
 				dir,
-				argv: spawnArgv(launch.argv, mode, { forkFile, startFile }),
+				argv: forkFile ? [...launch.argv, "--fork", forkFile] : launch.argv,
 				env: launch.env,
 				labels: { "cci-parent": parent, ...(worktree ? worktreeLabels(worktree) : {}) },
+				startFile,
 			});
 		} catch (error) {
 			let message = error instanceof Error ? error.message : String(error);
+			if (startFile) await fs.rm(startFile, { force: true });
 			if (worktree) {
 				try {
 					await removeSessionWorktree(worktree, false);

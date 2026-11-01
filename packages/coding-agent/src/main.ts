@@ -39,6 +39,7 @@ import {
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
+import { takeSpawnStartText } from "./session/sibling-spawn";
 import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
 import { fetchBuild } from "./cli/build-service";
@@ -2599,6 +2600,9 @@ export async function runRootCommand(
 					cfgPlanDefaultOnStartup.get(settingsInstance) && cfgPlanEnabled.get(settingsInstance),
 				);
 			}
+			// A `/spawn` child gets its first message as plain text, not as an `@file` block.
+			const spawnStartText = takeSpawnStartText();
+			if (spawnStartText !== undefined) initialArgs.messages.unshift(spawnStartText);
 			if (autoPrintNeedsArgPrompt && initialArgs.messages.length === 0 && initialArgs.fileArgs.length === 0) {
 				exitWithoutTerminal();
 			}
