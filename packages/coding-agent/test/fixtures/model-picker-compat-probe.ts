@@ -23,20 +23,22 @@ const model = buildModel({
 const editor: Component = { render: () => [] };
 let overlay: Component | undefined;
 let focus: Component = editor;
+const session = {
+	model,
+	getContextUsage: () => ({ tokens: 0 }),
+	getRoleModelCycle: () => undefined,
+	modelRegistry: {
+		refreshIfStale: async () => false,
+		getError: () => undefined,
+		getAvailable: () => [model],
+		getAll: () => [model],
+	},
+	scopedModels: [],
+};
 const ctx = {
 	settings: Settings.isolated({}),
-	session: {
-		model,
-		getContextUsage: () => ({ tokens: 0 }),
-		getRoleModelCycle: () => undefined,
-		modelRegistry: {
-			refreshIfStale: async () => false,
-			getError: () => undefined,
-			getAvailable: () => [model],
-			getAll: () => [model],
-		},
-		scopedModels: [],
-	},
+	session,
+	viewSession: session,
 	keybindings: { getKeys: () => ["Alt+P"], getDisplayString: () => "Alt+P" },
 	editor,
 	editorContainer: { children: [editor] },
