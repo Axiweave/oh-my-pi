@@ -22,7 +22,7 @@ import {
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import { formatDuration, logger, Snowflake, sanitizeText } from "@oh-my-pi/pi-utils";
-import { getActiveProfile, getConfigDirName } from "@oh-my-pi/pi-utils/dirs";
+import { getActiveProfile } from "@oh-my-pi/pi-utils/dirs";
 import { classifyTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../exec/bash-executor";
@@ -120,7 +120,7 @@ import type { UnavailableUsageAccount } from "@oh-my-pi/pi-tui/overlays/usage-da
 import { cfgTerminalShowImages } from "../settings";
 import { cfgProviderAppendOnlyContext } from "../../session/settings";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../../commands/settings";
-import { flagConsumesValue, restartArgv } from "../../cli/flag-tables";
+import { buildForkChildLaunch, FORK_API_KEY_REFUSAL, forkScopeEnvCommand } from "../../cli/fork-child";
 import {
 	createDefaultTerminalLaunchRequest,
 	getTerminalLaunchPlacement,
@@ -151,48 +151,6 @@ interface ForkTerminalDependencies {
 	resolveCliEntryCmd: typeof resolveCliEntryCmd;
 	getActiveProfile: typeof getActiveProfile;
 	argv: () => string[];
-}
-
-/**
- * Startup flags the fork child re-supplies from the parent's live state
- * (`--profile`, `--model`, `--thinking`, `--prompt-cache-key`) or that would
- * re-point it at a stale scope (`--config`/`--cwd`/`--provider`; the child
- * gets the effective overlays via `PI_CONFIG_FILES` and the session cwd).
- */
-const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
-	"--config": true,
-	"--cwd": true,
-	"--model": true,
-	"--profile": true,
-	"--prompt-cache-key": true,
-	"--provider": true,
-	"--thinking": true,
-};
-
-/**
- * `env` prefix pinning each scope variable for the fork child. Multiplexer
- * servers keep stale environment snapshots, so every variable is pinned:
- * defined values are assigned, absent (or empty) ones are unset with `-u`
- * (which must precede the assignments) rather than exported as empty strings
- * that `??`-style consumers would treat as a set, relative path.
- */
-function forkScopeEnvCommand(scope: Readonly<Record<string, string | undefined>>): string[] {
-	const unset: string[] = [];
-	const assignments: string[] = [];
-	for (const [name, value] of Object.entries(scope)) {
-		if (value) assignments.push(`${name}=${value}`);
-		else unset.push("-u", name);
-	}
-	return ["env", ...unset, ...assignments];
-}
-
-function hasForkApiKeyOverride(argv: string[]): boolean {
-	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i]!;
-		if (arg === "--api-key" || arg.startsWith("--api-key=")) return true;
-		if (flagConsumesValue(arg, argv[i + 1])) i++;
-	}
-	return false;
 }
 
 export class CommandController {
@@ -1540,11 +1498,17 @@ export class CommandController {
 			return;
 		}
 
-		const childArgs = restartArgv(dependencies.argv(), undefined, FORK_LAUNCH_OVERRIDES);
-		if (hasForkApiKeyOverride(childArgs)) {
-			this.ctx.showError(
-				"Cannot open a fork in another terminal when --api-key was supplied at startup; the key cannot be forwarded without exposing it in the multiplexer command. Configure provider credentials in the auth store and retry.",
-			);
+		const launchOptions = {
+			session: this.ctx.session,
+			sessionManager: this.ctx.sessionManager,
+			settings: this.ctx.settings,
+			argv: dependencies.argv(),
+			environment,
+			getActiveProfile: dependencies.getActiveProfile,
+			resolveCliEntryCmd: dependencies.resolveCliEntryCmd,
+		};
+		if (buildForkChildLaunch(launchOptions).apiKeyOverride) {
+			this.ctx.showError(FORK_API_KEY_REFUSAL);
 			return;
 		}
 		const shellGrammar = placementInfo.shellGrammar;
@@ -1581,38 +1545,8 @@ export class CommandController {
 		}
 
 		try {
-			const activeProfile = dependencies.getActiveProfile();
-			const activeModel = this.ctx.session.model;
-			if (activeProfile) childArgs.push("--profile", activeProfile);
-			if (activeModel) childArgs.push("--model", `${activeModel.provider}/${activeModel.id}`);
-			const activeThinkingLevel = this.ctx.session.configuredThinkingLevel();
-			if (activeThinkingLevel !== undefined) childArgs.push("--thinking", activeThinkingLevel);
-			// Forcing --model/--thinking marks the fork's cache shape as changed, which would
-			// drop the inherited key. Automatic candidates travel in the source header;
-			// forwarding them as --prompt-cache-key would bypass their model gate.
-			if (
-				this.ctx.session.agent.promptCacheKey !== undefined ||
-				this.ctx.sessionManager.getHeader()?.taskPromptCacheKey === undefined
-			) {
-				childArgs.push("--prompt-cache-key", this.ctx.session.agent.promptCacheKey ?? this.ctx.session.sessionId);
-			}
-			childArgs.push("--fork", sourceSessionFile);
-			// Pin only non-secret scope variables.
-			const command = [
-				...forkScopeEnvCommand({
-					PI_CODING_AGENT_DIR: this.ctx.settings.getAgentDir(),
-					PI_CONFIG_DIR: getConfigDirName(),
-					OMP_PROFILE: activeProfile,
-					PI_PROFILE: activeProfile,
-					PI_CONFIG_FILES: this.ctx.settings.getConfigFiles().join(path.delimiter),
-					PI_CODING_AGENT_SESSION_DIR: environment.PI_CODING_AGENT_SESSION_DIR,
-					XDG_DATA_HOME: environment.XDG_DATA_HOME,
-					XDG_STATE_HOME: environment.XDG_STATE_HOME,
-					XDG_CACHE_HOME: environment.XDG_CACHE_HOME,
-				}),
-				...dependencies.resolveCliEntryCmd(),
-				...childArgs,
-			];
+			const launch = buildForkChildLaunch({ ...launchOptions, forkSessionFile: sourceSessionFile });
+			const command = [...forkScopeEnvCommand(launch.env), ...launch.argv];
 			const launchPlan = createDefaultTerminalLaunchRequest(
 				multiplexer,
 				placement,
