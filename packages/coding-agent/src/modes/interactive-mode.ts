@@ -3664,7 +3664,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#isAutoSubmitBlocked(): boolean {
 		return (
-			this.#isShuttingDown || this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork
+			this.#isShuttingDown ||
+			this.session.isStreaming ||
+			this.session.isCompacting ||
+			this.session.hasPostPromptWork ||
+			// A pending switch can still be cancelled or move to another session.
+			this.session.isSessionTransitioning
 		);
 	}
 
@@ -3750,11 +3755,20 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.handleCompactCommand();
 		} else if (action === "reset") {
 			// The reset switches sessions on purpose: the loop must survive it.
+			const previousSessionId = this.sessionManager.getSessionId();
 			this.#loopResetting = true;
 			try {
 				await this.handleClearCommand();
 			} finally {
 				this.#loopResetting = false;
+			}
+			// A hook cancelled the reset: the prompt must not run in the old context.
+			if (this.sessionManager.getSessionId() === previousSessionId) {
+				if (this.#runnableLoopPrompt === prompt) {
+					this.pauseLoop();
+					this.showStatus("Loop paused: the session reset was cancelled. /loop with arguments resumes it.");
+				}
+				return;
 			}
 		}
 		this.#submitLoopPromptWhenReady(prompt);

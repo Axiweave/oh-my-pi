@@ -827,6 +827,46 @@ describe("InteractiveMode loop auto-submit", () => {
 				expect(runs.map(run => run.text)).toEqual(["tick"]);
 			});
 
+			it("pauses a reset loop and runs nothing when a hook cancels the reset", async () => {
+				cfgLoopMode.set(settings, "reset");
+				// A cancelled newSession keeps the session id.
+				const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
+				const showStatus = vi.spyOn(mode, "showStatus");
+				mode.loopModeEnabled = true;
+				mode.setLoopPrompt("tick");
+				waitForRun();
+				await advance(800);
+				await advance(0);
+				expect(clear).toHaveBeenCalledTimes(1);
+				expect(runs).toEqual([]);
+				expect(mode.loopModePaused).toBe(true);
+				expect(mode.loopPrompt).toBe("tick");
+				expect(showStatus).toHaveBeenCalledWith(
+					"Loop paused: the session reset was cancelled. /loop with arguments resumes it.",
+				);
+				await advance(5 * MINUTE);
+				expect(runs).toEqual([]);
+			});
+
+			it("starts no run while a session switch is pending", async () => {
+				// Hold a real newSession open after its transition starts.
+				const held = Promise.withResolvers<void>();
+				vi.spyOn(session, "abort").mockImplementation(() => held.promise);
+				mode.loopModeEnabled = true;
+				mode.setLoopPrompt("tick");
+				waitForRun();
+				const switching = session.newSession();
+				expect(session.isSessionTransitioning).toBe(true);
+				await advance(5_000);
+				expect(runs).toEqual([]);
+				expect(mode.loopModeEnabled).toBe(true);
+				held.resolve();
+				await switching;
+				await advance(5_000);
+				expect(mode.loopModeEnabled).toBe(false);
+				expect(runs).toEqual([]);
+			});
+
 			// Model check over generated command sequences. Invariants after every step:
 			// the loop prompt changes only on enable, disable, the first prompt while the
 			// loop waits, or `/loop … <prompt>`; a disabled loop has no prompt; Esc keeps
