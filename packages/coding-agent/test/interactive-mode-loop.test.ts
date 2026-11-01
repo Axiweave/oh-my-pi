@@ -65,6 +65,7 @@ describe("InteractiveMode loop auto-submit", () => {
 		await pendingInput;
 		pendingInput = undefined;
 		mode.vibeModeEnabled = false;
+		session.setVibeModeState(undefined);
 		Reflect.deleteProperty(session, "isCompacting");
 		Reflect.deleteProperty(session, "isStreaming");
 		Reflect.deleteProperty(session, "hasPostPromptWork");
@@ -808,21 +809,159 @@ describe("InteractiveMode loop auto-submit", () => {
 				expect(runs.map(run => run.text)).toEqual(["hello", "tick"]);
 			});
 
-			it("turns the loop off when the session changes, but a reset loop keeps running", async () => {
-				startIntervalLoop(MINUTE);
-				await mode.prepareSessionSwitch();
-				expect(mode.loopModeEnabled).toBe(false);
-
+			it("keeps a reset loop running across the new session of its own reset", async () => {
 				cfgLoopMode.set(settings, "reset");
-				const clear = vi.spyOn(mode, "handleClearCommand").mockImplementation(() => mode.prepareSessionSwitch());
+				const clear = vi.spyOn(mode, "handleClearCommand").mockImplementation(async () => {
+					await session.newSession();
+				});
+				const sessionId = session.sessionManager.getSessionId();
 				mode.loopModeEnabled = true;
 				mode.setLoopPrompt("tick");
 				waitForRun();
 				await advance(800);
-				await advance(0);
 				expect(clear).toHaveBeenCalledTimes(1);
+				await clear.mock.results[0]?.value;
+				await advance(0);
+				expect(session.sessionManager.getSessionId()).not.toBe(sessionId);
 				expect(mode.loopModeEnabled).toBe(true);
 				expect(runs.map(run => run.text)).toEqual(["tick"]);
+			});
+
+			// Model check over generated command sequences. Invariants after every step:
+			// the loop prompt changes only on enable, disable, the first prompt while the
+			// loop waits, or `/loop … <prompt>`; a disabled loop has no prompt; Esc keeps
+			// the prompt; a scheduled run sends exactly the loop prompt, and only when the
+			// loop is on, not paused, and has a prompt.
+			const MODEL_SEED = 0x10091;
+			const OP_KINDS = [
+				"typed",
+				"skill",
+				"steer",
+				"esc",
+				"loopPrompt",
+				"loopArgs",
+				"bareLoop",
+				"switch",
+				"cancelledSwitch",
+				"tick",
+			] as const;
+			type Op = { kind: (typeof OP_KINDS)[number]; text: string };
+
+			async function resetLoop(): Promise<void> {
+				mode.disableLoopMode();
+				mode.onInputCallback?.({ text: "", cancelled: true, started: false });
+				await pendingInput;
+				vi.clearAllTimers();
+				streaming = false;
+				runs = [];
+			}
+
+			/** Runs `ops` from a disabled loop; returns the first broken invariant, if any. */
+			async function checkOps(ops: Op[]): Promise<string | undefined> {
+				await resetLoop();
+				const model = { enabled: false, prompt: undefined as string | undefined, paused: false };
+				for (const [step, op] of ops.entries()) {
+					if (!mode.onInputCallback) waitForRun();
+					const before = runs.length;
+					switch (op.kind) {
+						case "typed":
+						case "skill":
+							await mode.editor.onSubmit?.(op.text);
+							if (model.enabled && model.prompt === undefined && !model.paused) model.prompt = op.text;
+							break;
+						case "steer":
+							streaming = true;
+							await mode.editor.onSubmit?.(op.text);
+							streaming = false;
+							break;
+						case "esc":
+							if (mode.loopModeEnabled) mode.pauseLoop();
+							if (model.enabled) model.paused = true;
+							break;
+						case "loopPrompt":
+							await mode.editor.onSubmit?.(`/loop every 60s ${op.text}`);
+							Object.assign(model, { enabled: true, prompt: op.text, paused: false });
+							break;
+						case "loopArgs":
+							await mode.editor.onSubmit?.("/loop every 60s");
+							if (!model.enabled) model.prompt = undefined;
+							Object.assign(model, { enabled: true, paused: false });
+							break;
+						case "bareLoop":
+							await mode.editor.onSubmit?.("/loop");
+							Object.assign(model, { enabled: !model.enabled, prompt: undefined, paused: false });
+							break;
+						case "switch":
+							await session.newSession();
+							Object.assign(model, { enabled: false, prompt: undefined, paused: false });
+							break;
+						case "cancelledSwitch":
+							await mode.prepareSessionSwitch();
+							break;
+						case "tick": {
+							await advance(MINUTE + 1_000);
+							const sent = runs.slice(before).map(run => run.text);
+							const due = model.enabled && !model.paused && model.prompt !== undefined ? [model.prompt] : [];
+							if (!Bun.deepEquals(sent, due)) {
+								return `step ${step} tick sent ${JSON.stringify(sent)}, expected ${JSON.stringify(due)}`;
+							}
+							break;
+						}
+					}
+					await flushMicrotasks();
+					const actual = {
+						enabled: mode.loopModeEnabled,
+						prompt: mode.loopPrompt,
+						paused: mode.loopModeEnabled && mode.loopModePaused,
+					};
+					const expected = { ...model, paused: model.enabled && model.paused };
+					if (!Bun.deepEquals(actual, expected)) {
+						return `step ${step} ${op.kind}: state ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`;
+					}
+				}
+				return undefined;
+			}
+
+			it(`keeps the loop prompt model over generated command sequences (seed ${MODEL_SEED})`, async () => {
+				const skillPath = path.join(tempDir.path(), "recap.md");
+				await Bun.write(skillPath, "---\nname: recap\n---\nSummarize recent changes.\n");
+				mode.skillCommands.set("skill:recap", {
+					name: "recap",
+					description: "",
+					filePath: skillPath,
+					baseDir: tempDir.path(),
+					source: "test",
+				});
+				vi.spyOn(session, "promptCustomMessage").mockResolvedValue(true);
+				vi.spyOn(session, "prompt").mockResolvedValue(true);
+				new InputController(mode).setupEditorSubmitHandler();
+
+				let state = MODEL_SEED;
+				const next = (limit: number) => {
+					state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+					return state % limit;
+				};
+				try {
+					for (let sequence = 0; sequence < 40; sequence++) {
+						const ops = Array.from({ length: 16 }, (_, index): Op => {
+							const kind = OP_KINDS[next(OP_KINDS.length)];
+							return { kind, text: kind === "skill" ? `/skill:recap ${index}` : `${kind} ${index}` };
+						});
+						if (!(await checkOps(ops))) continue;
+						// Shrink: drop each op that the failure does not need.
+						let smallest = ops;
+						for (let index = smallest.length - 1; index >= 0; index--) {
+							const candidate = smallest.toSpliced(index, 1);
+							if (await checkOps(candidate)) smallest = candidate;
+						}
+						const failure = await checkOps(smallest);
+						throw new Error(
+							`seed ${MODEL_SEED} sequence ${sequence}: ${failure}\nops: ${JSON.stringify(smallest.map(op => op.kind))}`,
+						);
+					}
+				} finally {
+					mode.skillCommands.delete("skill:recap");
+				}
 			});
 
 			it("shows the next run time only while the loop waits", async () => {

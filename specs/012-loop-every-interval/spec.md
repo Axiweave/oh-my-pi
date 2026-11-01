@@ -64,8 +64,8 @@ A user leaves an interval loop running and comes back later. The user wants to s
 
 1. **Given** an interval loop that waits for its next run, **When** the user looks at the status line, **Then** it shows the interval and the clock time of the next run.
 2. **Given** an interval loop that waits for its next run, **When** the user presses Esc, **Then** the pending run is canceled and the loop is paused, as for a loop with no interval.
-3. **Given** a paused interval loop, **When** the user sends a prompt, **Then** that prompt runs at once and becomes the loop prompt, and the next run is due one interval after it started.
-4. **Given** an interval loop that waits for its next run, **When** the user sends a different prompt, **Then** that prompt runs at once, it replaces the loop prompt, and the schedule starts again from that run.
+3. **Given** a paused interval loop, **When** the user sends a prompt, **Then** that prompt runs once, the loop stays paused, and it keeps its loop prompt. `/loop` with arguments resumes it. (Changed after release: before, the prompt became the loop prompt and resumed the loop.)
+4. **Given** an interval loop that waits for its next run, **When** the user sends a different prompt, **Then** that prompt runs once, the loop keeps its loop prompt, and the next run stays due at its time. Only `/loop … <prompt>` replaces the loop prompt. (Changed after release: before, the prompt replaced the loop prompt and restarted the schedule.)
 5. **Given** the user starts `/loop every 15m <prompt>`, **When** OMP confirms the loop, **Then** the message states the interval.
 6. **Given** an interval loop with a loop prompt, **When** the user runs `/loop every 30m` with no prompt, **Then** the loop keeps its prompt, uses the new 30-minute interval, and the next run is due 30 minutes after the start of the last run.
 7. **Given** any running loop, **When** the user runs `/loop` with no arguments, **Then** loop mode turns off and the pending run is canceled.
@@ -100,7 +100,7 @@ A user leaves an interval loop running and comes back later. The user wants to s
 - **FR-007**: The count limit, the time limit, the `--while` / `--until` condition, and the `loop.mode` setting MUST work with an interval in the same way that they work without one. Only re-runs use the count. The time limit counts from the `/loop` command.
 - **FR-008**: The `--while` / `--until` command MUST run when a run is due, and not at the start of the wait.
 - **FR-009**: Esc during the wait MUST cancel the pending run and pause the loop. A bare `/loop` MUST turn loop mode off and cancel the pending run.
-- **FR-010**: A prompt that the user sends during an interval loop MUST run at once, become the loop prompt, and set the next due time to one interval after it started.
+- **FR-010**: A prompt that the user sends during an interval loop MUST run once and MUST NOT change the loop prompt or the due time. Only `/loop … <prompt>` and `/guided-loop` replace the loop prompt. The first prompt after `/loop` without a prompt becomes the loop prompt. (Changed after release.)
 - **FR-011**: The status line MUST show the interval and the clock time of the next run while an interval loop waits.
 - **FR-012**: The `/loop` confirmation message, the command description, the autocomplete hint, and the usage error MUST show the `every` form. They MUST say that a bare `/loop` turns loop mode off.
 - **FR-013**: Every `/loop` form without `every` MUST keep its current behavior, except for FR-015 to FR-018.

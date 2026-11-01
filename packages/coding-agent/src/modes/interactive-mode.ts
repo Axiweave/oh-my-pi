@@ -2402,6 +2402,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.progressHudContainer.addChild(this.#judgmentBatchProgressHud);
 		this.progressHudContainer.addChild(this.#downloadActivityHud);
 		this.#eventBusUnsubscribers.push(onDownloadActivity(activity => this.#downloadActivityHud.update(activity)));
+		// A loop prompt belongs to its session: adopting another session id ends the loop.
+		// A cancelled switch keeps the session id, so it keeps the loop.
+		this.#eventBusUnsubscribers.push(
+			session.registerSessionChangeCallback(() => {
+				if (!this.#loopResetting && this.loopModeEnabled) {
+					this.disableLoopMode("Loop mode disabled: the session changed.");
+				}
+			}),
+		);
 		this.statusContainer = new StatusHudContainer(this);
 		this.todoContainer = new TodoHudContainer(this);
 		this.subagentContainer = new AnchoredLiveContainer();
@@ -10800,9 +10809,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#hidePlanReview();
 		// The old session keeps its saved entry; only the in-memory mode stops.
 		if (this.#resetSpeckitAuto()) this.showStatus("Speckit-auto mode stopped: the session changed.");
-		// A loop prompt belongs to its session: a user switch ends the loop.
-		if (!this.#loopResetting && this.loopModeEnabled)
-			this.disableLoopMode("Loop mode disabled: the session changed.");
 	}
 
 	async handleClearCommand(): Promise<void> {
@@ -10868,7 +10874,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#btwController.dispose();
 			this.#omfgController.dispose();
 			this.#cleanseController.dispose();
-			if (this.loopModeEnabled) this.disableLoopMode("Loop mode disabled: the session changed.");
 		}
 		await this.#commandController.handleForkCommand(placement);
 	}

@@ -44,4 +44,4 @@ stateDiagram-v2
   Interview --> Idle: loop cancel, other tool used, session switch, kickoff failure, typed /loop
 ```
 
-`Idle` keeps the state of the loop before the interview. A loop that the interview paused stays paused with its limit, interval, and condition. A paused loop has no prompt (`pauseLoop` clears it), so the next user prompt resumes it, as before this feature.
+`Idle` keeps the state of the loop before the interview. A loop that the interview paused stays paused with its prompt, limit, interval, and condition. A typed prompt does not resume it. `/loop` with arguments resumes it.
