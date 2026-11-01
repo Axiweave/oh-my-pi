@@ -153,7 +153,7 @@ function settle(answer: EditorAnswer): void {
 }
 
 /** Ghostel `ghostel_cmd` argument quoting: backslash and double quote escaped, whole value in double quotes. */
-function quoteOscArg(value: string): string {
+export function quoteOscArg(value: string): string {
 	return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 

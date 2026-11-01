@@ -719,6 +719,14 @@ export interface InteractiveModeContext {
 	): Promise<boolean>;
 	/** True from `/guided-loop` until the user confirms or the interview ends. */
 	isGuidedLoopInterviewActive(): boolean;
+	/** `/spawn <request>`: open the spawn window and send the kickoff prompt. */
+	handleSpawnCommand(
+		request: string,
+		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		displayText?: string,
+	): Promise<boolean>;
+	/** `/despawn`: pick a child session of this session and end it. */
+	handleDespawnCommand(): Promise<void>;
 	handleLoopCommand(args?: string): Promise<string | undefined>;
 	setLoopPrompt(prompt: string): void;
 	armLoopAutoSubmit(): void;

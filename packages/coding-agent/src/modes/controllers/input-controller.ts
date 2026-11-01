@@ -227,6 +227,7 @@ const DETACHED_DRAFT_COMMANDS = new Set([
 	"goal",
 	"guided-goal",
 	"guided-loop",
+	"spawn",
 	"tan",
 	"btw",
 	"omfg",

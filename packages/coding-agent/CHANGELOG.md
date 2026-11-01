@@ -8,6 +8,8 @@
 
 ### Added
 
+- Added `/spawn <request>`. The model turns the request into a call to the hidden `spawn_session` tool, which starts a new top-level omp session in its own zmx session (fresh, fork, fork with a handoff note, or handoff summary, with an optional directory, new worktree, or model) and announces it to Emacs. The `spawn.confirm` setting (default off) asks yes/no first.
+- Added `/despawn`. It lists the sessions that this session spawned, ends the one you pick, and applies `worktree.onExit` to a worktree that the spawn created.
 - Added the `app.message.toggleQueue` keybinding (default `Alt+Q`, `Alt+Shift+Q`). It adds the `->` queue prefix to the draft, or removes it when the draft already has one.
 - Added `/guided-loop [rough idea]`. The agent asks one short question at a time about what to repeat, how often, and when to stop. A `Start this loop?` dialog then shows the equal `/loop` line, with **No** selected first. On Yes, loop mode turns on (or replaces the current loop), the prompt runs at once, and the `/loop` line stays in the transcript so you can type it next time. A loop that was running pauses during the interview, and `c` and `.` count as answers there.
 - Added `/loop every <duration>`, for example `/loop every 15m check CI`. The prompt runs at once and then again 15 minutes after each run starts. A run never starts while a turn is busy. A run that comes due during a turn starts once, after the turn ends. While the loop waits, the status line shows `every 15m next HH:MM`. The interval combines with a count or time limit and with `--while`/`--until`: `/loop 2h every 15m --until 'gh pr checks' ...`.

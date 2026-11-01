@@ -334,7 +334,7 @@ export async function inspectSessionWorktree(wt: SessionWorktree): Promise<Sessi
 }
 
 /** Describes what removing a worktree in `state` would lose, for the exit prompt. */
-function describeWorktreeRisk(wt: SessionWorktree, state: SessionWorktreeState): string {
+export function describeWorktreeRisk(wt: SessionWorktree, state: SessionWorktreeState): string {
 	const issues: string[] = [];
 	if (state.dirty) issues.push("has uncommitted changes");
 	if (state.moved) issues.push("has new commits (branch is kept)");

@@ -884,6 +884,18 @@ export const cfgAskEnabled = register({
 	},
 });
 
+export const cfgSpawnConfirm = register({
+	id: "spawn.confirm",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Confirm Spawn",
+		description: "Show the mode, directory, and start content of a /spawn session and ask yes/no before creating it",
+	},
+});
+
 export const cfgOutEnabled = register({
 	id: "out.enabled",
 	type: "boolean",

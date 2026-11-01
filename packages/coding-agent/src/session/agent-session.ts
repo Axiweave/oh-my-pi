@@ -291,6 +291,7 @@ import {
 	writeDeviceDispatch,
 } from "../tools/resolve";
 import type { LoopStartHandler } from "../tools/loop";
+import type { SpawnHandler } from "../tools/spawn-session";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
@@ -3536,6 +3537,28 @@ export class AgentSession implements SettingsScope {
 	/** The handler shows a confirm dialog mid-turn, so it runs as a {@link waitForUser}. */
 	setLoopStartHandler(handler: LoopStartHandler | null): void {
 		this.#loopStartHandler = handler ? request => this.waitForUser(() => handler(request)) : undefined;
+	}
+
+	/** `/spawn` handler consulted by the `spawn_session` tool; InteractiveMode sets it at startup. */
+	#spawnHandler: SpawnHandler | undefined;
+	/** True while a `/spawn` window is open; gates the `spawn_session` tool. */
+	#spawnWindowOpen = false;
+
+	peekSpawnHandler(): SpawnHandler | undefined {
+		return this.#spawnHandler;
+	}
+
+	/** The handler can show a confirm dialog mid-turn, so it runs as a {@link waitForUser}. */
+	setSpawnHandler(handler: SpawnHandler | null): void {
+		this.#spawnHandler = handler ? request => this.waitForUser(() => handler(request)) : undefined;
+	}
+
+	isSpawnWindowOpen(): boolean {
+		return this.#spawnWindowOpen;
+	}
+
+	setSpawnWindowOpen(open: boolean): void {
+		this.#spawnWindowOpen = open;
 	}
 
 	#sessionBeforeSwitchReconciler: (() => Promise<void>) | undefined;
@@ -7590,9 +7613,11 @@ export class AgentSession implements SettingsScope {
 		);
 	}
 
-	/** A tool snapshot taken during a `/guided-loop` interview must not revive `loop` after it ends. */
+	/** A tool snapshot taken during a `/guided-loop` interview or `/spawn` window must not revive its tool after it ends. */
 	#withoutIdleLoopTool(toolNames: string[]): string[] {
-		return this.#loopStartHandler ? toolNames : toolNames.filter(name => name !== "loop");
+		return toolNames.filter(
+			name => (name !== "loop" || this.#loopStartHandler) && (name !== "spawn_session" || this.#spawnWindowOpen),
+		);
 	}
 
 	/** Current enabled eval prelude definitions. */
@@ -12692,6 +12717,17 @@ export class AgentSession implements SettingsScope {
 	 */
 	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		return this.#inLogContext(() => this.#maintenance.handoff(customInstructions, options));
+	}
+
+	/**
+	 * Generate a handoff document without committing it, for a `/spawn`
+	 * `handoff_summary` session. This session's history stays as it is.
+	 */
+	generateHandoffDocument(
+		customInstructions?: string,
+		options?: SessionHandoffOptions,
+	): Promise<HandoffResult | undefined> {
+		return this.#inLogContext(() => this.#handoff.generateDocument(customInstructions, options));
 	}
 
 	#isTerminalYieldToolResult(event: { toolName: string; isError?: boolean; result?: { details?: unknown } }): boolean {

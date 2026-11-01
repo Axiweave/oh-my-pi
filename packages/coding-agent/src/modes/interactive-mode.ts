@@ -5,6 +5,7 @@
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as os from "node:os";
 import { type Agent, AgentBusyError, type AgentMessage, agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Message, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
@@ -76,6 +77,7 @@ import {
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { pickTableChart } from "../auto-graph/planner";
 import { restartArgv } from "../cli/flag-tables";
+import { buildForkChildLaunch, FORK_API_KEY_REFUSAL } from "../cli/fork-child";
 import type { CollabGuestLink } from "../collab/guest";
 import { CollabController } from "../collab/controller";
 import type { CollabHost } from "../collab/host";
@@ -143,6 +145,7 @@ import {
 } from "../plan-mode/state";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import guidedLoopInterviewPrompt from "../prompts/loop/guided-loop-interview.md" with { type: "text" };
+import spawnKickoffPrompt from "../prompts/spawn/spawn-kickoff.md" with { type: "text" };
 import planDebateConsensusInvalidatedPrompt from "../prompts/system/plan-debate-consensus-invalidated.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
@@ -175,11 +178,35 @@ import type { SessionContext } from "../session/session-context";
 import type { SessionManager } from "../session/session-manager";
 import {
 	canAutoCreateWorktree,
+	createSessionWorktree,
+	decideWorktreeExit,
+	defaultSessionWorktreeBranch,
+	describeWorktreeRisk,
+	inspectSessionWorktree,
 	planWorktreeExit,
 	removeExitWorktrees,
+	removeSessionWorktree,
 	type SessionWorktree,
+	type SessionWorktreeState,
+	type WorktreeExitAction,
 	type WorktreeExitPlan,
 } from "../session/session-worktree";
+import {
+	createSibling,
+	killSibling,
+	listChildren,
+	publishState,
+	randomSiblingSuffix,
+	siblingName,
+	spawnArgv,
+	spawnWindowShouldClose,
+	worktreeFromLabels,
+	worktreeLabels,
+	writeSpawnAnnouncement,
+	zmxEntryDir,
+	type ZmxListEntry,
+	zmxSessionExecutable,
+} from "../session/sibling-spawn";
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
@@ -196,6 +223,7 @@ import type { LspStartupServerInfo } from "../tools";
 import { resolvePlanFilePath } from "../plan-mode/plan-files";
 import { resolveToCwd } from "../tools/path-utils";
 import type { LoopStartRequest } from "../tools/loop";
+import type { SpawnRequest } from "../tools/spawn-session";
 import { StreamPublisher } from "../stream/publisher";
 import { newRecordingPath, SessionRecorder } from "../stream/recording";
 import { StreamRedactor } from "../stream/redactor";
@@ -483,7 +511,7 @@ import {
 import { isWarpCliAgentProtocolActive } from "./warp-events";
 import { journalJudgmentUsage } from "../judgment";
 import { customMessageContentText } from "../session/checkpoint-entries";
-import { cfgTasksTodoClearDelay, cfgTodoHud } from "../tools/settings";
+import { cfgAskEnabled, cfgSpawnConfirm, cfgTasksTodoClearDelay, cfgTodoHud } from "../tools/settings";
 import { cfgWorktreeOnExit, cfgWorktreeOnStart } from "../task/settings";
 import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
@@ -1963,6 +1991,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	// confirms or cancels, a turn uses a tool other than `loop`, a typed `/loop`,
 	// the kickoff fails, or the session switches.
 	#guidedLoopInterviewActive = false;
+	// Tool set from before `/spawn` opened its window; defined only while the
+	// window is open (see #beginSpawnWindow / #endSpawnWindow).
+	#spawnPreviousTools: string[] | undefined;
+	// A spawn_session call already ran in this agent run; a second call in the same run is refused (SC-008).
+	#spawnRunUsed = false;
+	// Spawned child side: a run started and its first message decides `cci-work`.
+	#spawnWorkPending = false;
+	// Spawned child side: chains `zmx set` calls so a late `working` never lands after `idle`.
+	#spawnStatePublish: Promise<void> = Promise.resolve();
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
 	// In-flight #enterVibeMode promise: set before the activateVibeTools await
@@ -2976,6 +3013,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		});
 		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession({ preserveActiveGoal: true }));
+		this.session.setSpawnHandler(request => this.#handleSpawnRequest(request));
 		await logger.time("InteractiveMode.init:reconcileMode", () => this.#reconcileModeFromSession());
 		this.#modesRestored = true;
 
@@ -3041,6 +3079,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (event.type === "agent_end" && this.onInputCallback) this.#scheduleLoopAutoSubmit();
 				void this.#handleGoalSessionEvent(event);
 				this.#handleSpeckitSessionEvent(event);
+				if (event.type === "agent_start") this.#spawnRunUsed = false;
+				if (process.env.OMP_SPAWN_PARENT && process.env.ZMX_SESSION) this.#publishSpawnState(event);
+				// FR-002: every spawn_session call closes the window, also one that failed argument validation.
+				if (event.type === "tool_execution_end" && event.toolName === "spawn_session") void this.#endSpawnWindow();
 			}),
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
 		);
@@ -6548,6 +6590,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			void this.#endGuidedLoopInterview();
 		}
+		if (this.#spawnPreviousTools && spawnWindowShouldClose(event.messages)) void this.#endSpawnWindow();
 		if (this.#pendingGoalContinuationTurns > 0) {
 			this.#pendingGoalContinuationTurns--;
 			const activity = goalContinuationActivity(event.messages);
@@ -6753,6 +6796,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#vibeScopeSuspendedForSwitch = false;
 		this.#guidedGoalInterviewActive = false;
 		await this.#endGuidedLoopInterview();
+		await this.#endSpawnWindow();
 		const sessionContext = this.sessionManager.buildSessionContext();
 		const vibeSession = this.#vibeParentSession();
 		const targetVibeScope = VibeSessionRegistry.global().ownerScope(vibeSession);
@@ -8512,6 +8556,299 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#loopFirstRunQueued = true;
 		void this.session.followUp(loopPrompt);
 		return "started";
+	}
+
+	async handleSpawnCommand(
+		request: string,
+		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		displayText = `/spawn ${request.trim()}`,
+	): Promise<boolean> {
+		const text = request.trim();
+		if (!text) {
+			this.showError("Usage: /spawn <request>");
+			return false;
+		}
+		if (!process.env.ZMX_SESSION) {
+			this.showError("spawn needs a zmx session");
+			return false;
+		}
+		const launchOptions = { session: this.session, sessionManager: this.sessionManager, settings: this.settings };
+		if (buildForkChildLaunch(launchOptions).apiKeyOverride) {
+			this.showError(FORK_API_KEY_REFUSAL);
+			return false;
+		}
+		if (this.#warnSpeckitAutoBlocks()) return false;
+		if (this.isGuidedGoalInterviewActive()) {
+			this.showWarning("Finish the guided goal interview first.");
+			return false;
+		}
+		if (this.#guidedLoopInterviewActive) {
+			this.showWarning("Finish the guided loop interview first.");
+			return false;
+		}
+		// A second window would be closed by the first one's spawn call before its kickoff runs.
+		if (this.session.isSpawnWindowOpen()) {
+			this.showWarning("A /spawn is already running. Wait for it to finish.");
+			return false;
+		}
+		try {
+			await this.#beginSpawnWindow();
+			const kickoff = prompt.render(spawnKickoffPrompt, {
+				request: text,
+				askEnabled: cfgAskEnabled.get(this.settings),
+			});
+			const images = input?.images?.length ? input.images : undefined;
+			if (this.session.isStreaming) {
+				await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
+			} else {
+				try {
+					await this.session.prompt(kickoff, { synthetic: true, images, displayText, userInitiated: true });
+				} catch (error) {
+					if (!(error instanceof AgentBusyError)) throw error;
+					await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
+				}
+			}
+			return true;
+		} catch (error) {
+			await this.#endSpawnWindow();
+			this.showError(error instanceof Error ? error.message : String(error));
+			return false;
+		}
+	}
+
+	/** Open the `/spawn` window: record the tool set, then expose `spawn_session` (and `ask` when enabled). */
+	async #beginSpawnWindow(): Promise<void> {
+		const enabledTools = this.session.getEnabledToolNames();
+		this.#spawnPreviousTools ??= enabledTools;
+		// A `/spawn` queued with followUp joins the current run, which may have spawned already (SC-008).
+		this.#spawnRunUsed = false;
+		this.session.setSpawnWindowOpen(true);
+		const added = ["spawn_session", ...(cfgAskEnabled.get(this.settings) ? ["ask"] : [])].filter(
+			name => !enabledTools.includes(name),
+		);
+		if (added.length > 0) await this.session.setActiveToolsByName([...enabledTools, ...added]);
+	}
+
+	/** Close the `/spawn` window and restore the tool set from before it opened. */
+	async #endSpawnWindow(): Promise<void> {
+		const previousTools = this.#spawnPreviousTools;
+		if (!previousTools) return;
+		this.#spawnPreviousTools = undefined;
+		this.session.setSpawnWindowOpen(false);
+		await this.session.setActiveToolsByName(previousTools);
+	}
+
+	/**
+	 * The `spawn_session` handler: create Sibling Session B in its own zmx
+	 * session (contracts/omp-spawn.md). Throws with the reason on a refusal or
+	 * failure; the window closes at every call.
+	 */
+	async #handleSpawnRequest(request: SpawnRequest): Promise<string> {
+		// Checked and set before any await, so parallel calls in one message also see it.
+		if (this.#spawnRunUsed)
+			throw new Error("spawn_session already ran in this turn; run /spawn again for another session");
+		this.#spawnRunUsed = true;
+		await this.#endSpawnWindow();
+		const parent = process.env.ZMX_SESSION;
+		if (!parent) throw new Error("spawn needs a zmx session");
+		// B runs A's own zmx command, the one Emacs already accepted as a known Agent (FR-011).
+		const executable = await zmxSessionExecutable(parent).catch(() => undefined);
+		const launch = buildForkChildLaunch({
+			session: this.session,
+			sessionManager: this.sessionManager,
+			settings: this.settings,
+			model: request.model,
+			...(executable ? { resolveCliEntryCmd: () => [executable] } : {}),
+		});
+		if (launch.apiKeyOverride) throw new Error(FORK_API_KEY_REFUSAL);
+		const { mode } = request;
+		const sourceCwd = this.sessionManager.getCwd();
+		let forkFile: string | undefined;
+		if (mode === "fork" || mode === "fork_handoff") {
+			await this.sessionManager.flush();
+			const sessionFile = this.sessionManager.getSessionFile();
+			const saved = sessionFile
+				? await fs.access(sessionFile).then(
+						() => true,
+						() => false,
+					)
+				: false;
+			if (!sessionFile || !saved)
+				throw new Error(`spawn cannot ${mode}: this session has no saved conversation yet`);
+			forkFile = path.resolve(sessionFile);
+		}
+		let start = mode === "fork" ? undefined : (request.text ?? "");
+		if (mode === "handoff_summary") {
+			const loader = new Loader(
+				this.ui,
+				spinner => theme.fg("accent", spinner),
+				message => theme.fg("muted", message),
+				"Writing the handoff summary for the new session…",
+				theme.getSpinnerFrames(),
+			);
+			this.statusContainer.addChild(loader);
+			this.ui.requestRender();
+			try {
+				const result = await this.session.generateHandoffDocument(request.text || undefined, {
+					signal: request.signal,
+				});
+				if (!result) throw new Error("Handoff summary produced no content");
+				start = result.document;
+			} finally {
+				loader.stop();
+				this.statusContainer.removeChild(loader);
+				this.ui.requestRender();
+			}
+		}
+		const branch = request.new_worktree ? (request.branch ?? defaultSessionWorktreeBranch()) : undefined;
+		if (cfgSpawnConfirm.get(this.settings)) {
+			const lines = [
+				`Mode: ${mode}`,
+				`Directory: ${branch ? `new worktree on branch ${branch} from ${sourceCwd}` : (request.cwd ?? sourceCwd)}`,
+			];
+			if (request.model) lines.push(`Model: ${request.model}`);
+			lines.push("", start ?? "A copy of this conversation. It waits for you.");
+			const confirmed = await this.showHookConfirm("Spawn this session?", lines.join("\n"), {
+				initialIndex: 1,
+				signal: request.signal,
+			});
+			if (!confirmed) return "Spawn declined";
+		}
+		let worktree: SessionWorktree | undefined;
+		if (branch) {
+			try {
+				// Never cleans the source checkout: A keeps its changes (FR-023).
+				worktree = await createSessionWorktree(sourceCwd, this.settings, branch, { keepChanges: true });
+			} catch (error) {
+				throw new Error(`Worktree creation failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+		const dir = worktree?.path ?? request.cwd ?? sourceCwd;
+		const name = siblingName(parent, dir, randomSiblingSuffix());
+		try {
+			let startFile: string | undefined;
+			if (start !== undefined) {
+				startFile = path.join(os.tmpdir(), `omp-spawn-${name}.md`);
+				// ponytail: temp file never deleted; B reads it at startup, after this call returns.
+				await fs.writeFile(startFile, start, { mode: 0o600, flag: "wx" });
+			}
+			await createSibling({
+				name,
+				dir,
+				argv: spawnArgv(launch.argv, mode, { forkFile, startFile }),
+				env: launch.env,
+				labels: { "cci-parent": parent, ...(worktree ? worktreeLabels(worktree) : {}) },
+			});
+		} catch (error) {
+			let message = error instanceof Error ? error.message : String(error);
+			if (worktree) {
+				try {
+					await removeSessionWorktree(worktree, false);
+				} catch (cleanupError) {
+					message += `\n${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+				}
+			}
+			this.showError(`Spawn failed: ${message}`);
+			throw new Error(message);
+		}
+		writeSpawnAnnouncement(name);
+		this.showStatus(`Spawned ${name}`);
+		return `Spawned ${name} in ${dir} (${mode})`;
+	}
+
+	/** Spawned child side: publish `cci-state`/`cci-work` on this zmx session for the parent's `/despawn`. */
+	#publishSpawnState(event: AgentSessionEvent): void {
+		if (event.type === "agent_start") {
+			// The run's first message joins `session.messages` only at its message_end.
+			this.#spawnWorkPending = true;
+		} else if (event.type === "message_start" && this.#spawnWorkPending) {
+			// Skip injected developer/custom notices: the work is the run's user request.
+			const { message } = event;
+			if (message.role !== "user" && message.role !== "assistant") return;
+			this.#spawnWorkPending = false;
+			const work = message.role === "user" ? customMessageContentText(message.content) : "";
+			this.#spawnStatePublish = this.#spawnStatePublish.then(() => publishState("working", work));
+		} else if (event.type === "agent_end") {
+			this.#spawnWorkPending = false;
+			this.#spawnStatePublish = this.#spawnStatePublish.then(() => publishState("idle"));
+		}
+	}
+
+	async handleDespawnCommand(): Promise<void> {
+		const parent = process.env.ZMX_SESSION;
+		if (!parent) {
+			this.showError("no children: this Session is not in zmx");
+			return;
+		}
+		let children: ZmxListEntry[];
+		try {
+			children = await listChildren(parent);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+			return;
+		}
+		if (children.length === 0) {
+			this.showStatus("no child Sessions");
+			return;
+		}
+		const picked = await this.showHookSelector(
+			"End which child session?",
+			children.map(child => ({ label: child.name, description: zmxEntryDir(child) })),
+		);
+		const child = children.find(entry => entry.name === picked);
+		if (!child) return;
+		const { name } = child;
+		const policy = cfgWorktreeOnExit.get(this.settings);
+		const worktree = policy === "keep" ? undefined : worktreeFromLabels(child.fields);
+		let state: SessionWorktreeState | undefined;
+		let action: WorktreeExitAction = "keep";
+		if (worktree) {
+			try {
+				state = await inspectSessionWorktree(worktree);
+				action = decideWorktreeExit(policy, state);
+			} catch (error) {
+				this.showWarning(error instanceof Error ? error.message : String(error));
+			}
+		}
+		const title = [`End child session ${name}?`];
+		if (child.fields["cci-state"] === "working") {
+			const work = child.fields["cci-work"];
+			title.push(work ? `It is working on: ${work}` : "It is working on a turn.");
+		}
+		if (action === "prompt" && worktree && state) {
+			const risk = describeWorktreeRisk(worktree, state);
+			title.push(`Worktree ${worktree.path} (${worktree.branch})${risk ? `: ${risk}` : ""}`);
+		}
+		const endAndRemove = `End ${name} and remove its worktree`;
+		const options =
+			action === "keep"
+				? [`End ${name}`, "Cancel"]
+				: action === "remove"
+					? [endAndRemove, "Cancel"]
+					: [endAndRemove, `End ${name} and keep its worktree`, "Cancel"];
+		const choice = await this.showHookSelector(title.join("\n"), options, { initialIndex: options.length - 1 });
+		if (!choice || choice === "Cancel") return;
+		// The choice above is the approval, so the plan confirms nothing again.
+		const plan =
+			choice === endAndRemove && worktree
+				? await planWorktreeExit(
+						[worktree],
+						"remove",
+						async () => true,
+						message => this.showWarning(message),
+					)
+				: [];
+		try {
+			await killSibling(name);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+			return;
+		}
+		const messages = await removeExitWorktrees(plan);
+		this.showStatus(
+			plan.length > 0 && messages.length === 0 ? `Ended ${name} and removed its worktree` : `Ended ${name}`,
+		);
+		for (const message of messages) this.showWarning(message);
 	}
 
 	async #dispatchGoalSubcommand(

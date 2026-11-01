@@ -2632,6 +2632,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			setPlanProposalHandler: handler => session.setPlanProposalHandler(handler),
 			peekLoopStartHandler: () => session.peekLoopStartHandler(),
 			setLoopStartHandler: handler => session.setLoopStartHandler(handler),
+			peekSpawnHandler: () => session.peekSpawnHandler(),
+			setSpawnHandler: handler => session.setSpawnHandler(handler),
+			isSpawnWindowOpen: () => session.isSpawnWindowOpen(),
+			setSpawnWindowOpen: open => session.setSpawnWindowOpen(open),
 			allocateOutputArtifact: async toolType => {
 				try {
 					return await sessionManager.allocateArtifactPath(toolType);
@@ -3768,6 +3772,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				nativeToolsByName.set(loopTool.name, wrapped);
 			}
 		}
+		// Registered up front but gated by `isToolAllowed`: active only while a
+		// `/spawn` window is open.
+		if (!restrictToolNames && !toolRegistry.has("spawn_session")) {
+			const spawnTool = await HIDDEN_TOOLS.spawn_session(toolSession);
+			if (spawnTool) {
+				const wrapped = wrapToolWithMetaNotice(spawnTool);
+				toolRegistry.set(spawnTool.name, wrapped);
+				builtInRegistryToolNames.add(spawnTool.name);
+				nativeToolsByName.set(spawnTool.name, wrapped);
+			}
+		}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
 			builtInRegistryToolNames.delete(tool.name);
@@ -4398,7 +4413,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				return tool?.defaultInactive === true || tool?.hidden === true;
 			}),
 		);
-		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal" && name !== "loop");
+		const requestedActiveToolNames = normalizedRequested.filter(
+			name => name !== "goal" && name !== "loop" && name !== "spawn_session",
+		);
 		const explicitlyRequestedToolNameSet = explicitlyRequestedToolNames
 			? new Set(explicitlyRequestedToolNames)
 			: undefined;

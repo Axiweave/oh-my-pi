@@ -1,4 +1,4 @@
-import { clearSubmittedText } from "./helpers/draft";
+import { clearSubmittedText, runWithDetachedDraft } from "./helpers/draft";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
 import type { AgentSession } from "../session/agent-session";
@@ -660,6 +660,27 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			clearSubmittedText(runtime);
 			if (placement) await runtime.ctx.handleForkCommand(placement);
 			else await runtime.ctx.handleForkCommand();
+		},
+	},
+	{
+		name: "spawn",
+		icon: "session",
+		description: "Start a new top-level session in its own zmx session from a request",
+		inlineHint: "<request>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			await runWithDetachedDraft(command, runtime, () =>
+				runtime.ctx.handleSpawnCommand(command.args, runtime.input, command.text),
+			);
+		},
+	},
+	{
+		name: "despawn",
+		icon: "session",
+		description: "End a session that /spawn created",
+		handleTui: async (_command, runtime) => {
+			clearSubmittedText(runtime);
+			await runtime.ctx.handleDespawnCommand();
 		},
 	},
 	{

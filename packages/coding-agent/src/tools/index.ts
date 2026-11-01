@@ -72,6 +72,7 @@ import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
 import { type LoopStartHandler, LoopTool } from "./loop";
 import { SecurityScanTool } from "./security-scan";
+import { type SpawnHandler, SpawnSessionTool } from "./spawn-session";
 import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
@@ -524,6 +525,13 @@ export interface ToolSession {
 	peekLoopStartHandler?(): LoopStartHandler | undefined;
 	/** Register or clear the `/guided-loop` confirm handler. Passing `null` clears it. */
 	setLoopStartHandler?(handler: LoopStartHandler | null): void;
+	/** The `/spawn` handler for `spawn_session`. InteractiveMode sets it at startup. */
+	peekSpawnHandler?(): SpawnHandler | undefined;
+	/** Register or clear the `/spawn` handler. Passing `null` clears it. */
+	setSpawnHandler?(handler: SpawnHandler | null): void;
+	/** True while a `/spawn` window is open, which gates the `spawn_session` tool. */
+	isSpawnWindowOpen?(): boolean;
+	setSpawnWindowOpen?(open: boolean): void;
 	/** Get active checkpoint state if any. */
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
@@ -612,6 +620,7 @@ export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
 	yield: s => new YieldTool(s),
 	goal: s => new GoalTool(s),
 	loop: s => new LoopTool(s),
+	spawn_session: s => new SpawnSessionTool(s),
 };
 
 export type ToolName = BuiltinToolName;
@@ -764,6 +773,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			return goalState === undefined || goalState.enabled === true || goalState.goal.status === "dropped";
 		}
 		if (name === "loop") return !restrictToolNames && session.peekLoopStartHandler?.() !== undefined;
+		if (name === "spawn_session") return !restrictToolNames && session.isSpawnWindowOpen?.() === true;
 		if (name === "lsp") return enableLsp && cfgLspEnabled.get(session.settings);
 		if (name === "bash") return cfgBashEnabled.get(session.settings);
 		if (name === "eval") return allowEval;
