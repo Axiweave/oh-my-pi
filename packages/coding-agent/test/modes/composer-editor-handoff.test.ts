@@ -103,4 +103,20 @@ describe("composer editor-origin markers", () => {
 		expect(received).toEqual([]);
 		expect(composer!.editor.getText()).toBe("/help ");
 	});
+
+	it("passes a pi:action name to onAction and never changes the draft", () => {
+		const { term, received } = start();
+		const names: string[] = [];
+		composer!.editor.setText("draft");
+		composer!.onAction = name => names.push(name);
+		feed(term, "\x1b_pi:action;fork-spawn\x1b\\");
+		expect(names).toEqual(["fork-spawn"]);
+		expect(received).toEqual([]);
+		expect(composer!.editor.getText()).toBe("draft");
+
+		composer!.onAction = undefined;
+		feed(term, "\x1b_pi:action;fork-spawn\x1b\\");
+		expect(received).toEqual([]);
+		expect(composer!.editor.getText()).toBe("draft");
+	});
 });

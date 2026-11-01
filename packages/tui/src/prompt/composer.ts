@@ -248,6 +248,8 @@ function rowTargetCandidates(target: Component): ((local: number) => string[]) |
  */
 export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	readonly ui: TUI;
+	/** Receives each `pi:action;<name>` packet. InteractiveMode sets it after it adopts the composer; unset drops the packet. */
+	onAction?: (name: string) => void;
 	#editor: CustomEditor;
 	readonly #header = new Container();
 	readonly #bootstrapInputGap = new Spacer(1);
@@ -350,9 +352,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			if (!data.startsWith("\x1b_pi:")) return;
 			// `pi:prompt;<name>` replaces the leading slash command (or nests a wrapper in
 			// front of it); `pi:keyword;<word>` puts a standalone word (ultrathink,
-			// orchestrate, workflowz, …) at the message start.
-			const match = /^\x1b_pi:(prompt|keyword);([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
-			if (match && this.ui.getFocused() === this.editor) {
+			// orchestrate, workflowz, …) at the message start; `pi:action;<name>` runs a
+			// named host action and never touches the editor.
+			const match = /^\x1b_pi:(prompt|keyword|action);([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
+			if (match?.[1] === "action") this.onAction?.(match[2] ?? "");
+			else if (match && this.ui.getFocused() === this.editor) {
 				// A `->` / `=>` queue draft keeps its header line: the command or keyword
 				// belongs to the queued body, not in front of the shorthand.
 				const body = queueShorthandBodyStart(this.editor.getText());

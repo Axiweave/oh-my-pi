@@ -13,12 +13,14 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as siblingSpawn from "@oh-my-pi/pi-coding-agent/session/sibling-spawn";
 import { createTools, type Tool } from "@oh-my-pi/pi-coding-agent/tools";
+import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
 type Harness = { mode: InteractiveMode; session: AgentSession; cleanup: () => Promise<void> };
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(composer?: Composer): Promise<Harness> {
 	resetSettingsForTest();
 	const tempDir = TempDir.createSync("@pi-spawn-command-");
 	await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -39,7 +41,7 @@ async function createHarness(): Promise<Harness> {
 		toolRegistry: new Map<string, Tool>(initialTools.map(tool => [tool.name, tool] as const)),
 		rebuildSystemPrompt: async () => ({ systemPrompt: ["Test"] }),
 	});
-	const mode = new InteractiveMode(session, "test");
+	const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, undefined, composer);
 	vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
 	vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
 	mode.ui.requestRender = vi.fn();
@@ -95,10 +97,10 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		}
 	});
 
-	async function spawnHarness() {
+	async function spawnHarness(composer?: Composer) {
 		process.env.ZMX_SESSION = "cci-omp-spawncmd-abc123";
 		delete process.env.OMP_SPAWN_PARENT;
-		h = await createHarness();
+		h = await createHarness(composer);
 		vi.spyOn(siblingSpawn, "zmxSessionExecutable").mockResolvedValue("omp");
 		const announce = vi.spyOn(siblingSpawn, "writeSpawnAnnouncement").mockImplementation(() => {});
 		const create = vi.spyOn(siblingSpawn, "createSibling").mockImplementation(async ({ startFile }) => {
@@ -202,8 +204,8 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 
 	describe("/fork spawn", () => {
 		/** A spawn harness whose A has a saved session file, so fork mode has something to copy. */
-		async function forkHarness() {
-			const spawn = await spawnHarness();
+		async function forkHarness(composer?: Composer) {
+			const spawn = await spawnHarness(composer);
 			const manager = spawn.h.session.sessionManager;
 			manager.appendMessage({ role: "user", content: "keep this context", timestamp: Date.now() });
 			await manager.ensureOnDisk();
@@ -279,6 +281,89 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 			expect(confirm.mock.calls[0]![0]).toBe("Fork while a response is running?");
 			expect(create).toHaveBeenCalledTimes(sessions);
 			Reflect.deleteProperty(h.session, "isStreaming");
+		});
+
+		describe("IDE fork request", () => {
+			const packet = "\x1b_pi:action;fork-spawn\x1b\\";
+
+			/**
+			 * The packet path starts the fork without awaiting it. Spy on the call so a
+			 * test awaits the fork itself; a dialog refusal runs synchronously.
+			 */
+			function watchForks(h: Harness) {
+				const run = vi.spyOn(h.mode, "handleForkSpawnCommand");
+				return { run, settled: () => Promise.all(run.mock.results.map(result => result.value)) };
+			}
+
+			it("forks during a turn without the busy-turn question", async () => {
+				const { h, create } = await forkHarness();
+				Object.defineProperty(h.session, "isStreaming", { configurable: true, get: () => true });
+				const confirm = vi.spyOn(h.mode, "showHookConfirm");
+				const forks = watchForks(h);
+				h.mode.ui.injectDebugInput(packet);
+				expect(forks.run.mock.calls).toEqual([[false]]);
+				await forks.settled();
+				expect(create).toHaveBeenCalledTimes(1);
+				expect(confirm).not.toHaveBeenCalled();
+				Reflect.deleteProperty(h.session, "isStreaming");
+			});
+
+			it("leaves the draft text and cursor unchanged", async () => {
+				const { h, create } = await forkHarness();
+				h.mode.editor.setText("draft text");
+				const cursor = h.mode.editor.getCursor();
+				const forks = watchForks(h);
+				h.mode.ui.injectDebugInput(packet);
+				await forks.settled();
+				expect(create).toHaveBeenCalledTimes(1);
+				expect(h.mode.editor.getText()).toBe("draft text");
+				expect(h.mode.editor.getCursor()).toEqual(cursor);
+			});
+
+			it("an open dialog blocks the request with a warning", async () => {
+				const { h, create } = await forkHarness();
+				vi.spyOn(h.mode.ui, "hasOverlay").mockReturnValue(true);
+				const warning = vi.spyOn(h.mode, "showWarning").mockImplementation(() => {});
+				const forks = watchForks(h);
+				h.mode.ui.injectDebugInput(packet);
+				expect(warning.mock.calls).toEqual([["Fork request ignored: close the open dialog first."]]);
+				expect(forks.run).not.toHaveBeenCalled();
+				expect(create).not.toHaveBeenCalled();
+			});
+
+			it("an open /spawn window does not block the request", async () => {
+				const { h, create } = await forkHarness();
+				expect(await h.mode.handleSpawnCommand("x")).toBe(true);
+				const forks = watchForks(h);
+				h.mode.ui.injectDebugInput(packet);
+				await forks.settled();
+				expect(create).toHaveBeenCalledTimes(1);
+				expect(h.session.isSpawnWindowOpen()).toBe(true);
+			});
+
+			it("two packets back to back create two sessions with different names", async () => {
+				const { h, create } = await forkHarness();
+				const forks = watchForks(h);
+				h.mode.ui.injectDebugInput(packet);
+				h.mode.ui.injectDebugInput(packet);
+				await forks.settled();
+				expect(create).toHaveBeenCalledTimes(2);
+				const [first, second] = create.mock.calls.map(([args]) => args.name);
+				expect(first).not.toBe(second);
+			});
+
+			it("works through a Composer that was started before InteractiveMode adopted it", async () => {
+				const composer = new Composer({
+					terminal: new VirtualTerminal(80, 24),
+					preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+				});
+				composer.start();
+				const { h, create } = await forkHarness(composer);
+				const forks = watchForks(h);
+				composer.ui.injectDebugInput(packet);
+				await forks.settled();
+				expect(create).toHaveBeenCalledTimes(1);
+			});
 		});
 	});
 });

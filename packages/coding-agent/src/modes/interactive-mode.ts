@@ -2303,6 +2303,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.composer.setPreferences(preferences);
 		this.ui = this.composer.ui;
 		this.editor = this.composer.editor;
+		this.composer.onAction = name => this.#handleIdeAction(name);
 		this.editor.magicKeywordsEnabled = () => cfgMagicKeywordsEnabled.get(this.settings);
 		this.editor.placeholder = () => this.#composerHint();
 		this.editor.prediction = () => this.#eventController.composerPrediction.text;
@@ -4296,11 +4297,28 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.speckitSubmitInFlight > ownSubmits ||
 			this.editor.getText().trim() !== "" ||
 			this.editor.pendingImages.length > 0 ||
+			this.#inputOwnedByDialog()
+		);
+	}
+
+	/** An overlay, a focused component other than the editor, or a dialog in the editor slot owns input. */
+	#inputOwnedByDialog(): boolean {
+		return (
 			this.ui.hasOverlay() ||
 			this.ui.getFocused() !== this.editor ||
 			// Ask dialogs and hook selectors swap the editor slot without an overlay.
 			this.editorContainer.children[0] !== this.editor
 		);
+	}
+
+	/** Runs a `pi:action;<name>` packet from the IDE. Unknown names do nothing. */
+	#handleIdeAction(name: string): void {
+		if (name !== "fork-spawn") return;
+		if (this.#inputOwnedByDialog()) {
+			this.showWarning("Fork request ignored: close the open dialog first.");
+			return;
+		}
+		void this.handleForkSpawnCommand(false);
 	}
 
 	#armSpeckitTick(): void {
@@ -8640,10 +8658,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * `/fork spawn`: open a pure fork as Sibling Session B. No model turn, no
 	 * spawn window, no `spawn.confirm`, and no new message in A or B.
+	 * `confirmBusy` false (the IDE fork request) skips the busy-turn question.
 	 */
-	async handleForkSpawnCommand(): Promise<void> {
+	async handleForkSpawnCommand(confirmBusy = true): Promise<void> {
 		if (this.#vibeSessionTransitionBlocked()) return;
-		if (this.session.isStreaming) {
+		if (confirmBusy && this.session.isStreaming) {
 			const confirmed = await this.showHookConfirm(
 				"Fork while a response is running?",
 				"The child may not include the partial response. Continue opening a fork? The current session will keep running here.",

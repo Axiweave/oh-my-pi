@@ -557,7 +557,7 @@ export interface InteractiveModeContext {
 	handleResetContextCommand(): Promise<void>;
 	handleDeleteCommand(): Promise<void>;
 	handleForkCommand(placement?: "pane" | "window"): Promise<void>;
-	handleForkSpawnCommand(): Promise<void>;
+	handleForkSpawnCommand(confirmBusy?: boolean): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
 	handleMCPCommand(text: string): Promise<void>;
