@@ -87,6 +87,20 @@ export const cfgWorktreeClone = register({
 	},
 });
 
+export const cfgWorktreeWw = register({
+	id: "worktree.ww",
+	protocolDefault: ["rpc", "acp"],
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tasks",
+		group: "Isolation",
+		label: "Use ww for /wt",
+		description:
+			"When the `ww` CLI is on PATH, `/wt` creates worktrees with `ww create`, so the ww config picks the destination and copies untracked and ignored extras; tracked changes still carry over",
+	},
+});
+
 export const cfgWorktreeCleanSource = register({
 	id: "worktree.cleanSource",
 	protocolDefault: ["rpc", "acp"],

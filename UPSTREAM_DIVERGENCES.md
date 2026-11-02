@@ -73,6 +73,15 @@ The full `bun run test` plan did not run for this merge.
 - **Checks:** `packages/coding-agent/test/session-worktree-move.test.ts`, `packages/coding-agent/test/modes/controllers/move-command.test.ts`, and `packages/coding-agent/test/session-manager/move-to.test.ts`.
 - **Retire when:** Upstream provides the same existing-worktree move and completion behavior.
 
+### ww-backed `/wt`
+
+- **Decision:** Keep `worktree.ww` (default `true`). When `ww` is on PATH, `createSessionWorktree` runs `ww create <branch>` and uses the last stdout line as the worktree path. It then applies the source's staged diff (to the index and the worktree) and the unstaged diff, because ww copies only untracked and ignored files.
+- **Decision:** Only `createSessionWorktree` callers (`/wt`, `worktree.onStart`, and `/spawn` new worktrees) use ww. `omp worktree add` takes an explicit path, and `github pr_checkout` reuses its own paths under `worktree.base`, so both keep the native clone path. Exit removal still uses `git worktree remove`.
+- **Why:** The user configures worktree destinations and dependency copies in ww.
+- **Key paths:** `packages/coding-agent/src/session/session-worktree.ts` (`createWwWorktree`) and `packages/coding-agent/src/task/settings.ts` (`cfgWorktreeWw`).
+- **Checks:** `packages/coding-agent/test/session/session-worktree.test.ts` (`replays staged and unstaged tracked edits into a ww-created worktree`).
+- **Retire when:** Upstream supports an external worktree creator for `/wt`.
+
 ### Project-local prompt history
 
 - **Decision:** Start Ctrl-R history in the active working directory and let Tab switch to all projects without changing the query.

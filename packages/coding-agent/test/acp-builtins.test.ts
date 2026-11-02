@@ -86,7 +86,7 @@ interface FakeAcpBuiltinSession {
 }
 
 function createRuntime() {
-	const settings = Settings.isolated();
+	const settings = Settings.isolated({ "worktree.ww": false });
 	const output: string[] = [];
 	const session: FakeAcpBuiltinSession = {
 		fastMode: false,

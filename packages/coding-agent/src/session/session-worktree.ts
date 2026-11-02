@@ -3,7 +3,9 @@
  * a new branch, carrying the uncommitted changes along, so the session can be
  * relocated there without disturbing the original checkout.
  *
- * The worktree is created through the clone-first path (`worktree.clone`,
+ * The worktree is created with `ww create` when `worktree.ww` is on and `ww`
+ * is on PATH (ww picks the destination and copies untracked/ignored extras).
+ * Otherwise it goes through the clone-first path (`worktree.clone`,
  * `isolation.backend`) and lands under the agent-managed worktree base
  * (`worktree.base`, default `~/.omp/wt`) next to `github pr_checkout` trees,
  * so `omp worktree list|clear` sees it.
@@ -12,14 +14,15 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { IsoBackendKind, VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getWorktreeDir, hashPath, logger } from "@oh-my-pi/pi-utils";
+import { $which, getWorktreeDir, hashPath, logger } from "@oh-my-pi/pi-utils";
+import { $ } from "bun";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { Settings } from "../config/settings";
 import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
 import { resolveAvailableWorktreePath } from "../tools/gh-pr-checkout";
 import { expandTilde, stripOuterDoubleQuotes } from "../tools/path-utils";
 
-import { cfgIsolationBackend, cfgWorktreeCleanSource, cfgWorktreeClone } from "../task/settings";
+import { cfgIsolationBackend, cfgWorktreeCleanSource, cfgWorktreeClone, cfgWorktreeWw } from "../task/settings";
 
 export interface SessionWorktree {
 	/** Absolute, realpath'd worktree root. */
@@ -28,6 +31,8 @@ export interface SessionWorktree {
 	branch: string;
 	/** Backend that cloned the checkout, or undefined for a plain checkout. */
 	clonedWith?: IsoBackendKind;
+	/** Created by `ww create` instead of the native clone path. */
+	viaWw?: boolean;
 	/** Why the clone fell back to a plain checkout, when it did. */
 	cloneError?: string;
 	/** Checkout the worktree was forked from. */
@@ -76,8 +81,11 @@ export function defaultSessionWorktreeBranch(now = new Date()): string {
 
 /** One-line confirmation shown after the session moved into `worktree`. */
 export function formatSessionWorktreeSummary(worktree: SessionWorktree, sourceCleaned = false): string {
-	const how =
-		worktree.clonedWith === undefined ? "checked out" : `cloned via ${formatIsolationBackend(worktree.clonedWith)}`;
+	const how = worktree.viaWw
+		? "created via ww"
+		: worktree.clonedWith === undefined
+			? "checked out"
+			: `cloned via ${formatIsolationBackend(worktree.clonedWith)}`;
 	const changeStatus = !worktree.keptChanges
 		? "started from clean HEAD"
 		: sourceCleaned
@@ -141,6 +149,8 @@ export async function createSessionWorktree(
 	if (!baseCommit) {
 		throw new Error(`Cannot create a worktree: ${cwd} has no commits.`);
 	}
+	const ww = cfgWorktreeWw.get(settings) ? $which("ww") : null;
+	if (ww) return createWwWorktree(ww, repository, cwd, branch, baseCommit, keepChanges);
 	const primaryRoot = repository.primaryRoot() ?? repository.info().repoRoot;
 	const slug = branch.replaceAll(/[^A-Za-z0-9._-]+/g, "-");
 	const basePath = getWorktreeDir(`${slug}-${hashPath(primaryRoot)}`);
@@ -163,6 +173,38 @@ export async function createSessionWorktree(
 		baseCommit,
 		keptChanges: keepChanges,
 	};
+}
+
+/**
+ * `ww create` the branch from `cwd`'s HEAD. ww copies untracked and ignored
+ * extras but leaves tracked edits in the source, so with `keepChanges` replay
+ * the staged and unstaged diffs into the new worktree.
+ */
+async function createWwWorktree(
+	ww: string,
+	repository: VcsGitRepo,
+	cwd: string,
+	branch: string,
+	baseCommit: string,
+	keepChanges: boolean,
+): Promise<SessionWorktree> {
+	const result = await $`${ww} create ${branch}`.cwd(cwd).quiet().nothrow();
+	const destination = result.stdout.toString().trim().split("\n").at(-1);
+	if (result.exitCode !== 0 || !destination) {
+		throw new Error(`ww create failed: ${result.stderr.toString().trim() || `exit code ${result.exitCode}`}`);
+	}
+	const worktreePath = await fs.realpath(destination);
+	if (keepChanges) {
+		const target = vcs.requireGit(worktreePath);
+		const staged = await repository.diffText({ cached: true, binary: true });
+		if (staged) {
+			await target.applyPatch(staged, { cached: true });
+			await target.applyPatch(staged, {});
+		}
+		const unstaged = await repository.diffText({ binary: true });
+		if (unstaged) await target.applyPatch(unstaged, {});
+	}
+	return { path: worktreePath, branch, viaWw: true, sourceCwd: cwd, baseCommit, keptChanges: keepChanges };
 }
 
 export interface WorktreeDestination {

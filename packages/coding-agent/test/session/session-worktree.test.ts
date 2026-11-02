@@ -107,7 +107,7 @@ describe("session worktree helpers (real git)", () => {
 	});
 
 	const create = (keepChanges = true, name = branch) =>
-		createSessionWorktree(repo, Settings.isolated(), name, { keepChanges });
+		createSessionWorktree(repo, Settings.isolated({ "worktree.ww": false }), name, { keepChanges });
 
 	it("offers a worktree only in a primary checkout with commits", async () => {
 		const plain = path.join(root, "plain");
@@ -115,13 +115,41 @@ describe("session worktree helpers (real git)", () => {
 		await fs.mkdir(plain);
 		await fs.mkdir(unborn);
 		git(unborn, "init", "-q");
-		await expect(createSessionWorktree(unborn, Settings.isolated(), branch)).rejects.toThrow("has no commits");
+		await expect(createSessionWorktree(unborn, Settings.isolated({ "worktree.ww": false }), branch)).rejects.toThrow(
+			"has no commits",
+		);
 		expect(await exists(path.join(root, "wt"))).toBe(false);
 		const wt = await create();
 		expect(await canAutoCreateWorktree(repo)).toBe(true);
 		expect(await canAutoCreateWorktree(plain)).toBe(false);
 		expect(await canAutoCreateWorktree(unborn)).toBe(false);
 		expect(await canAutoCreateWorktree(wt.path)).toBe(false);
+	});
+
+	it("replays staged and unstaged tracked edits into a ww-created worktree", async () => {
+		// Fake `ww create <branch>`: adds the worktree and prints its path on stdout.
+		const bin = path.join(root, "bin");
+		await fs.mkdir(bin);
+		await Bun.write(
+			path.join(bin, "ww"),
+			`#!/bin/sh\nset -e\ndest="${root}/ww-$(echo "$2" | tr / -)"\ngit worktree add -q -b "$2" "$dest" >&2\necho "$dest"\n`,
+		);
+		await fs.chmod(path.join(bin, "ww"), 0o755);
+		await Bun.write(path.join(repo, "tracked.txt"), "staged\n");
+		await Bun.write(path.join(repo, "added.txt"), "added\n");
+		git(repo, "add", ".");
+		await Bun.write(path.join(repo, "tracked.txt"), "staged\nunstaged\n");
+		const savedPath = process.env.PATH;
+		process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+		try {
+			const wt = await createSessionWorktree(repo, Settings.isolated(), branch);
+			expect(wt.viaWw).toBe(true);
+			expect(git(wt.path, "status", "--porcelain")).toBe(git(repo, "status", "--porcelain"));
+			expect(git(wt.path, "diff", "--cached")).toBe(git(repo, "diff", "--cached"));
+			expect(git(wt.path, "diff")).toBe(git(repo, "diff"));
+		} finally {
+			process.env.PATH = savedPath;
+		}
 	});
 
 	it("removes a clean worktree and deletes its branch", async () => {

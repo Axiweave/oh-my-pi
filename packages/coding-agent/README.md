@@ -36,6 +36,11 @@ Finish or abort an active response before moving.
 
 Use `/move` for any directory. Use `/wt` to create a new worktree and carry checkout changes into it.
 
+When the `ww` CLI is on PATH, `/wt` creates the worktree with `ww create <branch>`.
+The ww configuration selects the destination and copies untracked and ignored files, such as `node_modules`.
+omp then applies the staged and unstaged tracked changes to the new worktree.
+Set `worktree.ww: false` to use the built-in clone path under `worktree.base`.
+
 ## Memory backends
 
 The agent supports three mutually-exclusive memory backends, selected via the `memory.backend` setting (Settings → Memory tab, or `~/.omp/config.yml`):
