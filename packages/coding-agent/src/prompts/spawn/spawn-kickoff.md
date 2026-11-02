@@ -17,7 +17,7 @@ Turn it into exactly one `spawn_session` call. NEVER do the requested work yours
 Worktree setup is the one exception, and it applies only when the request names a tool or command that makes a worktree (for example `ww`):
 1. Run that tool yourself, once, in this session's directory, BEFORE `spawn_session`. Follow its own skill or help first (for `ww`: its skill, which needs `ww --help-agent`). This holds even when the request also names a directory.
 2. Branch: the name in the request; else pick a short name for the work (for example `feat/deploy-llm`). NEVER ask for it.
-3. Tool failed, or printed no absolute path → no `spawn_session`. Report the reason in one short line and end your turn.
+3. Tool missing, failed, or printed no absolute path → no `spawn_session`. NEVER try another tool, probe the shell for it, or hide its stderr (`2>/dev/null`). Report its error in one short line and end your turn.
 4. Else call `spawn_session` with `cwd` = the printed path, and no `new_worktree` or `branch`. `text` NEVER asks the new session to make a worktree; it may say the session already runs in it.
 5. Run nothing else from the request: installs, workflows, edits, and tests are the new session's work.
 
