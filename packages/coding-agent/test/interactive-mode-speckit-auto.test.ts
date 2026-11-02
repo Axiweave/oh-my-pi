@@ -874,6 +874,201 @@ describe("InteractiveMode speckit-auto mode", () => {
 		});
 	});
 
+	describe("/spawn during a run", () => {
+		/** The hidden prompt that `/spawn` sends; its display text marks it. */
+		const kickoff = (): DeveloperMessage =>
+			({
+				role: "developer",
+				content: [{ type: "text", text: "spawn kickoff" }],
+				synthetic: true,
+				userInitiated: true,
+				displayText: "/spawn list the files",
+				attribution: "user",
+				timestamp: ++clock,
+			}) as DeveloperMessage;
+
+		/** A `/spawn` turn: idle, it opens a new agent run; else it joins the running one as a follow-up. Then its reply. */
+		async function spawnTurnRuns(idle: boolean): Promise<AssistantMessage> {
+			if (idle) session.agent.emitExternalEvent({ type: "agent_start" });
+			session.agent.emitExternalEvent({ type: "message_start", message: kickoff() });
+			await flush();
+			const spawnReply: AssistantMessage = {
+				...createAssistantMessage("Spawned cci-omp-1."),
+				stopReason: "stop",
+				timestamp: ++clock,
+			};
+			reply = spawnReply;
+			return spawnReply;
+		}
+
+		it("neither answers nor clears a held phase question", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			turnSettles(ASKS);
+			await tick();
+			const held = saved()?.run;
+			expect(held?.hold?.kind).toBe("user");
+			const shown = statusState();
+			const checks = classify.mock.calls.length;
+
+			await spawnTurnRuns(true);
+			await tick(3);
+
+			expect(saved()?.run).toEqual(held);
+			expect(statusState()).toBe(shown);
+			expect(classify).toHaveBeenCalledTimes(checks);
+			expect(submitted).toHaveLength(0);
+
+			// The next typed text still answers the phase's question.
+			await turnStarts("ok 1");
+			turnSettles({ next: "unclear" });
+			await tick();
+			expect(classify.mock.calls.at(-1)?.[3]).toMatchObject({ request: "ok 1", answers: true });
+		});
+
+		it("leaves a paused run paused", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			turnSettles();
+			mode.pauseSpeckitAuto();
+			const paused = saved()?.run;
+			expect(paused?.paused).toBe(true);
+
+			await spawnTurnRuns(true);
+			await tick(3);
+
+			expect(saved()?.run).toEqual(paused);
+			expect(statusState()).toBe("paused");
+			expect(submitted).toHaveLength(0);
+		});
+
+		it("starts nothing of its own until /spawn has sent its kickoff", async () => {
+			const zmx = process.env.ZMX_SESSION;
+			process.env.ZMX_SESSION = "speckit-spawn-test";
+			try {
+				await start();
+				await startRun("/speckit.plan");
+				turnSettles();
+				const tools = Promise.withResolvers<void>();
+				vi.spyOn(session, "setActiveToolsByName").mockReturnValue(tools.promise);
+				let startsBeforeKickoff: number | undefined;
+				const prompt = vi.spyOn(session, "prompt").mockImplementation(async () => {
+					startsBeforeKickoff = submitted.length;
+					return true;
+				});
+
+				// The tool change is still pending: the kickoff is not sent yet.
+				const spawning = mode.handleSpawnCommand("list the files");
+				await tick(3);
+				expect(submitted).toHaveLength(0);
+
+				tools.resolve();
+				expect(await spawning).toBe(true);
+				await tick(3);
+
+				expect(prompt).toHaveBeenCalledTimes(1);
+				expect(prompt.mock.calls[0]?.[1]).toMatchObject({ displayText: "/spawn list the files" });
+				expect(startsBeforeKickoff).toBe(0);
+				expect(texts()).toEqual(["/speckit.tasks"]);
+			} finally {
+				if (zmx === undefined) delete process.env.ZMX_SESSION;
+				else process.env.ZMX_SESSION = zmx;
+			}
+		});
+
+		/** A run state at the moment `/spawn` sends its kickoff, and the starts the run makes with no spawn turn. */
+		interface SpawnCase {
+			phaseReply: AssistantMessage;
+			/** Idle: the kickoff opens a new agent run. Else it joins the running phase turn as a follow-up. */
+			idle: boolean;
+			judged?: PromiseWithResolvers<SpeckitVerdict>;
+		}
+		async function settledRun(verdict: SpeckitVerdict, ticks: number): Promise<SpawnCase> {
+			await startRun("/speckit.plan");
+			turnSettles(verdict);
+			const phaseReply = reply!;
+			await tick(ticks);
+			return { phaseReply, idle: true };
+		}
+		const spawnCases: [state: string, setup: () => Promise<SpawnCase>, starts: string[]][] = [
+			["user hold", () => settledRun(ASKS, 1), []],
+			["needs-you hold", () => settledRun({ next: "error" }, 1), []],
+			[
+				"paused",
+				async () => {
+					const state = await settledRun(CLEAN, 0);
+					mode.pauseSpeckitAuto();
+					return state;
+				},
+				[],
+			],
+			["parked start", () => settledRun(CLEAN, 1), ["/speckit.tasks"]],
+			[
+				"judge in flight",
+				async () => {
+					const judged = Promise.withResolvers<SpeckitVerdict>();
+					await startRun("/speckit.plan");
+					turnSettles();
+					classify.mockReturnValue(judged.promise);
+					await tick();
+					expect(classify).toHaveBeenCalledTimes(1);
+					return { phaseReply: reply!, idle: true, judged };
+				},
+				["/speckit.tasks"],
+			],
+			[
+				"phase turn running",
+				async () => {
+					await startRun("/speckit.plan");
+					reply = { ...createAssistantMessage("plan written"), stopReason: "stop", timestamp: ++clock };
+					return { phaseReply: reply, idle: false };
+				},
+				["/speckit.tasks"],
+			],
+		];
+
+		// Invariant: in every run state, a spawn turn leaves the saved run as it was, the judge reads only the phase
+		// reply (never aborted, never with the kickoff as its request), and the run makes the starts it makes without it.
+		it.each(spawnCases)("leaves the run as with no spawn turn: %s", async (_, setup, starts) => {
+			await start();
+			const { phaseReply, idle, judged } = await setup();
+			const before = saved()?.run;
+
+			const spawnReply = await spawnTurnRuns(idle);
+			expect(saved()?.run).toEqual(before);
+			if (!idle) waitForInput();
+			judged?.resolve(CLEAN);
+			await tick(3);
+
+			for (const [, message, deps, turn] of classify.mock.calls) {
+				expect(message).not.toBe(spawnReply);
+				expect(message).toBe(phaseReply);
+				expect(deps.signal?.aborted).toBe(false);
+				expect(turn?.request).toBeUndefined();
+			}
+			expect(texts()).toEqual(starts);
+		});
+
+		it("resumes a reloaded run by checking the phase reply, not the spawn reply after it", async () => {
+			await start();
+			await startRun("/speckit.plan");
+			const command = userText("/speckit.plan");
+			turnSettles();
+			const planReply = reply!;
+			const spawnReply = await spawnTurnRuns(true);
+			const spawnKickoff: DeveloperMessage = { ...kickoff(), timestamp: planReply.timestamp + 1 };
+			await tick();
+			mode.pauseSpeckitAuto();
+
+			await reload(command, planReply, spawnKickoff, spawnReply);
+			await mode.handleSpeckitAutoCommand("resume");
+			await tick(2);
+
+			expect(classify.mock.calls.at(-1)?.[1].timestamp).toBe(planReply.timestamp);
+			expect(texts()).toEqual(["/speckit.tasks"]);
+		});
+	});
+
 	describe("turning the mode on after a phase command started", () => {
 		/** The session holds `messages`; the last assistant message is the reply the check reads. */
 		function sessionHas(...messages: AgentMessage[]): void {

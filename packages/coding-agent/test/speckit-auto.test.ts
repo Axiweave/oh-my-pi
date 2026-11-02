@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { AssistantMessage, UserMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, DeveloperMessage, UserMessage } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as judgment from "@oh-my-pi/pi-coding-agent/judgment";
 import {
 	classifySpeckitTurn,
 	decideSpeckitStep,
+	isSpawnKickoff,
+	isSpeckitUserTurn,
 	newSpeckitRun,
 	normalizeConvergeRounds,
 	parseSpeckitAutoState,
@@ -435,6 +437,40 @@ describe("speckitEarlierText", () => {
 
 		expect(speckitEarlierText([previous, opener, outcome, summary], summary)).toBe("Added T027–T029 under Phase 7.");
 		expect(speckitEarlierText([previous, opener, summary], summary)).toBe("");
+	});
+});
+
+describe("isSpawnKickoff", () => {
+	const developer = (displayText: string | undefined, userInitiated = true): DeveloperMessage =>
+		({
+			role: "developer",
+			content: "kickoff",
+			synthetic: true,
+			userInitiated,
+			...(displayText === undefined ? {} : { displayText }),
+			timestamp: 1,
+		}) as DeveloperMessage;
+
+	// Invariant: only a user-initiated developer prompt whose display text is the `/spawn` command is a kickoff,
+	// and a kickoff never opens a speckit user turn. Every other user-initiated developer prompt still does.
+	it.each([
+		["no display text", developer(undefined), false],
+		["empty display text", developer(""), false],
+		["bare /spawn", developer("/spawn"), true],
+		["/spawn with a request", developer("/spawn fix the typo"), true],
+		["/spawn with a newline request", developer("/spawn\nfix it"), true],
+		["a longer command name", developer("/spawnx fix"), false],
+		["another command", developer("/guided-loop check CI"), false],
+		["not user-initiated", developer("/spawn fix", false), false],
+		[
+			"a user message with the command text",
+			{ role: "user", content: "/spawn fix", timestamp: 1 } as UserMessage,
+			false,
+		],
+	])("%s → %p", (_, message, kickoff) => {
+		expect(isSpawnKickoff(message)).toBe(kickoff);
+		if (kickoff) expect(isSpeckitUserTurn(message)).toBe(false);
+		else if (message.role === "developer" && message.userInitiated) expect(isSpeckitUserTurn(message)).toBe(true);
 	});
 });
 

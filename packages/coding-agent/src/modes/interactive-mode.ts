@@ -485,6 +485,7 @@ import {
 	classifySpeckitTurn,
 	decideSpeckitStep,
 	formatSpeckitSummary,
+	isSpawnKickoff,
 	isSpeckitUserTurn,
 	newSpeckitRun,
 	normalizeConvergeRounds,
@@ -1480,9 +1481,10 @@ const SPECKIT_PRELUDE_TYPES: Record<string, true> = {
 const isSpeckitPrelude = (message: AgentMessage): boolean =>
 	message.role === "custom" && SPECKIT_PRELUDE_TYPES[message.customType] === true;
 
-/** An omp turn opener that is not part of the phase (advisor notes, IRC, late diagnostics): the phase reply stays. */
+/** An omp turn opener that is not part of the phase (advisor notes, IRC, late diagnostics, a `/spawn` kickoff): the phase reply stays. */
 const isSpeckitSideTraffic = (message: AgentMessage): boolean =>
-	message.role === "custom" && !isUserTurnInitiator(message) && !SPECKIT_PHASE_WAKE_TYPES.has(message.customType);
+	isSpawnKickoff(message) ||
+	(message.role === "custom" && !isUserTurnInitiator(message) && !SPECKIT_PHASE_WAKE_TYPES.has(message.customType));
 
 /** The text that opened a user turn; a file command keeps its raw command text. */
 const speckitTurnText = (message: Extract<AgentMessage, { role: "user" | "developer" | "custom" }>): string =>
@@ -4601,6 +4603,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (event.type !== "message_start") return;
 		const message = event.message;
+		// A /spawn kickoff (idle, or as a follow-up inside a phase run) is not part of the run: the phase reply stays.
+		if (isSpawnKickoff(message)) {
+			this.#speckitPhaseReply ??= this.session.getLastAssistantMessage();
+			this.#speckitAwaitOpener = false;
+			return;
+		}
 		// Preludes come before the opener of the run, so the message after them decides.
 		if (this.#speckitAwaitOpener && !isSpeckitPrelude(message)) {
 			this.#speckitAwaitOpener = false;
@@ -8638,7 +8646,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(FORK_API_KEY_REFUSAL);
 			return false;
 		}
-		if (this.#warnSpeckitAutoBlocks()) return false;
 		if (this.isGuidedGoalInterviewActive()) {
 			this.showWarning("Finish the guided goal interview first.");
 			return false;
@@ -8652,6 +8659,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("A /spawn is already running. Wait for it to finish.");
 			return false;
 		}
+		// A speckit start before the kickoff would run first and close the spawn window.
+		this.speckitSubmitInFlight++;
 		try {
 			await this.#beginSpawnWindow();
 			const kickoff = prompt.render(spawnKickoffPrompt, {
@@ -8674,6 +8683,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#endSpawnWindow();
 			this.showError(error instanceof Error ? error.message : String(error));
 			return false;
+		} finally {
+			this.speckitSubmitInFlight--;
 		}
 	}
 

@@ -11,7 +11,7 @@ import answerPrompt from "../prompts/speckit-auto/answer.md" with { type: "text"
 import continuePrompt from "../prompts/speckit-auto/continue.md" with { type: "text" };
 import judgePrompt from "../prompts/speckit-auto/judge.md" with { type: "text" };
 import remediationPrompt from "../prompts/speckit-auto/remediation.md" with { type: "text" };
-import { isUserTurnInitiator } from "../session/messages";
+import { isUserTurnInitiator, syntheticPromptDisplayText } from "../session/messages";
 import type { ClassifyUnexpectedStopDeps } from "../session/unexpected-stop-classifier";
 
 export type SpeckitPhase =
@@ -458,12 +458,21 @@ function readReady(tail: string): boolean | undefined {
 const assistantText = (message: AssistantMessage): string =>
 	message.content.flatMap(content => (content.type === "text" ? [content.text] : [])).join("\n");
 
-/** True for a message that opens a user turn. Turns that omp starts on its own (attribution `agent`, wakes, redirects) are part of the phase. */
+/** The hidden prompt that `/spawn` sends: its display text is the typed `/spawn` command. */
+export const isSpawnKickoff = (message: AgentMessage): boolean =>
+	message.role === "developer" &&
+	message.userInitiated === true &&
+	/^\/spawn(\s|$)/.test(syntheticPromptDisplayText(message) ?? "");
+
+/**
+ * True for a message that opens a user turn. Turns that omp starts on its own (attribution `agent`, wakes, redirects)
+ * are part of the phase. A `/spawn` kickoff is not a turn of the run: its spawn turn leaves the run as it was.
+ */
 export const isSpeckitUserTurn = (
 	message: AgentMessage,
 ): message is Extract<AgentMessage, { role: "user" | "developer" | "custom" }> =>
 	(message.role === "user" && message.attribution !== "agent") ||
-	(message.role === "developer" && message.userInitiated === true) ||
+	(message.role === "developer" && message.userInitiated === true && !isSpawnKickoff(message)) ||
 	(message.role === "custom" && isUserTurnInitiator(message));
 
 /** Text of the assistant messages before `reply` in its turn. Converge can report its outcome there, before its summary. */

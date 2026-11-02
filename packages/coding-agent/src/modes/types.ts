@@ -295,7 +295,7 @@ export interface InteractiveModeContext {
 	readonly speckitAutoActing: boolean;
 	/** The mode is on and a run is active and not paused (per-turn notifications are suppressed). */
 	readonly speckitAutoRunActive: boolean;
-	/** Editor submit handlers still running; a speckit-auto start waits for 0. */
+	/** Editor submit handlers and `/spawn` kickoff sends still running; a speckit-auto start waits for 0. */
 	speckitSubmitInFlight: number;
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
