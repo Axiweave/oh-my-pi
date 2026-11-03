@@ -42,13 +42,15 @@ function severityColor(severity: AdvisorSeverity | undefined): ToolUIColor {
 	}
 }
 
-/** Always-visible header tag: `Advisor <n> notes [· <k> blockers]`. */
+/** Always-visible header tag: `<label> <meta…>`, for example `Advisor 2 notes · 1 blocker`. */
 class AdvisorHeader implements Component {
+	readonly #label: string;
 	readonly #meta: readonly string[];
 	readonly #uiTheme: Theme;
 	#cache: { width: number; lines: readonly string[] } | undefined;
 
-	constructor(meta: readonly string[], uiTheme: Theme) {
+	constructor(label: string, meta: readonly string[], uiTheme: Theme) {
+		this.#label = label;
 		this.#meta = meta;
 		this.#uiTheme = uiTheme;
 	}
@@ -65,10 +67,9 @@ class AdvisorHeader implements Component {
 		width = Math.max(1, width);
 		if (this.#cache?.width === width) return this.#cache.lines;
 		const uiTheme = this.#uiTheme;
-		const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(`${uiTheme.status.info} Advisor`));
-		const lines = [
-			truncateToWidth(`${tag} ${uiTheme.fg("dim", this.#meta.join(uiTheme.sep.dot))}`, width, Ellipsis.Unicode),
-		];
+		const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(`${uiTheme.status.info} ${this.#label}`));
+		const meta = this.#meta.length > 0 ? ` ${uiTheme.fg("dim", this.#meta.join(uiTheme.sep.dot))}` : "";
+		const lines = [truncateToWidth(`${tag}${meta}`, width, Ellipsis.Unicode)];
 		this.#cache = { width, lines };
 		return lines;
 	}
@@ -198,6 +199,60 @@ export interface AdvisorMessageCard extends Component {
 }
 
 /**
+ * Wraps a disclosure as a card: `getExpanded` owns expansion, and a native toggle
+ * overrides it for this card until the next transcript-wide change.
+ */
+function controlledCard(
+	disclosure: Disclosure,
+	getExpanded: () => boolean,
+	describeCard: (expanded: boolean) => NativeNode,
+): AdvisorMessageCard {
+	let override: boolean | undefined;
+	let lastGlobal = getExpanded();
+	const expanded = (): boolean => {
+		const global = getExpanded();
+		if (global !== lastGlobal) {
+			lastGlobal = global;
+			override = undefined;
+		}
+		return override ?? global;
+	};
+	const nativeMemo = new Memo();
+	// The tool-output toggle owns expansion state; synchronize the controlled
+	// disclosure from the callback on every render.
+	return {
+		render(width: number): readonly string[] {
+			disclosure.setExpanded(expanded());
+			return disclosure.render(width);
+		},
+		describe(): NativeNode {
+			const isExpanded = expanded();
+			return nativeMemo.get([isExpanded], () => describeCard(isExpanded));
+		},
+		setExpanded(value: boolean): void {
+			lastGlobal = value;
+			override = undefined;
+		},
+		handleNativeEvent(event: NativeUiEvent): void {
+			const toggled = rootToggleExpanded(event);
+			if (toggled !== undefined) override = toggled;
+		},
+		invalidate(): void {
+			disclosure.invalidate();
+		},
+		releaseRenderCaches(): void {
+			disclosure.releaseRenderCaches();
+		},
+		dispose(): void {
+			disclosure.dispose();
+		},
+		setIgnoreTight(ignore: boolean): void {
+			disclosure.setIgnoreTight(ignore);
+		},
+	};
+}
+
+/**
  * Display-only transcript card for advisor notes injected into the primary
  * session. Styled as a distinct voice so notes never blend into thinking
  * output (whose `thinkingText` color equals `toolOutput` in most themes):
@@ -219,17 +274,6 @@ export function createAdvisorMessageCard(
 	const blockers = notes.filter(note => note.severity === "blocker").length;
 	const meta: string[] = [`${notes.length} ${notes.length === 1 ? "note" : "notes"}`];
 	if (blockers > 0) meta.push(uiTheme.fg("error", `${blockers} blocker${blockers === 1 ? "" : "s"}`));
-	let override: boolean | undefined;
-	let lastGlobal = getExpanded();
-	const expanded = (): boolean => {
-		const global = getExpanded();
-		if (global !== lastGlobal) {
-			lastGlobal = global;
-			override = undefined;
-		}
-		return override ?? global;
-	};
-	const nativeMemo = new Memo();
 	const describeCard = (isExpanded: boolean): NativeNode => {
 		const look = RANK_LOOK[RANKS.find(rank => notes.some(entry => rankOf(entry) === rank)) ?? "note"];
 		const sources = new Set(notes.map(sourceOf));
@@ -270,43 +314,46 @@ export function createAdvisorMessageCard(
 
 	const shown = notes.slice(0, COLLAPSED_NOTES);
 	const disclosure = new Disclosure({
-		summary: new AdvisorHeader(meta, uiTheme),
+		summary: new AdvisorHeader("Advisor", meta, uiTheme),
 		collapsedBody: () => new AdvisorNotes(shown, notes.length - shown.length, uiTheme),
 		body: () => new AdvisorNotes(notes, 0, uiTheme),
 		expanded: getExpanded(),
 		paddingX: 1,
 		maxCollapsedRows: chatTranscriptDisplayPreferences.advisorCollapsedLines || undefined,
 	});
-	// The tool-output toggle owns expansion state; synchronize the controlled
-	// disclosure from the callback on every render.
-	return {
-		render(width: number): readonly string[] {
-			disclosure.setExpanded(expanded());
-			return disclosure.render(width);
-		},
-		describe(): NativeNode {
-			const isExpanded = expanded();
-			return nativeMemo.get([isExpanded], () => describeCard(isExpanded));
-		},
-		setExpanded(value: boolean): void {
-			lastGlobal = value;
-			override = undefined;
-		},
-		handleNativeEvent(event: NativeUiEvent): void {
-			const toggled = rootToggleExpanded(event);
-			if (toggled !== undefined) override = toggled;
-		},
-		invalidate(): void {
-			disclosure.invalidate();
-		},
-		releaseRenderCaches(): void {
-			disclosure.releaseRenderCaches();
-		},
-		dispose(): void {
-			disclosure.dispose();
-		},
-		setIgnoreTight(ignore: boolean): void {
-			disclosure.setIgnoreTight(ignore);
-		},
-	};
+	return controlledCard(disclosure, getExpanded, describeCard);
+}
+
+/**
+ * Advisor-styled card for a hidden system reminder: the header (label and meta)
+ * always shows, and the reminder's lines show on the rail only when expanded.
+ */
+export function createReminderCard(
+	label: string,
+	meta: readonly string[],
+	lines: readonly string[],
+	getExpanded: () => boolean,
+	uiTheme: Theme,
+): AdvisorMessageCard {
+	const notes = lines.map(note => ({ note }));
+	const describeCard = (isExpanded: boolean): NativeNode =>
+		card({ role: "omp.reminder", tone: "neutral", collapsible: true, collapsed: !isExpanded }, [
+			node(
+				"row",
+				{ gap: "sm", align: "center", role: "omp.reminder.head" },
+				[
+					node("icon", { name: "info", tone: "neutral" }),
+					text([span(label, "strong"), ...meta.map(item => span(` · ${item}`, "dim"))], { grow: 1 }),
+				],
+				"head",
+			),
+			...notes.map((entry, index) => text(noteSpans(entry, false), { wrap: "word", key: `n${index}` })),
+		]);
+	const disclosure = new Disclosure({
+		summary: new AdvisorHeader(label, meta, uiTheme),
+		body: () => new AdvisorNotes(notes, 0, uiTheme),
+		expanded: getExpanded(),
+		paddingX: 1,
+	});
+	return controlledCard(disclosure, getExpanded, describeCard);
 }
