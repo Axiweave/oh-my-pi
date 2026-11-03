@@ -351,6 +351,14 @@ POSIX shell quoting. When Orca cannot show the new tab and starts the child in a
 background terminal instead, `/fork` reports that as a warning rather than a
 visible tab.
 
+### Fork start reminder
+
+Every `--fork` start records a non-context `fork-start` marker with two facts: whether the copied branch ended mid-task (judged before tail repair), and whether the fork uses the source's recorded directory. This covers `/fork spawn`, the IDE `fork-spawn` action, `/fork pane|window|tab`, the Tern pane fork, `/spawn` fork modes, and a manual `omp --fork`. In-place `/fork`, `/branch`, rewind, internal task forks, and transfers record no marker.
+
+The fork's first model-bound prompt carries one hidden `fork-start-reminder` custom message, directly before the request and after startup recovery. It tells the model that this session is a fork, that the copied history is context, and that the new message is the task. When the copy ended mid-task, it also says that work belongs to the source. When the directory is shared, it warns that the source can still change files. Local slash commands and rejected preflight leave it pending. The message is saved through normal persistence and names its marker in `details.markerId`, so resume, compaction, and retries never send a second one. A session-file continuation under a new session id keeps a pending reminder pending.
+
+The chat shows the reminder that names the branch's newest marker as an advisor-style card. The header `Fork reminder` lists the facts (`copied task unfinished`, `shared directory`). Ctrl+O expands the card to the reminder text that the model got. Reminders inherited by a fork of a fork show nothing. `fork.startReminder: false` stops new markers and deletes no history.
+
 ### Session-level flow
 
 The original bare `/fork` uses `AgentSession.fork()`:

@@ -896,6 +896,19 @@ export const cfgSpawnConfirm = register({
 	},
 });
 
+export const cfgForkStartReminder = register({
+	id: "fork.startReminder",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Fork Start Reminder",
+		description:
+			"Send a hidden reminder with the first request of a new fork: the source session owns its copied work, and the new message is the task",
+	},
+});
+
 export const cfgOutEnabled = register({
 	id: "out.enabled",
 	type: "boolean",

@@ -16,7 +16,15 @@ import {
 	type SessionEntry,
 	type SessionHeader,
 	type SessionMessageEntry,
+	type CustomEntry,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import {
+	FORK_START_CUSTOM_TYPE,
+	FORK_START_REMINDER_CUSTOM_TYPE,
+	type ForkStartFacts,
+	newestForkStartMarkerId,
+	pendingForkStart,
+} from "@oh-my-pi/pi-coding-agent/session/fork-start-reminder";
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage, MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
@@ -1075,5 +1083,302 @@ describe("SessionManager.forkFrom", () => {
 		expect(forkedEntries.some(entry => entry.type === "message" && isSyntheticToolResultMessage(entry.message))).toBe(
 			false,
 		);
+	});
+});
+
+const STORAGE_MODULE = path.join(import.meta.dir, "../../src/session/session-storage.ts");
+const FORK_START_SEED = 0xf02c_57a7;
+
+/** mulberry32: seeded PRNG so a failing generated case replays from FORK_START_SEED. */
+function seededRandom(seed: number): () => number {
+	let state = seed >>> 0;
+	return () => {
+		state = (state + 0x6d2b79f5) >>> 0;
+		let t = state;
+		t = Math.imul(t ^ (t >>> 15), t | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+function forkStartMarkers(entries: readonly SessionEntry[]): CustomEntry<ForkStartFacts>[] {
+	return entries.filter(
+		(entry): entry is CustomEntry<ForkStartFacts> =>
+			entry.type === "custom" && entry.customType === FORK_START_CUSTOM_TYPE,
+	);
+}
+
+/** Source tail kinds and whether a fork must record the copied tail as unfinished. */
+const SOURCE_TAILS = {
+	empty: false,
+	completed: false,
+	unansweredPrompt: true,
+	pendingToolCall: true,
+	toolResults: true,
+} as const;
+type SourceTail = keyof typeof SOURCE_TAILS;
+
+/** JSONL body (no header) for a source branch: earlier completed turns, then the given tail. */
+function sourceBody(tail: SourceTail, completedTurns: number): string {
+	const messages: Record<string, unknown>[] = [];
+	const assistant = (toolCallId?: string) => ({
+		role: "assistant",
+		content: toolCallId
+			? [{ type: "toolCall", id: toolCallId, name: "bash", arguments: { command: "make" } }]
+			: [{ type: "text", text: "done" }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude",
+		stopReason: toolCallId ? "toolUse" : "stop",
+		timestamp: 1,
+		usage: {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	});
+	const user = { role: "user", content: "task", timestamp: 1 };
+	if (tail !== "empty") {
+		for (let turn = 0; turn < completedTurns; turn++) messages.push(user, assistant());
+	}
+	if (tail === "completed") messages.push(user, assistant());
+	if (tail === "unansweredPrompt") messages.push(user);
+	if (tail === "pendingToolCall") messages.push(user, assistant("toolu_open"));
+	if (tail === "toolResults") {
+		messages.push(user, assistant("toolu_done"), {
+			role: "toolResult",
+			toolCallId: "toolu_done",
+			toolName: "bash",
+			content: [{ type: "text", text: "ok" }],
+			isError: false,
+			timestamp: 1,
+		});
+	}
+	const timestamp = new Date().toISOString();
+	return messages
+		.map((message, index) =>
+			JSON.stringify({
+				type: "message",
+				id: `m${index}`,
+				parentId: index === 0 ? null : `m${index - 1}`,
+				timestamp,
+				message,
+			}),
+		)
+		.map(line => `${line}\n`)
+		.join("");
+}
+
+async function writeSource(sourceFile: string, sourceCwd: string, tail: SourceTail, completedTurns = 1) {
+	const header: SessionHeader = {
+		type: "session",
+		version: CURRENT_SESSION_VERSION,
+		id: `source-${tail}`,
+		timestamp: new Date().toISOString(),
+		cwd: sourceCwd,
+	};
+	const text = `${JSON.stringify(header)}\n${sourceBody(tail, completedTurns)}`;
+	await Bun.write(sourceFile, text);
+	return text;
+}
+
+/** Another live process holding the session ownership lease for `sessionId`. */
+async function holdSessionLease(tempDir: TempDir, sessionId: string, sessionFile: string) {
+	const script = tempDir.join("lease-holder.ts");
+	await Bun.write(
+		script,
+		[
+			`import { FileSessionStorage } from ${JSON.stringify(STORAGE_MODULE)};`,
+			"const release = new FileSessionStorage().claimSession(process.argv[2], process.argv[3]);",
+			'process.stdout.write(release ? "held\\n" : "busy\\n");',
+			"for await (const _ of console) {}",
+			"release?.();",
+		].join("\n"),
+	);
+	const child = Bun.spawn([process.execPath, script, sessionId, sessionFile], {
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "pipe",
+		env: process.env,
+	});
+	const { value } = await child.stdout.getReader().read();
+	expect(new TextDecoder().decode(value)).toBe("held\n");
+	return {
+		async release() {
+			child.stdin.end();
+			await child.exited;
+		},
+	};
+}
+
+describe("SessionManager.forkFrom fork-start marker", () => {
+	it("leaves the source untouched and records one marker with the pre-repair tail only when asked (generated)", async () => {
+		console.log(`fork-start marker seed: ${FORK_START_SEED}`);
+		const random = seededRandom(FORK_START_SEED);
+		const tails = Object.keys(SOURCE_TAILS) as SourceTail[];
+		using tempDir = TempDir.createSync("@omp-session-fork-start-");
+		const sourceCwd = path.join(tempDir.path(), "source-cwd");
+		const otherCwd = path.join(tempDir.path(), "other-cwd");
+		await fs.mkdir(sourceCwd, { recursive: true });
+		await fs.mkdir(otherCwd, { recursive: true });
+
+		for (let caseIndex = 0; caseIndex < 16; caseIndex++) {
+			const tail = tails[Math.floor(random() * tails.length)]!;
+			const startReminder = random() < 0.5;
+			const sharedCwd = random() < 0.5;
+			const completedTurns = Math.floor(random() * 3);
+			const label = `seed=${FORK_START_SEED} case=${caseIndex} tail=${tail} startReminder=${startReminder} sharedCwd=${sharedCwd} turns=${completedTurns}`;
+			const sourceFile = path.join(tempDir.path(), `source-${caseIndex}.jsonl`);
+			const sourceText = await writeSource(sourceFile, sourceCwd, tail, completedTurns);
+
+			const forked = await SessionManager.forkFrom(
+				sourceFile,
+				sharedCwd ? sourceCwd : otherCwd,
+				path.join(tempDir.path(), `fork-${caseIndex}`),
+				undefined,
+				{ suppressBreadcrumb: true, repairInterruptedTail: true, startReminder },
+			);
+			try {
+				expect(await fs.readFile(sourceFile, "utf8"), label).toBe(sourceText);
+				const saved = await loadHistory(forked.getSessionFile()!);
+				const markers = forkStartMarkers(saved);
+				expect(markers, label).toHaveLength(startReminder ? 1 : 0);
+				expect(
+					pendingForkStart(forked.getBranch(), forked.getEntries(), forked.getSessionId())?.markerId,
+					label,
+				).toBe(markers[0]?.id);
+				if (!startReminder) continue;
+
+				const [marker] = markers;
+				expect(marker!.data, label).toEqual({
+					sessionId: forked.getSessionId(),
+					unfinished: SOURCE_TAILS[tail],
+					sharedCwd,
+				});
+				// The marker sits at the leaf, after any tool results the repair added.
+				const branch = forked.getBranch();
+				expect(branch.at(-1)?.id, label).toBe(marker!.id);
+				expect(collectPendingToolCalls(branch), label).toEqual([]);
+				if (tail === "pendingToolCall") {
+					const lastMessage = branch.findLast(entry => entry.type === "message");
+					expect(lastMessage?.type === "message" && lastMessage.message.role, label).toBe("toolResult");
+				}
+			} finally {
+				await forked.close();
+			}
+		}
+	});
+
+	it("gives a fork of a fork its own newest marker and keeps the inherited one", async () => {
+		using tempDir = TempDir.createSync("@omp-session-fork-start-nested-");
+		const cwd = path.join(tempDir.path(), "project");
+		await fs.mkdir(cwd, { recursive: true });
+		const sourceFile = path.join(tempDir.path(), "source.jsonl");
+		await writeSource(sourceFile, cwd, "unansweredPrompt");
+		const options = { suppressBreadcrumb: true, repairInterruptedTail: true, startReminder: true };
+
+		const first = await SessionManager.forkFrom(
+			sourceFile,
+			cwd,
+			path.join(tempDir.path(), "first"),
+			undefined,
+			options,
+		);
+		await first.close();
+		const second = await SessionManager.forkFrom(
+			first.getSessionFile()!,
+			cwd,
+			path.join(tempDir.path(), "second"),
+			undefined,
+			options,
+		);
+		try {
+			const markers = forkStartMarkers(second.getBranch());
+			expect(markers.map(marker => marker.data?.sessionId)).toEqual([first.getSessionId(), second.getSessionId()]);
+			expect(newestForkStartMarkerId(second.getBranch())).toBe(markers[1]!.id);
+			expect(pendingForkStart(second.getBranch(), second.getEntries(), second.getSessionId())?.markerId).toBe(
+				markers[1]!.id,
+			);
+			// The inherited marker is not newest, so its owner has nothing pending here.
+			expect(pendingForkStart(second.getBranch(), second.getEntries(), first.getSessionId())).toBeUndefined();
+		} finally {
+			await second.close();
+		}
+	});
+
+	it("carries a pending marker to the new session id when the fork moves off its file, but not a sent one", async () => {
+		using tempDir = TempDir.createSync("@omp-session-fork-start-move-");
+		const previousAgentDir = getAgentDir();
+		setAgentDir(path.join(tempDir.path(), "agent"));
+		try {
+			const cwd = path.join(tempDir.path(), "project");
+			await fs.mkdir(cwd, { recursive: true });
+			const sourceFile = path.join(tempDir.path(), "source.jsonl");
+			await writeSource(sourceFile, cwd, "completed");
+
+			/** Fork, optionally record the sent reminder, then write once while another process owns the fork. */
+			const forkAndMove = async (name: string, sendReminder: boolean) => {
+				const sessionDir = path.join(tempDir.path(), name);
+				const fork = await SessionManager.forkFrom(sourceFile, cwd, sessionDir, undefined, {
+					suppressBreadcrumb: true,
+					repairInterruptedTail: true,
+					startReminder: true,
+				});
+				const forkFile = fork.getSessionFile()!;
+				const markerId = newestForkStartMarkerId(fork.getBranch())!;
+				if (sendReminder) fork.appendCustomMessageEntry(FORK_START_REMINDER_CUSTOM_TYPE, "x", false, { markerId });
+				await fork.close();
+
+				const holder = await holdSessionLease(tempDir, fork.getSessionId(), forkFile);
+				let moved: SessionManager;
+				try {
+					moved = await SessionManager.open(forkFile, sessionDir, new FileSessionStorage(), {
+						suppressBreadcrumb: true,
+					});
+					moved.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
+					await moved.close();
+				} finally {
+					await holder.release();
+				}
+				const continuation = moved.getSessionFile()!;
+				expect(continuation).not.toBe(forkFile);
+				expect(moved.getSessionId()).not.toBe(fork.getSessionId());
+				const reopened = await SessionManager.open(continuation, sessionDir, new FileSessionStorage(), {
+					suppressBreadcrumb: true,
+				});
+				return { forkId: fork.getSessionId(), markerId, reopened };
+			};
+
+			const pending = await forkAndMove("pending", false);
+			try {
+				const { reopened } = pending;
+				const newId = reopened.getSessionId();
+				const markers = forkStartMarkers(reopened.getEntries());
+				expect(markers.map(marker => marker.data?.sessionId)).toEqual([pending.forkId, newId]);
+				expect(markers[0]!.id).toBe(pending.markerId);
+				expect(pendingForkStart(reopened.getBranch(), reopened.getEntries(), newId)?.markerId).toBe(markers[1]!.id);
+				expect(pendingForkStart(reopened.getBranch(), reopened.getEntries(), pending.forkId)).toBeUndefined();
+			} finally {
+				await pending.reopened.close();
+			}
+
+			const sent = await forkAndMove("sent", true);
+			try {
+				const { reopened } = sent;
+				const markers = forkStartMarkers(reopened.getEntries());
+				expect(markers.map(marker => marker.id)).toEqual([sent.markerId]);
+				expect(markers[0]!.data?.sessionId).toBe(sent.forkId);
+				expect(
+					pendingForkStart(reopened.getBranch(), reopened.getEntries(), reopened.getSessionId()),
+				).toBeUndefined();
+			} finally {
+				await sent.reopened.close();
+			}
+		} finally {
+			setAgentDir(previousAgentDir);
+		}
 	});
 });

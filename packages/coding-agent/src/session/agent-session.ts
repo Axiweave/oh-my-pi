@@ -402,6 +402,7 @@ import { COST_GATE_NOTICE_SOURCE, type CostCapRefusal, CostGate } from "./cost-g
 import { recordCredentialPin, seedCredentialPins } from "./credential-pin";
 import { isDateCwdReminderControl } from "./date-cwd-reminder";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
+import { pendingForkStart, renderForkStartReminder } from "./fork-start-reminder";
 import {
 	collectPendingToolCalls,
 	createInterruptedToolResults,
@@ -9416,6 +9417,14 @@ export class AgentSession implements SettingsScope {
 			// promotion/summary can rebuild the base prompt and clear a roster delta
 			// it subsumes, avoiding a contradictory materialized notice.
 			const xdevMountNoticeIndex = messages.length;
+			// A fork's first model-bound prompt carries its hidden fork reminder. The
+			// stored reminder (saved at its message_end) is the only delivered state.
+			const pendingFork = pendingForkStart(
+				this.sessionManager.getBranch(),
+				this.sessionManager.getEntries(),
+				this.sessionManager.getSessionId(),
+			);
+			if (pendingFork) messages.push(renderForkStartReminder(pendingFork.markerId, pendingFork.facts));
 			messages.push(message);
 			// Inject any pending "nextTurn" messages as context alongside the user message
 			for (const msg of this.#pendingNextTurnMessages) {

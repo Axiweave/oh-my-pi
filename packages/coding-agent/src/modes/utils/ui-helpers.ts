@@ -13,7 +13,7 @@ import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../coll
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { cfgDisplayCollapseCommandCards } from "../settings";
 import { continuesConversation } from "./conversation-position";
-import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
+import { createAdvisorMessageCard, createReminderCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
@@ -66,6 +66,11 @@ import {
 import { normalizeBlobExtension } from "@oh-my-pi/pi-tui/prompt/image-format";
 import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import {
+	FORK_START_REMINDER_CUSTOM_TYPE,
+	type ForkStartReminderDetails,
+	forkStartReminderCard,
+} from "../../session/fork-start-reminder";
 import type {
 	CompactionQueuedMessage,
 	InteractiveModeContext,
@@ -322,6 +327,27 @@ export class UiHelpers {
 			}
 			case "hookMessage":
 			case "custom": {
+				if (message.customType === FORK_START_REMINDER_CUSTOM_TYPE) {
+					// Only this fork's own reminder gets a card: facts in the header, the
+					// reminder text on Ctrl+O. Inherited reminders show nothing.
+					const view = forkStartReminderCard(
+						(message.details as ForkStartReminderDetails | undefined)?.markerId,
+						typeof message.content === "string" ? message.content : "",
+						this.ctx.viewSession.sessionManager.getBranch(),
+					);
+					if (view) {
+						this.ctx.chatContainer.addChild(
+							createReminderCard(
+								"Fork reminder",
+								view.meta,
+								view.lines,
+								() => this.ctx.toolOutputExpanded,
+								theme,
+							),
+						);
+					}
+					break;
+				}
 				if (message.display) {
 					if (message.customType === "async-result") {
 						const renderer = this.ctx.viewSession.extensionRunner?.getMessageRenderer(message.customType);

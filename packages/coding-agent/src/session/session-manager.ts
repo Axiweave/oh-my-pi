@@ -42,7 +42,8 @@ import {
 	stripInternalDetailsFields,
 } from "./messages";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
-import { createInterruptedToolResults, sessionExitFollowsLastMessage } from "./exit-diagnostics";
+import { createInterruptedToolResults, hasUnfinishedTail, sessionExitFollowsLastMessage } from "./exit-diagnostics";
+import { FORK_START_CUSTOM_TYPE, type ForkStartFacts, pendingForkStart, sharesSourceCwd } from "./fork-start-reminder";
 import type { RetryFallbackRole } from "./retry-fallback-chains";
 import {
 	type BuildSessionContextOptions,
@@ -1302,6 +1303,17 @@ export class SessionManager {
 			...carried,
 			providerPromptCacheKey: SessionManager.getInheritedProviderPromptCacheKey(this.#header),
 		};
+		// A fork reminder still waiting for its first prompt follows the conversation
+		// to the new session id; a sent one keeps its marker and needs nothing.
+		const pendingFork = pendingForkStart(this.#index.pathTo(), this.#entries, previousSessionId);
+		if (pendingFork) {
+			const marker = SessionManager.#forkStartMarker(this.#entries, this.#index.leafId(), {
+				...pendingFork.facts,
+				sessionId: this.#sessionId,
+			});
+			this.#entries.push(marker);
+			this.#index.insert(marker);
+		}
 		this.#closeWriterEventually();
 		this.#sessionFile = to;
 		this.#expectedDiskSize = null;
@@ -4278,6 +4290,8 @@ export class SessionManager {
 			resetInheritedCost?: boolean;
 			repairInterruptedTail?: boolean;
 			seance?: boolean;
+			/** Record a `fork-start` marker so the fork's first prompt carries the fork reminder. */
+			startReminder?: boolean;
 		},
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
@@ -4326,8 +4340,18 @@ export class SessionManager {
 		manager.#entries = history;
 		manager.#index.rebuild(history);
 		manager.sanitizeLoadedOpenAIResponsesReplayMetadata();
+		const unfinished = options?.startReminder ? hasUnfinishedTail(manager.#index.pathTo()) : false;
 		if (options?.repairInterruptedTail) {
 			SessionManager.#repairForkedInterruptedTail(history, manager.#index.pathTo());
+			manager.#index.rebuild(history);
+		}
+		if (options?.startReminder) {
+			const facts: ForkStartFacts = {
+				sessionId: manager.#sessionId,
+				unfinished,
+				sharedCwd: sharesSourceCwd(sourceHeader?.cwd, cwd),
+			};
+			history.push(SessionManager.#forkStartMarker(history, manager.#index.leafId(), facts));
 			manager.#index.rebuild(history);
 		}
 		manager.#forceFileCreation = true;
@@ -4336,6 +4360,22 @@ export class SessionManager {
 			await copySessionArtifacts(sourcePath, manager.#sessionFile!);
 		}
 		return manager;
+	}
+
+	static #forkStartMarker(
+		history: readonly SessionEntry[],
+		parentId: string | null,
+		facts: ForkStartFacts,
+	): CustomEntry<ForkStartFacts> {
+		return {
+			type: "custom",
+			customType: FORK_START_CUSTOM_TYPE,
+			data: facts,
+			id: generateId(new Set(history.map(entry => entry.id))),
+			parentId,
+			timestamp: nowIso(),
+			runtime: currentRuntimeIdentity(),
+		};
 	}
 
 	/** Replace inherited `session_init` entries, in place, with inert custom entries keeping the same tree position. */

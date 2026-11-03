@@ -21,6 +21,11 @@ import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-containe
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext, RenderSessionContextOptions } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import {
+	FORK_START_CUSTOM_TYPE,
+	FORK_START_REMINDER_CUSTOM_TYPE,
+	renderForkStartReminder,
+} from "@oh-my-pi/pi-coding-agent/session/fork-start-reminder";
 import type { SessionContext, StrippedToolCallsMarker } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { type Component, Container, Image, ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
@@ -884,5 +889,189 @@ describe("UiHelpers.renderInitialMessages — prompt history isolation", () => {
 		await new UiHelpers(ctx).renderInitialMessages();
 
 		expect(ctx.editor.addToHistory).not.toHaveBeenCalled();
+	});
+});
+
+describe("UiHelpers.renderInitialMessages — fork start reminder notice", () => {
+	const REMINDER_BODY = "FORK_REMINDER_BODY_SENTINEL";
+
+	function appendMarker(manager: SessionManager): string {
+		return manager.appendCustomEntry(FORK_START_CUSTOM_TYPE, {
+			sessionId: manager.getSessionId(),
+			unfinished: false,
+			sharedCwd: true,
+		});
+	}
+
+	function appendReminder(manager: SessionManager, markerId: string): void {
+		manager.appendCustomMessageEntry(FORK_START_REMINDER_CUSTOM_TYPE, REMINDER_BODY, false, { markerId });
+	}
+
+	/** Replays `manager`'s transcript against its real branch; returns the replay function and the chat. */
+	function replayCtx(manager: SessionManager, expanded = false) {
+		const { ctx, chatContainer } = makeRenderCtx(manager.buildSessionContext({ transcript: true }));
+		Object.assign(ctx.viewSession, { sessionManager: manager });
+		ctx.toolOutputExpanded = expanded;
+		const helpers = new UiHelpers(ctx);
+		return {
+			chatContainer,
+			replay: () => helpers.renderInitialMessages(),
+			text: () => Bun.stripANSI(chatContainer.render(120).join("\n")),
+		};
+	}
+
+	/** mulberry32: small seeded PRNG so a failing case can be replayed from the printed seed. */
+	function seededRandom(seed: number): () => number {
+		let state = seed >>> 0;
+		return () => {
+			state = (state + 0x6d2b79f5) >>> 0;
+			let t = state;
+			t = Math.imul(t ^ (t >>> 15), t | 1);
+			t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+		};
+	}
+
+	const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
+
+	it("collapsed shows facts in one row without content; expanded shows every reminder line (seed 20261102)", async () => {
+		const seed = 20261102;
+		const random = seededRandom(seed);
+		const flip = () => random() < 0.5;
+		// Every facts x expansion combination once, then random extra draws, in a seeded order.
+		const cases: Array<{ unfinished: boolean; sharedCwd: boolean; expanded: boolean; inherited: number }> = [];
+		for (let bits = 0; bits < 8; bits++) {
+			cases.push({ unfinished: !!(bits & 1), sharedCwd: !!(bits & 2), expanded: !!(bits & 4), inherited: 0 });
+		}
+		for (let extra = 0; extra < 16; extra++) {
+			cases.push({ unfinished: flip(), sharedCwd: flip(), expanded: flip(), inherited: Math.floor(random() * 3) });
+		}
+		for (let index = cases.length - 1; index > 0; index--) {
+			const swap = Math.floor(random() * (index + 1));
+			[cases[index], cases[swap]] = [cases[swap]!, cases[index]!];
+		}
+
+		for (const testCase of cases) {
+			const label = `seed ${seed} case ${JSON.stringify(testCase)}`;
+			const manager = SessionManager.inMemory("/tmp");
+			// Inherited marker/reminder pairs with random facts; their reminders must add nothing.
+			for (let inherited = 0; inherited < testCase.inherited; inherited++) {
+				const facts = { sessionId: "older-session", unfinished: flip(), sharedCwd: flip() };
+				const markerId = manager.appendCustomEntry(FORK_START_CUSTOM_TYPE, facts);
+				const reminder = renderForkStartReminder(markerId, facts);
+				manager.appendCustomMessageEntry(reminder.customType, reminder.content, false, reminder.details);
+			}
+			const facts = {
+				sessionId: manager.getSessionId(),
+				unfinished: testCase.unfinished,
+				sharedCwd: testCase.sharedCwd,
+			};
+			const markerId = manager.appendCustomEntry(FORK_START_CUSTOM_TYPE, facts);
+			const reminder = renderForkStartReminder(markerId, facts);
+			const content = typeof reminder.content === "string" ? reminder.content : "";
+			manager.appendCustomMessageEntry(reminder.customType, content, false, reminder.details);
+			const contentLines = content
+				.split("\n")
+				.map(normalize)
+				.filter(line => line !== "" && !/^<\/?system-reminder>$/.test(line));
+			const { chatContainer, replay } = replayCtx(manager, testCase.expanded);
+
+			await replay();
+
+			expect(chatContainer.children, label).toHaveLength(1);
+			const rows = chatContainer
+				.render(110)
+				.map(row => Bun.stripANSI(row))
+				.filter(row => row.trim() !== "");
+			const header = rows[0] ?? "";
+			expect(header.includes("copied task unfinished"), label).toBe(testCase.unfinished);
+			expect(header.includes("shared directory"), label).toBe(testCase.sharedCwd);
+			// Body rows carry a rail prefix; drop each row's leading decoration so wrapped lines rejoin.
+			const shown = normalize(rows.map(row => row.replace(/^[^\p{L}\p{N}]+/u, "")).join(" "));
+			if (testCase.expanded) {
+				for (const line of contentLines) expect(shown, label).toContain(line);
+			} else {
+				expect(rows, label).toHaveLength(1);
+				for (const line of contentLines) expect(shown, label).not.toContain(line);
+			}
+		}
+	});
+
+	it("shows one collapsed component without the reminder content for the newest marker's reminder", async () => {
+		const manager = SessionManager.inMemory("/tmp");
+		appendReminder(manager, appendMarker(manager));
+		const { chatContainer, replay, text } = replayCtx(manager);
+
+		await replay();
+
+		expect(chatContainer.children).toHaveLength(1);
+		expect(text()).not.toContain(REMINDER_BODY);
+	});
+
+	it("shows nothing for an inherited reminder and one notice for the fork's own", async () => {
+		const manager = SessionManager.inMemory("/tmp");
+		appendReminder(manager, appendMarker(manager));
+		const ownMarker = appendMarker(manager);
+
+		const inheritedOnly = replayCtx(manager);
+		await inheritedOnly.replay();
+		expect(inheritedOnly.chatContainer.children).toHaveLength(0);
+
+		appendReminder(manager, ownMarker);
+		const both = replayCtx(manager);
+		await both.replay();
+		expect(both.chatContainer.children).toHaveLength(1);
+		expect(both.text()).not.toContain(REMINDER_BODY);
+	});
+
+	it("shows the same count on a second replay", async () => {
+		const manager = SessionManager.inMemory("/tmp");
+		appendReminder(manager, appendMarker(manager));
+		const { chatContainer, replay } = replayCtx(manager);
+
+		await replay();
+		const first = chatContainer.children.length;
+		await replay();
+
+		expect(first).toBe(1);
+		expect(chatContainer.children).toHaveLength(first);
+	});
+
+	it("still shows nothing for other hidden custom messages", async () => {
+		const manager = SessionManager.inMemory("/tmp");
+		appendMarker(manager);
+		manager.appendCustomMessageEntry("other-hidden-note", REMINDER_BODY, false, { markerId: "unrelated" });
+		const { chatContainer, replay } = replayCtx(manager);
+
+		await replay();
+
+		expect(chatContainer.children).toHaveLength(0);
+	});
+
+	it("keeps the notice after the session continues under a new session id", async () => {
+		using tempDir = TempDir.createSync("@pi-render-fork-reminder-continuation-");
+		const manager = SessionManager.create(tempDir.path(), tempDir.path());
+		await manager.ensureOnDisk();
+		appendReminder(manager, appendMarker(manager));
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persisted session file");
+		const previousId = manager.getSessionId();
+		// Another session takes over the file, so the next rewrite moves to a sibling.
+		const other = SessionManager.create(tempDir.path(), tempDir.path());
+		await Bun.write(
+			sessionFile,
+			`${JSON.stringify({ type: "session", id: other.getSessionId(), cwd: tempDir.path(), timestamp: new Date(0).toISOString() })}\n`,
+		);
+		await other.close();
+		await manager.rewriteEntries();
+		expect(manager.getSessionId()).not.toBe(previousId);
+
+		const { chatContainer, replay, text } = replayCtx(manager);
+		await replay();
+
+		expect(chatContainer.children).toHaveLength(1);
+		expect(text()).not.toContain(REMINDER_BODY);
+		await manager.close();
 	});
 });

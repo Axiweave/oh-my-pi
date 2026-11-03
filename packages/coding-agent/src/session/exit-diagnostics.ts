@@ -182,6 +182,15 @@ export function isInterruptedTurnAbort(message: AgentMessage): boolean {
 }
 
 /**
+ * Whether a copied branch ends mid-task, judged as if its process had just
+ * exited: an unanswered prompt, tool calls without results, or tool results the
+ * model never answered. A fork records this before it repairs the tail.
+ */
+export function hasUnfinishedTail(branch: readonly SessionEntry[]): boolean {
+	return findUnfinishedTurn(branch, { assumeExit: true }) !== undefined;
+}
+
+/**
  * Whether `omp --restore` has a turn to go on with on this branch: one its last
  * process left unfinished ({@link findUnfinishedTurn}, the exit assumed), or one exit
  * recovery already closed that nothing followed, not even a normal exit.

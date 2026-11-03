@@ -161,7 +161,7 @@ import { cfgGoalEnabled } from "./goals/settings";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "./plan-mode/settings";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
-import { cfgAsyncPrintWake, cfgToolsApprovalMode } from "./tools/settings";
+import { cfgAsyncPrintWake, cfgForkStartReminder, cfgToolsApprovalMode } from "./tools/settings";
 import {
 	cfgAutocompleteMaxVisible,
 	cfgAutoResume,
@@ -1322,11 +1322,10 @@ export async function createSessionManager(
 			throw new SessionResolutionError("--fork requires session persistence");
 		}
 		const forkSource = parsed.fork;
+		const forkOptions = { repairInterruptedTail: true, startReminder: cfgForkStartReminder.get(activeSettings) };
 		if (forkSource.includes("/") || forkSource.includes("\\") || forkSource.endsWith(".jsonl")) {
 			try {
-				return await SessionManager.forkFrom(forkSource, cwd, parsed.sessionDir, undefined, {
-					repairInterruptedTail: true,
-				});
+				return await SessionManager.forkFrom(forkSource, cwd, parsed.sessionDir, undefined, forkOptions);
 			} catch (err) {
 				if (err instanceof ForkSourceNotFoundError) {
 					throw new SessionResolutionError(err.message, SESSION_NOT_FOUND_HINT);
@@ -1339,9 +1338,7 @@ export async function createSessionManager(
 			throw new SessionResolutionError(`Session "${forkSource}" not found.`, SESSION_NOT_FOUND_HINT);
 		}
 		try {
-			return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir, undefined, {
-				repairInterruptedTail: true,
-			});
+			return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir, undefined, forkOptions);
 		} catch (err) {
 			if (err instanceof ForkSourceNotFoundError) {
 				throw new SessionResolutionError(`Session "${forkSource}" not found.`, SESSION_NOT_FOUND_HINT);
