@@ -85,21 +85,24 @@ export function parseLoopArgs(args: string): ParsedLoopArgs | string {
 	};
 }
 
-/** Split off the first token. A `;` also ends the token, and one `;` separator after it is dropped (`every 15m; prompt`). */
-function splitFirstToken(input: string): { token: string; rest: string } {
-	const match = /^([^\s;]*)\s*;?\s*/.exec(input) as RegExpExecArray;
-	return { token: match[1], rest: input.slice(match[0].length).trim() };
+/**
+ * Split off the first token. A `;` also ends the token, and one `;` separator after it is dropped
+ * (`every 15m; prompt`). `separated` reports that drop, so a clause never reads past it.
+ */
+function splitFirstToken(input: string): { token: string; rest: string; separated: boolean } {
+	const match = /^([^\s;]*)\s*(;?)\s*/.exec(input) as RegExpExecArray;
+	return { token: match[1], rest: input.slice(match[0].length).trim(), separated: match[2] === ";" };
 }
 
 /** Split an optional leading limit token off the argument string. */
 function takeLoopLimit(input: string): { limit?: LoopLimitConfig; rest: string } | string {
-	const { token: firstToken, rest } = splitFirstToken(input);
+	const { token: firstToken, rest, separated } = splitFirstToken(input);
 	const token = firstToken.toLowerCase();
 
 	// Not a limit attempt (prose like "keep going", or a leading condition flag).
 	if (!/^[+-]?\d/.test(token)) return { rest: input };
 
-	const duration = takeDuration(token, rest);
+	const duration = takeDuration(token, rest, separated);
 	if (typeof duration === "string") return duration;
 	if (duration) return { limit: { kind: "duration", durationMs: duration.durationMs }, rest: duration.rest };
 
@@ -124,7 +127,7 @@ function takeLoopInterval(input: string): { intervalMs?: number; rest: string } 
 	// "every file has a test": prose, not an interval.
 	if (!/^[+-]?\d/.test(token)) return { rest: input };
 
-	const duration = takeDuration(token, value.rest);
+	const duration = takeDuration(token, value.rest, value.separated);
 	if (typeof duration === "string") return duration;
 	// Interval-shaped but unparseable ("every 15", "every 1.5h").
 	if (!duration) return LOOP_USAGE;
@@ -139,11 +142,17 @@ function takeLoopInterval(input: string): { intervalMs?: number; rest: string } 
 /**
  * Duration grammar shared by the time limit and `every`: the spaced form
  * (`10 minutes`) and the compact/compound form (`10m`, `1h30m`). `token` is
- * lowercase. Returns `undefined` when the token is not a duration, or an error
+ * lowercase. `separated` means a `;` follows the token, so a bare number has no
+ * unit word. Returns `undefined` when the token is not a duration, or an error
  * string when it is shaped like one but invalid.
  */
-function takeDuration(token: string, rest: string): { durationMs: number; rest: string } | string | undefined {
+function takeDuration(
+	token: string,
+	rest: string,
+	separated: boolean,
+): { durationMs: number; rest: string } | string | undefined {
 	if (/^\d+$/.test(token)) {
+		if (separated) return undefined;
 		const unit = splitFirstToken(rest);
 		const unitMs = TIME_UNITS_MS.get(unit.token.toLowerCase());
 		if (unitMs === undefined) return undefined;

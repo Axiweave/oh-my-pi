@@ -9,6 +9,18 @@ import {
 import type { BuiltinSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
+/** mulberry32: small seeded PRNG so a failing case replays from the printed seed. */
+function rng(seed: number): () => number {
+	let state = seed >>> 0;
+	return () => {
+		state = (state + 0x6d2b79f5) >>> 0;
+		let t = state;
+		t = Math.imul(t ^ (t >>> 15), t | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
 describe("/loop slash command", () => {
 	test("forwards a bare limit argument verbatim", async () => {
 		const handleLoopCommand = vi.fn(async (_args?: string) => undefined);
@@ -313,16 +325,42 @@ describe("every clause", () => {
 		expect(parseLoopArgs("every 15m 2h go")).toEqual({ intervalMs: 900_000, prompt: "2h go" });
 	});
 
-	test.each<[string, ParsedLoopArgs]>([
-		["every 15m; a;b", { intervalMs: 900_000, prompt: "a;b" }],
-		["every 15m ; a;b", { intervalMs: 900_000, prompt: "a;b" }],
-		["every 15 minutes; a;b", { intervalMs: 900_000, prompt: "a;b" }],
-		["10; every 15m; a;b", { limit: { kind: "iterations", iterations: 10 }, intervalMs: 900_000, prompt: "a;b" }],
-		["2h; a;b", { limit: { kind: "duration", durationMs: 7_200_000 }, prompt: "a;b" }],
+	test("property: a ; after any clause parses the same as a space", () => {
+		const seed = 0x5e_9a_7e;
+		const next = rng(seed);
+		const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)]!;
+		const LIMITS = [undefined, "1", "10", "30m", "2h", "1h30m", "90 minutes", "2 hours"];
+		const EVERYS = [undefined, "every 15m", "every 1h30m", "every 45 seconds", "every 5 min"];
+		const SEPARATORS = [";", "; ", " ;", " ; "];
+		// The prompt's first word must not extend a clause: no flag, digit, unit word, or `every`.
+		const FIRST_WORDS = ["show", "check", "a;b", "report.", "fix;"];
+		const WORDS = ["every", "5m", "10", "minutes", "hours", "a;b", ";", "--x", "progress"];
+		for (let i = 0; i < 500; i++) {
+			const clauses = [pick(LIMITS), pick(EVERYS)].filter(clause => clause !== undefined);
+			if (clauses.length === 0) continue;
+			const words = [pick(FIRST_WORDS)];
+			for (let n = Math.floor(next() * 4); n > 0; n--) words.push(pick(WORDS));
+			const prompt = words.join(" ");
+			const spaced = `${clauses.join(" ")} ${prompt}`;
+			const separated = `${clauses.map(clause => clause + pick(SEPARATORS)).join(" ")}${prompt}`;
+			const where = `seed=${seed} case=${i} input=${JSON.stringify(separated)}`;
+			const parsed = parseLoopArgs(separated);
+			if (typeof parsed === "string") throw new Error(`${where} error=${parsed}`);
+			expect(parsed.prompt, where).toBe(prompt);
+			expect(parseLoopArgs(spaced), where).toEqual(parsed);
+		}
+	});
+
+	test.each<[string, ParsedLoopArgs | "LOOP_USAGE"]>([
 		["every 15m;", { intervalMs: 900_000 }],
 		["fix a; then b", { prompt: "fix a; then b" }],
-	])("one ; after a clause is a separator: %p", (input, expected) => {
-		expect(parseLoopArgs(input)).toEqual(expected);
+		// A ; ends a spaced duration: the unit word after it is prompt text.
+		["10; hours of X", { limit: { kind: "iterations", iterations: 10 }, prompt: "hours of X" }],
+		["every 15; minutes X", "LOOP_USAGE"],
+	])("separator boundary %p", (input, expected) => {
+		const parsed = parseLoopArgs(input);
+		if (expected === "LOOP_USAGE") expect(parsed).toStartWith("Usage: /loop");
+		else expect(parsed).toEqual(expected);
 	});
 
 	test("the keyword is case-insensitive", () => {
