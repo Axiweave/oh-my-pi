@@ -14,7 +14,9 @@ const spawnSessionSchema = type({
 	"text?": type("string").describe("opening prompt, handoff note, or summary focus"),
 	"cwd?": type("string").describe("absolute existing directory for the new session"),
 	"new_worktree?": type("boolean").describe("start in a new branch and worktree from the current commit"),
-	"branch?": type("string").describe("branch name for new_worktree"),
+	"branch?": type("string").describe(
+		"required with new_worktree: kebab-case topic, issue ID first only if the request names one",
+	),
 	"model?": type("string").describe("provider/id, only when the request names a different model"),
 	"tasks?": type("string[]").describe("plan only: one line for each task, 2 or more"),
 });
@@ -66,6 +68,7 @@ export class SpawnSessionTool implements AgentTool<typeof spawnSessionSchema> {
 		if (params.mode === "fork" && text) throw new ToolError("text must be empty for mode fork.");
 		if (params.cwd !== undefined && params.new_worktree) throw new ToolError("Use cwd or new_worktree, not both.");
 		if (params.branch !== undefined && !params.new_worktree) throw new ToolError("branch needs new_worktree.");
+		if (params.new_worktree && !params.branch?.trim()) throw new ToolError("new_worktree needs branch.");
 		if (params.model !== undefined && !/^[^/\s]+\/\S+$/.test(params.model)) {
 			throw new ToolError("model must be provider/id.");
 		}

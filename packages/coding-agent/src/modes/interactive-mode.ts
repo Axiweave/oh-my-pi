@@ -180,7 +180,7 @@ import {
 	canAutoCreateWorktree,
 	createSessionWorktree,
 	decideWorktreeExit,
-	defaultSessionWorktreeBranch,
+	freeBranchName,
 	describeWorktreeRisk,
 	inspectSessionWorktree,
 	planWorktreeExit,
@@ -2005,8 +2005,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#spawnKickoffSending = false;
 	// The overview answer for the open /spawn window; undefined until a `plan` call.
 	#spawnPlan: { approved: boolean; remaining: number } | undefined;
-	// Default `wt/<timestamp>` branches that spawns in the open /spawn window used.
-	#spawnBranches = new Set<string>();
 	// Spawned child side: a run started and its first message decides `cci-work`.
 	#spawnWorkPending = false;
 	// Spawned child side: chains `zmx set` calls so a late `working` never lands after `idle`.
@@ -8706,7 +8704,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#spawnKickoffSeen = false;
 		this.#spawnKickoffSending = true;
 		this.#spawnPlan = undefined;
-		this.#spawnBranches.clear();
 		this.session.setSpawnWindowOpen(true);
 		const added = ["spawn_session", ...(cfgAskEnabled.get(this.settings) ? ["ask"] : [])].filter(
 			name => !enabledTools.includes(name),
@@ -8848,16 +8845,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 		const suffix = randomSiblingSuffix();
-		let branch: string | undefined;
-		if (request.new_worktree) {
-			branch = request.branch;
-			if (branch === undefined) {
-				// The default name has one-second resolution: a second spawn in the same second of this window gets the suffix.
-				const base = defaultSessionWorktreeBranch();
-				branch = this.#spawnBranches.has(base) ? `${base}-${suffix}` : base;
-				this.#spawnBranches.add(base);
-			}
-		}
+		// A repeat spawn for the same work reuses the model's name: take the next free `-N`.
+		const branch =
+			request.new_worktree && request.branch ? await freeBranchName(sourceCwd, request.branch.trim()) : undefined;
 		if (confirm) {
 			const lines = [
 				`Mode: ${mode}`,

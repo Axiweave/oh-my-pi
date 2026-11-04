@@ -79,6 +79,15 @@ export function defaultSessionWorktreeBranch(now = new Date()): string {
 	return `wt/${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 
+/** `branch`, or `branch-N` with the first N from 2 whose ref does not exist in `cwd`'s repository. */
+export async function freeBranchName(cwd: string, branch: string): Promise<string> {
+	const repository = vcs.git(cwd);
+	if (!repository) return branch;
+	let candidate = branch;
+	for (let n = 2; await repository.refExists(`refs/heads/${candidate}`); n++) candidate = `${branch}-${n}`;
+	return candidate;
+}
+
 /** One-line confirmation shown after the session moved into `worktree`. */
 export function formatSessionWorktreeSummary(worktree: SessionWorktree, sourceCleaned = false): string {
 	const how = worktree.viaWw

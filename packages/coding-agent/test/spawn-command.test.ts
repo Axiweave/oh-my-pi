@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, setSystemTime, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -20,6 +20,9 @@ import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
+import { $ } from "bun";
+
+const realGit = vcs.git;
 
 type Harness = { mode: InteractiveMode; session: AgentSession; cleanup: () => Promise<void> };
 
@@ -341,6 +344,8 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 			[{ mode: "plan", tasks: ["A", " "] }],
 			[{ mode: "plan", tasks: ["A", "B"], text: "x" }],
 			[{ mode: "plan", tasks: ["A", "B"], new_worktree: true }],
+			[{ mode: "fresh", text: "x", new_worktree: true }],
+			[{ mode: "fresh", text: "x", new_worktree: true, branch: " " }],
 			[{ mode: "fresh", text: "x", tasks: ["A", "B"] }],
 		] as const)("the tool refuses %j", async params => {
 			const { h, handler } = await spawnHarness();
@@ -350,24 +355,23 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		});
 	});
 
-	it("two default worktree branches in one window differ, and the first keeps today's name (SC-005)", async () => {
+	it("a taken spawn branch gets the next free -N suffix", async () => {
 		const { h, handler } = await spawnHarness();
-		setSystemTime(new Date("2026-11-03T10:20:30"));
+		using repo = TempDir.createSync("@pi-spawn-branch-");
+		await $`git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && git branch feat/eng-1-x && git branch feat/eng-1-x-2`
+			.cwd(repo.path())
+			.quiet();
+		vi.spyOn(vcs, "git").mockImplementation(realGit);
+		vi.spyOn(h.session.sessionManager, "getCwd").mockReturnValue(repo.path());
 		const branches: string[] = [];
 		vi.spyOn(sessionWorktree, "createSessionWorktree").mockImplementation(async (cwd, _settings, branch) => {
 			branches.push(branch);
 			return { path: cwd, branch, sourceCwd: cwd, baseCommit: "0", keptChanges: true };
 		});
-		vi.spyOn(h.session, "prompt").mockResolvedValue(true);
-		try {
-			expect(await h.mode.handleSpawnCommand("two worktrees")).toBe(true);
-			await handler({ mode: "fresh", text: "a", new_worktree: true });
-			await handler({ mode: "fresh", text: "b", new_worktree: true });
-		} finally {
-			setSystemTime();
-		}
-		expect(branches[0]).toBe(sessionWorktree.defaultSessionWorktreeBranch(new Date("2026-11-03T10:20:30")));
-		expect(branches[1]).toStartWith(`${branches[0]}-`);
+		await startRun(h);
+		await handler({ mode: "fresh", text: "a", new_worktree: true, branch: "feat/eng-1-x" });
+		await handler({ mode: "fresh", text: "b", new_worktree: true, branch: "feat/eng-1-y" });
+		expect(branches).toEqual(["feat/eng-1-x-3", "feat/eng-1-y"]);
 	});
 
 	it("a parent started with --api-key spawns nothing and names the reason", async () => {
