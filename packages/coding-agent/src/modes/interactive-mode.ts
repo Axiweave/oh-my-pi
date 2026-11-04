@@ -1999,8 +1999,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	// Tool set from before `/spawn` opened its window; defined only while the
 	// window is open (see #beginSpawnWindow / #endSpawnWindow).
 	#spawnPreviousTools: string[] | undefined;
-	// A spawn_session call already ran in this agent run; a second call in the same run is refused (SC-008).
-	#spawnRunUsed = false;
+	// The kickoff of the open /spawn window started, so its agent_end may close it.
+	#spawnKickoffSeen = false;
+	// The /spawn kickoff is on its way to the queue, so agent_end must not close the window.
+	#spawnKickoffSending = false;
+	// The overview answer for the open /spawn window; undefined until a `plan` call.
+	#spawnPlan: { approved: boolean; remaining: number } | undefined;
+	// Default `wt/<timestamp>` branches that spawns in the open /spawn window used.
+	#spawnBranches = new Set<string>();
 	// Spawned child side: a run started and its first message decides `cci-work`.
 	#spawnWorkPending = false;
 	// Spawned child side: chains `zmx set` calls so a late `working` never lands after `idle`.
@@ -3100,10 +3106,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (event.type === "agent_end" && this.onInputCallback) this.#scheduleLoopAutoSubmit();
 				void this.#handleGoalSessionEvent(event);
 				this.#handleSpeckitSessionEvent(event);
-				if (event.type === "agent_start") this.#spawnRunUsed = false;
+				if (event.type === "message_start" && this.#spawnPreviousTools && isSpawnKickoff(event.message)) {
+					this.#spawnKickoffSeen = true;
+				}
 				if (process.env.OMP_SPAWN_PARENT && process.env.ZMX_SESSION) this.#publishSpawnState(event);
-				// FR-002: every spawn_session call closes the window, also one that failed argument validation.
-				if (event.type === "tool_execution_end" && event.toolName === "spawn_session") void this.#endSpawnWindow();
 			}),
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
 		);
@@ -6659,7 +6665,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			void this.#endGuidedLoopInterview();
 		}
-		if (this.#spawnPreviousTools && spawnWindowShouldClose(event.messages)) void this.#endSpawnWindow();
+		if (this.#spawnPreviousTools && this.#spawnWindowEnds(event.messages)) void this.#endSpawnWindow();
 		if (this.#pendingGoalContinuationTurns > 0) {
 			this.#pendingGoalContinuationTurns--;
 			const activity = goalContinuationActivity(event.messages);
@@ -8654,7 +8660,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Finish the guided loop interview first.");
 			return false;
 		}
-		// A second window would be closed by the first one's spawn call before its kickoff runs.
+		// One window at a time: it stays open until its spawn run ends (FR-014).
 		if (this.session.isSpawnWindowOpen()) {
 			this.showWarning("A /spawn is already running. Wait for it to finish.");
 			return false;
@@ -8666,17 +8672,22 @@ export class InteractiveMode implements InteractiveModeContext {
 			const kickoff = prompt.render(spawnKickoffPrompt, {
 				request: text,
 				askEnabled: cfgAskEnabled.get(this.settings),
+				confirm: cfgSpawnConfirm.get(this.settings),
 			});
 			const images = input?.images?.length ? input.images : undefined;
-			if (this.session.isStreaming) {
-				await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
-			} else {
-				try {
-					await this.session.prompt(kickoff, { synthetic: true, images, displayText, userInitiated: true });
-				} catch (error) {
-					if (!(error instanceof AgentBusyError)) throw error;
+			try {
+				if (this.session.isStreaming) {
 					await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
+				} else {
+					try {
+						await this.session.prompt(kickoff, { synthetic: true, images, displayText, userInitiated: true });
+					} catch (error) {
+						if (!(error instanceof AgentBusyError)) throw error;
+						await this.session.followUp(kickoff, images, { synthetic: true, displayText, userInitiated: true });
+					}
 				}
+			} finally {
+				this.#spawnKickoffSending = false;
 			}
 			return true;
 		} catch (error) {
@@ -8692,8 +8703,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #beginSpawnWindow(): Promise<void> {
 		const enabledTools = this.session.getEnabledToolNames();
 		this.#spawnPreviousTools ??= enabledTools;
-		// A `/spawn` queued with followUp joins the current run, which may have spawned already (SC-008).
-		this.#spawnRunUsed = false;
+		this.#spawnKickoffSeen = false;
+		this.#spawnKickoffSending = true;
+		this.#spawnPlan = undefined;
+		this.#spawnBranches.clear();
 		this.session.setSpawnWindowOpen(true);
 		const added = ["spawn_session", ...(cfgAskEnabled.get(this.settings) ? ["ask"] : [])].filter(
 			name => !enabledTools.includes(name),
@@ -8708,6 +8721,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#spawnPreviousTools = undefined;
 		this.session.setSpawnWindowOpen(false);
 		await this.session.setActiveToolsByName(previousTools);
+	}
+
+	/**
+	 * The open /spawn window ends at this agent_end (FR-015). Before its kickoff
+	 * started, it stays open only while the kickoff is being sent or is queued.
+	 * After that, only the messages after the kickoff count.
+	 */
+	#spawnWindowEnds(messages: readonly AgentMessage[]): boolean {
+		if (!this.#spawnKickoffSeen) {
+			if (this.#spawnKickoffSending) return false;
+			const { agent } = this.session;
+			return ![...agent.peekSteeringQueue(), ...agent.peekFollowUpQueue()].some(isSpawnKickoff);
+		}
+		return spawnWindowShouldClose(messages.slice(messages.findLastIndex(isSpawnKickoff) + 1));
 	}
 
 	/**
@@ -8732,17 +8759,31 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * The `spawn_session` handler: one spawn per run, and the window closes at
-	 * every call. Shows a failure in A, then throws it to the tool.
+	 * The `spawn_session` handler. The window stays open until the spawn run
+	 * ends, so each task of the request gets its own call. `plan` shows the
+	 * overview for two or more tasks. Shows a spawn failure in A, then throws it
+	 * to the tool.
 	 */
 	async #handleSpawnRequest(request: SpawnRequest): Promise<string> {
-		// Checked and set before any await, so parallel calls in one message also see it.
-		if (this.#spawnRunUsed)
-			throw new Error("spawn_session already ran in this turn; run /spawn again for another session");
-		this.#spawnRunUsed = true;
-		await this.#endSpawnWindow();
+		const confirm = cfgSpawnConfirm.get(this.settings);
+		if (request.mode === "plan") {
+			if (!confirm) return "spawn.confirm is off: no overview. Spawn each task.";
+			if (this.#spawnPlan) throw new Error("The overview already showed for this /spawn.");
+			const tasks = request.tasks ?? [];
+			const approved = await this.showHookConfirm(`Spawn these ${tasks.length} sessions?`, tasks.join("\n"), {
+				initialIndex: 1,
+				signal: request.signal,
+			});
+			this.#spawnPlan = { approved, remaining: approved ? tasks.length : 0 };
+			return approved ? `Approved: spawn the ${tasks.length} tasks.` : "Overview declined: spawn nothing.";
+		}
+		const plan = this.#spawnPlan;
+		if (plan?.approved === false) throw new Error("The user declined this /spawn.");
+		// An approved overview covers its tasks; a call beyond them asks again.
+		const covered = plan !== undefined && plan.remaining > 0;
+		if (covered) plan.remaining--;
 		try {
-			return await this.#spawnSibling(request, cfgSpawnConfirm.get(this.settings));
+			return await this.#spawnSibling(request, confirm && !covered);
 		} catch (error) {
 			this.showError(`Spawn failed: ${error instanceof Error ? error.message : String(error)}`);
 			throw error;
@@ -8806,7 +8847,17 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.ui.requestRender();
 			}
 		}
-		const branch = request.new_worktree ? (request.branch ?? defaultSessionWorktreeBranch()) : undefined;
+		const suffix = randomSiblingSuffix();
+		let branch: string | undefined;
+		if (request.new_worktree) {
+			branch = request.branch;
+			if (branch === undefined) {
+				// The default name has one-second resolution: a second spawn in the same second of this window gets the suffix.
+				const base = defaultSessionWorktreeBranch();
+				branch = this.#spawnBranches.has(base) ? `${base}-${suffix}` : base;
+				this.#spawnBranches.add(base);
+			}
+		}
 		if (confirm) {
 			const lines = [
 				`Mode: ${mode}`,
@@ -8830,7 +8881,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 		const dir = worktree?.path ?? request.cwd ?? sourceCwd;
-		const name = siblingName(parent, dir, randomSiblingSuffix());
+		const name = siblingName(parent, dir, suffix);
 		let startFile: string | undefined;
 		try {
 			if (start !== undefined) {

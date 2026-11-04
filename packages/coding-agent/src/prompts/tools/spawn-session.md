@@ -1,10 +1,11 @@
-Create one new top-level omp session in its own zmx session, from a `/spawn` request. Exists only while that request runs. The user talks to the new session directly; nothing comes back here.
+Create one new top-level omp session in its own zmx session, from a `/spawn` request. Exists only while that request runs. The user talks to each new session directly; nothing comes back here.
 
 `mode` (required), chosen from the request:
 - `fresh`: new conversation. `text` (required): self-contained opening prompt written from the request. The new session starts work on it at once.
 - `fork`: copy of this whole conversation. The new session waits for the user. `text` MUST be empty.
 - `fork_handoff`: same copy plus `text` (required) as a handoff note. The new session starts work on the note at once.
 - `handoff_summary`: new conversation that starts from a summary of this one, which OMP writes. `text`: optional focus for the summary.
+- `plan`: shows the user one overview of all tasks before any setup. ONLY when the `/spawn` instructions ask for it. ONLY with `tasks` (one line per task, 2 or more); no other field.
 
 Optional fields:
 - `cwd`: absolute path of an existing directory on this host. Default: this session's directory. After you made a worktree with a tool the request names, `cwd` is the path that tool printed.
@@ -12,10 +13,14 @@ Optional fields:
 - `branch`: branch name for `new_worktree` only. Default: a generated name.
 - `model`: `provider/id`. Set ONLY when the request names a model other than this session's.
 
-Call exactly once: the tool goes away after the first call, whatever its result. NEVER do the requested work yourself.
+Call it once per task of the request, one call at a time. NEVER do the requested work yourself.
 
 Results:
-- Error → report the reason in one short line and end your turn. The user can run `/spawn` again. If you made a worktree first, the line also names its path; it stays.
-- Spawn declined → the user said no. If you made a worktree first, report its path in one short line; it stays. End your turn.
-- NEVER remove a worktree you made for this call.
-- Spawned → report the name in one short line and end your turn.
+- Spawned → note the name; go on with the next task.
+- Error → note the reason; go on with the next task. If you made a worktree first, the line also names its path; it stays.
+- Spawn declined → the user said no to this task. Note it, plus any worktree path; go on with the next task.
+- `Approved: spawn the <N> tasks.` → spawn each task; their own dialogs do not show.
+- `spawn.confirm is off: no overview. Spawn each task.` → spawn each task.
+- `Overview declined: spawn nothing.` or `The user declined this /spawn.` → run nothing more.
+- NEVER remove a worktree you made for this request.
+- After the last task, report one short line per task and end your turn.

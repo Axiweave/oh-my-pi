@@ -63,11 +63,30 @@ function gen(next: () => number) {
 	return { int, pick, text, suffix };
 }
 
+let callId = 0;
 function assistantCalls(names: string[]): AgentMessage {
 	return {
 		role: "assistant",
-		content: names.map((name, i) => ({ type: "toolCall", id: `call-${i}`, name, arguments: {} })),
+		content: names.map(name => ({ type: "toolCall", id: `call-${callId++}`, name, arguments: {} })),
 	} as unknown as AgentMessage;
+}
+
+type AskOutcome = "none" | "error" | "chat" | "answered";
+
+/** The toolResult of the ask call that `assistantCalls` made last, or nothing for `none`. */
+function askResult(outcome: AskOutcome): AgentMessage[] {
+	if (outcome === "none") return [];
+	return [
+		{
+			role: "toolResult",
+			toolCallId: `call-${callId - 1}`,
+			toolName: "ask",
+			content: [],
+			isError: outcome === "error",
+			details: outcome === "chat" ? { chatRedirect: true } : undefined,
+			timestamp: 0,
+		} as AgentMessage,
+	];
 }
 
 function escapeRegExp(text: string): string {
@@ -151,18 +170,30 @@ describe(`sibling-spawn properties (seed ${SEED})`, () => {
 		}
 	});
 
-	it("closes the spawn window only after a run with no spawn_session and no ask call", () => {
+	it("closes the spawn window unless the run's last ask or spawn_session call is an unanswered ask", () => {
 		const g = gen(prng(SEED + 3));
 		const other = ["read", "bash", "grep", "edit", "task"];
+		const outcomes: AskOutcome[] = ["none", "error", "chat", "answered"];
+		const noise = () =>
+			Array.from({ length: g.int(3) }, () => assistantCalls(Array.from({ length: g.int(3) }, () => g.pick(other))));
 		expect(spawnWindowShouldClose([])).toBe(true);
 		for (let run = 0; run < RUNS; run++) {
-			const messages: AgentMessage[] = Array.from({ length: g.int(4) }, () =>
-				assistantCalls(Array.from({ length: g.int(3) }, () => g.pick(other))),
-			);
-			expect(spawnWindowShouldClose(messages), `seed ${SEED} run ${run}`).toBe(true);
-			const keep = g.pick(["spawn_session", "ask"]);
-			messages.splice(g.int(messages.length + 1), 0, assistantCalls([...other.slice(0, g.int(3)), keep]));
-			expect(spawnWindowShouldClose(messages), `seed ${SEED} run ${run}`).toBe(false);
+			const at = `seed ${SEED} run ${run}`;
+			const messages: AgentMessage[] = noise();
+			expect(spawnWindowShouldClose(messages), at).toBe(true);
+			// Any mix of earlier calls: only the last ask/spawn_session call decides.
+			for (let step = 0; step < 1 + g.int(4); step++) {
+				const last = g.pick(["spawn_session", "ask"]);
+				const outcome = g.pick(outcomes);
+				const earlier = g.int(2) ? [g.pick(["spawn_session", "ask"])] : [];
+				messages.push(
+					assistantCalls([...other.slice(0, g.int(3)), ...earlier, last]),
+					...(last === "ask" ? askResult(outcome) : []),
+					...noise(),
+				);
+				const close = last === "spawn_session" || outcome === "answered";
+				expect(spawnWindowShouldClose(messages), `${at} step ${step} ${last} ${outcome}`).toBe(close);
+			}
 		}
 	});
 

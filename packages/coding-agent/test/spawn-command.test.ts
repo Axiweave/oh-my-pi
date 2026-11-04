@@ -1,7 +1,7 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, setSystemTime, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -11,8 +11,11 @@ import { cfgSpawnConfirm } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as sessionWorktree from "@oh-my-pi/pi-coding-agent/session/session-worktree";
 import * as siblingSpawn from "@oh-my-pi/pi-coding-agent/session/sibling-spawn";
 import { createTools, type Tool } from "@oh-my-pi/pi-coding-agent/tools";
+import { SpawnSessionTool } from "@oh-my-pi/pi-coding-agent/tools/spawn-session";
+import { isSpawnKickoff } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -75,7 +78,49 @@ async function startRun(h: Harness): Promise<void> {
 	}
 }
 
-describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-020)", () => {
+/** Emit one agent event and wait until the session delivered it to subscribers. */
+async function emit(h: Harness, event: Parameters<Agent["emitExternalEvent"]>[0]): Promise<void> {
+	const delivered = Promise.withResolvers<void>();
+	const unsubscribe = h.session.subscribe(e => {
+		if (e.type === event.type) delivered.resolve();
+	});
+	try {
+		h.session.agent.emitExternalEvent(event);
+		await delivered.promise;
+	} finally {
+		unsubscribe();
+	}
+}
+
+/** The hidden developer message that `/spawn` sends, as `isSpawnKickoff` sees it. */
+const kickoffMessage = (request: string): AgentMessage =>
+	({
+		role: "developer",
+		content: [{ type: "text", text: "kickoff" }],
+		displayText: `/spawn ${request}`,
+		userInitiated: true,
+		synthetic: true,
+		timestamp: Date.now(),
+	}) as unknown as AgentMessage;
+
+const assistantCalls = (...names: string[]): AgentMessage =>
+	({
+		role: "assistant",
+		content: names.map((name, i) => ({ type: "toolCall", id: `call-${i}`, name, arguments: {} })),
+	}) as unknown as AgentMessage;
+
+const askResult = (isError: boolean): AgentMessage =>
+	({
+		role: "toolResult",
+		toolCallId: "call-0",
+		toolName: "ask",
+		content: [],
+		isError,
+		timestamp: Date.now(),
+	}) as unknown as AgentMessage;
+const assistantText = { role: "assistant", content: [{ type: "text", text: "ok" }] } as unknown as AgentMessage;
+
+describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)", () => {
 	let h: Harness | undefined;
 	const env = { ZMX_SESSION: process.env.ZMX_SESSION, OMP_SPAWN_PARENT: process.env.OMP_SPAWN_PARENT };
 	const argv = process.argv;
@@ -111,19 +156,14 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		return { h, create, announce, handler };
 	}
 
-	it("parallel calls in one run create one session and refuse the rest", async () => {
+	it("parallel calls in one run each create a session", async () => {
 		const { h, create, handler } = await spawnHarness();
 		await startRun(h);
 
-		const results = await Promise.allSettled([
-			handler({ mode: "fresh", text: "first" }),
-			handler({ mode: "fresh", text: "second" }),
-		]);
+		await Promise.all([handler({ mode: "fresh", text: "first" }), handler({ mode: "fresh", text: "second" })]);
 
-		expect(create).toHaveBeenCalledTimes(1);
-		expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
-		const refused = results.find(result => result.status === "rejected");
-		expect(String((refused as PromiseRejectedResult).reason)).toContain("already ran in this turn");
+		const texts = create.mock.calls.map(([args]) => fs.readFileSync(args.startFile!, "utf8"));
+		expect(texts.sort()).toEqual(["first", "second"]);
 	});
 
 	it("sends the start text only through the start file, and every failure shows once in A", async () => {
@@ -154,22 +194,26 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		expect(create).toHaveBeenCalledTimes(2);
 	});
 
-	it("a /spawn queued into a run that already spawned still creates its one session", async () => {
+	it("a /spawn window stays open for its whole run and frees the next /spawn at agent_end (SC-006)", async () => {
 		const { h, create, handler } = await spawnHarness();
 		vi.spyOn(h.session, "prompt").mockResolvedValue(true);
-		vi.spyOn(h.session, "followUp").mockResolvedValue();
+		expect(await h.mode.handleSpawnCommand("two sessions")).toBe(true);
+		const kickoff = kickoffMessage("two sessions");
 		await startRun(h);
+		await emit(h, { type: "message_start", message: kickoff });
 		await handler({ mode: "fresh", text: "first" });
-
-		// No agent_start between: the second kickoff joins the same run, as a follow-up does.
-		expect(await h.mode.handleSpawnCommand("another session")).toBe(true);
 		await handler({ mode: "fresh", text: "second" });
-		await expect(handler({ mode: "fresh", text: "third" })).rejects.toThrow("already ran in this turn");
 
 		expect(create).toHaveBeenCalledTimes(2);
+		expect(h.session.isSpawnWindowOpen()).toBe(true);
+		expect(await h.mode.handleSpawnCommand("another")).toBe(false);
+
+		await emit(h, { type: "agent_end", messages: [kickoff, assistantCalls("spawn_session", "spawn_session")] });
+		expect(h.session.isSpawnWindowOpen()).toBe(false);
+		expect(await h.mode.handleSpawnCommand("another")).toBe(true);
 	});
 
-	it("a /spawn while another /spawn window is open is refused, and the first still spawns once", async () => {
+	it("a /spawn while another /spawn window is open is refused, and the first window stays open", async () => {
 		const { h, create, handler } = await spawnHarness();
 		const promptSpy = vi.spyOn(h.session, "prompt").mockResolvedValue(true);
 		const followUp = vi.spyOn(h.session, "followUp").mockResolvedValue();
@@ -180,12 +224,150 @@ describe("spawn: one session per /spawn (SC-008) and the --api-key refusal (FR-0
 		expect(warning).toHaveBeenCalledWith("A /spawn is already running. Wait for it to finish.");
 		expect(promptSpy).toHaveBeenCalledTimes(1);
 		expect(followUp).not.toHaveBeenCalled();
-		expect(h.session.isSpawnWindowOpen()).toBe(true);
 
 		await startRun(h);
 		await handler({ mode: "fresh", text: "first" });
 		expect(create).toHaveBeenCalledTimes(1);
+		expect(h.session.isSpawnWindowOpen()).toBe(true);
+	});
+
+	it("only calls after the kickoff decide the close: an earlier ask does not keep the window open (FR-015)", async () => {
+		const { h } = await spawnHarness();
+		vi.spyOn(h.session, "prompt").mockResolvedValue(true);
+		const kickoff = kickoffMessage("x");
+
+		expect(await h.mode.handleSpawnCommand("x")).toBe(true);
+		await emit(h, { type: "message_start", message: kickoff });
+		await emit(h, { type: "agent_end", messages: [assistantCalls("ask"), kickoff, assistantCalls("read")] });
 		expect(h.session.isSpawnWindowOpen()).toBe(false);
+
+		// A cancelled ask after the kickoff keeps the window for the reply run.
+		expect(await h.mode.handleSpawnCommand("x")).toBe(true);
+		await emit(h, { type: "message_start", message: kickoff });
+		await emit(h, {
+			type: "agent_end",
+			messages: [assistantCalls("spawn_session"), kickoff, assistantCalls("ask"), askResult(true)],
+		});
+		expect(h.session.isSpawnWindowOpen()).toBe(true);
+		await emit(h, { type: "agent_end", messages: [] });
+		expect(h.session.isSpawnWindowOpen()).toBe(false);
+
+		// An answered ask followed by a text-only reply ends the /spawn: the next one is accepted.
+		expect(await h.mode.handleSpawnCommand("x")).toBe(true);
+		await emit(h, { type: "message_start", message: kickoff });
+		await emit(h, { type: "agent_end", messages: [kickoff, assistantCalls("ask"), askResult(false), assistantText] });
+		expect(h.session.isSpawnWindowOpen()).toBe(false);
+		expect(await h.mode.handleSpawnCommand("x")).toBe(true);
+	});
+
+	it("a queued kickoff keeps the window open until it runs; a dropped one frees it", async () => {
+		const { h } = await spawnHarness();
+		Object.defineProperty(h.session, "isStreaming", { configurable: true, get: () => true });
+		expect(await h.mode.handleSpawnCommand("queued")).toBe(true);
+		expect(h.session.agent.peekFollowUpQueue().some(isSpawnKickoff)).toBe(true);
+
+		// The run that was in progress ends without the kickoff; it had spawned before.
+		await emit(h, { type: "agent_end", messages: [assistantCalls("spawn_session")] });
+		expect(h.session.isSpawnWindowOpen()).toBe(true);
+
+		h.session.agent.clearFollowUpQueue();
+		await emit(h, { type: "agent_end", messages: [] });
+		expect(h.session.isSpawnWindowOpen()).toBe(false);
+		Reflect.deleteProperty(h.session, "isStreaming");
+		vi.spyOn(h.session, "prompt").mockResolvedValue(true);
+		expect(await h.mode.handleSpawnCommand("again")).toBe(true);
+	});
+
+	it("an agent_end while the kickoff is still being sent keeps the window open", async () => {
+		const { h } = await spawnHarness();
+		const sent = Promise.withResolvers<void>();
+		Object.defineProperty(h.session, "isStreaming", { configurable: true, get: () => true });
+		const sending = Promise.withResolvers<void>();
+		vi.spyOn(h.session, "followUp").mockImplementation(() => {
+			sending.resolve();
+			return sent.promise;
+		});
+		const started = h.mode.handleSpawnCommand("slow");
+		await sending.promise;
+
+		await emit(h, { type: "agent_end", messages: [] });
+		expect(h.session.isSpawnWindowOpen()).toBe(true);
+		sent.resolve();
+		expect(await started).toBe(true);
+		expect(h.session.isSpawnWindowOpen()).toBe(true);
+		Reflect.deleteProperty(h.session, "isStreaming");
+	});
+
+	describe("overview (mode plan)", () => {
+		it("an approved overview covers its tasks; a call beyond them asks again", async () => {
+			const { h, create, handler } = await spawnHarness();
+			cfgSpawnConfirm.set(h.session.settings, true);
+			const confirm = vi.spyOn(h.mode, "showHookConfirm").mockResolvedValue(true);
+			await startRun(h);
+
+			expect(await handler({ mode: "plan", tasks: ["A: fresh", "B: fresh"] })).toBe("Approved: spawn the 2 tasks.");
+			await expect(handler({ mode: "plan", tasks: ["A", "B"] })).rejects.toThrow("already showed");
+			for (const text of ["a", "b", "c"]) await handler({ mode: "fresh", text });
+
+			expect(confirm.mock.calls.map(([title]) => title)).toEqual(["Spawn these 2 sessions?", "Spawn this session?"]);
+			expect(create).toHaveBeenCalledTimes(3);
+		});
+
+		it("a declined overview spawns nothing", async () => {
+			const { h, create, handler } = await spawnHarness();
+			cfgSpawnConfirm.set(h.session.settings, true);
+			vi.spyOn(h.mode, "showHookConfirm").mockResolvedValue(false);
+			await startRun(h);
+
+			expect(await handler({ mode: "plan", tasks: ["A", "B"] })).toBe("Overview declined: spawn nothing.");
+			await expect(handler({ mode: "fresh", text: "a" })).rejects.toThrow("declined");
+			expect(create).not.toHaveBeenCalled();
+		});
+
+		it("with spawn.confirm off, shows no dialog", async () => {
+			const { h, create, handler } = await spawnHarness();
+			cfgSpawnConfirm.set(h.session.settings, false);
+			const confirm = vi.spyOn(h.mode, "showHookConfirm");
+			await startRun(h);
+
+			expect(await handler({ mode: "plan", tasks: ["A", "B"] })).toContain("spawn.confirm is off");
+			await handler({ mode: "fresh", text: "a" });
+			expect(confirm).not.toHaveBeenCalled();
+			expect(create).toHaveBeenCalledTimes(1);
+		});
+
+		it.each([
+			[{ mode: "plan", tasks: ["only one"] }],
+			[{ mode: "plan", tasks: ["A", " "] }],
+			[{ mode: "plan", tasks: ["A", "B"], text: "x" }],
+			[{ mode: "plan", tasks: ["A", "B"], new_worktree: true }],
+			[{ mode: "fresh", text: "x", tasks: ["A", "B"] }],
+		] as const)("the tool refuses %j", async params => {
+			const { h, handler } = await spawnHarness();
+			const tool = new SpawnSessionTool({ peekSpawnHandler: () => handler } as never);
+			await expect(tool.execute("call", params as never)).rejects.toThrow();
+			expect(h.session.isSpawnWindowOpen()).toBe(false);
+		});
+	});
+
+	it("two default worktree branches in one window differ, and the first keeps today's name (SC-005)", async () => {
+		const { h, handler } = await spawnHarness();
+		setSystemTime(new Date("2026-11-03T10:20:30"));
+		const branches: string[] = [];
+		vi.spyOn(sessionWorktree, "createSessionWorktree").mockImplementation(async (cwd, _settings, branch) => {
+			branches.push(branch);
+			return { path: cwd, branch, sourceCwd: cwd, baseCommit: "0", keptChanges: true };
+		});
+		vi.spyOn(h.session, "prompt").mockResolvedValue(true);
+		try {
+			expect(await h.mode.handleSpawnCommand("two worktrees")).toBe(true);
+			await handler({ mode: "fresh", text: "a", new_worktree: true });
+			await handler({ mode: "fresh", text: "b", new_worktree: true });
+		} finally {
+			setSystemTime();
+		}
+		expect(branches[0]).toBe(sessionWorktree.defaultSessionWorktreeBranch(new Date("2026-11-03T10:20:30")));
+		expect(branches[1]).toStartWith(`${branches[0]}-`);
 	});
 
 	it("a parent started with --api-key spawns nothing and names the reason", async () => {

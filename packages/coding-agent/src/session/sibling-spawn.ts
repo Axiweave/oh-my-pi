@@ -5,6 +5,8 @@
  * unpadded base64url text, the charset that zmx accepts in a label value.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { writeTerminalSequence } from "@oh-my-pi/pi-tui/terminal";
 import { wrapTmuxPassthroughIfNeeded } from "@oh-my-pi/pi-tui/tmux";
 import { logger, ptree } from "@oh-my-pi/pi-utils";
@@ -220,15 +222,29 @@ export function writeSpawnAnnouncement(name: string): void {
 	);
 }
 
-/** The spawn window closes after a run with no `spawn_session` and no `ask` call. */
+/**
+ * The spawn window closes at the end of a run unless the run's last `ask` or
+ * `spawn_session` call is an `ask` with no answer: it has no result, an error
+ * result (cancelled or interrupted), or a "chat about this" result. The
+ * user's reply run still needs the spawn tool then.
+ */
 export function spawnWindowShouldClose(messages: readonly AgentMessage[]): boolean {
-	return !messages.some(
-		message =>
-			message.role === "assistant" &&
-			message.content.some(
-				block => block.type === "toolCall" && (block.name === "spawn_session" || block.name === "ask"),
-			),
-	);
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i]!;
+		if (message.role !== "assistant") continue;
+		for (let j = message.content.length - 1; j >= 0; j--) {
+			const block = message.content[j]!;
+			if (block.type !== "toolCall") continue;
+			if (block.name === "spawn_session") return true;
+			if (block.name !== "ask") continue;
+			const result = messages.find(
+				(m, k): m is ToolResultMessage<AskToolDetails | undefined> =>
+					k > i && m.role === "toolResult" && m.toolCallId === block.id,
+			);
+			return result !== undefined && !result.isError && !result.details?.chatRedirect;
+		}
+	}
+	return true;
 }
 
 /**
