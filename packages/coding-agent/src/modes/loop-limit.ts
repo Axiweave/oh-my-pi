@@ -85,10 +85,10 @@ export function parseLoopArgs(args: string): ParsedLoopArgs | string {
 	};
 }
 
+/** Split off the first token. A `;` also ends the token, and one `;` separator after it is dropped (`every 15m; prompt`). */
 function splitFirstToken(input: string): { token: string; rest: string } {
-	const firstSpace = input.search(/\s/);
-	if (firstSpace === -1) return { token: input, rest: "" };
-	return { token: input.slice(0, firstSpace), rest: input.slice(firstSpace + 1).trim() };
+	const match = /^([^\s;]*)\s*;?\s*/.exec(input) as RegExpExecArray;
+	return { token: match[1], rest: input.slice(match[0].length).trim() };
 }
 
 /** Split an optional leading limit token off the argument string. */

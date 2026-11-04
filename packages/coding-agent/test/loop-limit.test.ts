@@ -4,6 +4,7 @@ import {
 	createLoopLimitRuntime,
 	isLoopDurationExpired,
 	parseLoopArgs,
+	type ParsedLoopArgs,
 } from "@oh-my-pi/pi-coding-agent/modes/loop-limit";
 import type { BuiltinSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -310,6 +311,18 @@ describe("every clause", () => {
 
 	test("only the first duration after every belongs to the interval", () => {
 		expect(parseLoopArgs("every 15m 2h go")).toEqual({ intervalMs: 900_000, prompt: "2h go" });
+	});
+
+	test.each<[string, ParsedLoopArgs]>([
+		["every 15m; a;b", { intervalMs: 900_000, prompt: "a;b" }],
+		["every 15m ; a;b", { intervalMs: 900_000, prompt: "a;b" }],
+		["every 15 minutes; a;b", { intervalMs: 900_000, prompt: "a;b" }],
+		["10; every 15m; a;b", { limit: { kind: "iterations", iterations: 10 }, intervalMs: 900_000, prompt: "a;b" }],
+		["2h; a;b", { limit: { kind: "duration", durationMs: 7_200_000 }, prompt: "a;b" }],
+		["every 15m;", { intervalMs: 900_000 }],
+		["fix a; then b", { prompt: "fix a; then b" }],
+	])("one ; after a clause is a separator: %p", (input, expected) => {
+		expect(parseLoopArgs(input)).toEqual(expected);
 	});
 
 	test("the keyword is case-insensitive", () => {
