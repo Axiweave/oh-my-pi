@@ -9,6 +9,7 @@ import {
 	canAutoCreateWorktree,
 	createSessionWorktree,
 	decideWorktreeExit,
+	freeBranchName,
 	inspectSessionWorktree,
 	planWorktreeExit,
 	removeExitWorktrees,
@@ -124,6 +125,25 @@ describe("session worktree helpers (real git)", () => {
 		expect(await canAutoCreateWorktree(plain)).toBe(false);
 		expect(await canAutoCreateWorktree(unborn)).toBe(false);
 		expect(await canAutoCreateWorktree(wt.path)).toBe(false);
+	});
+
+	const seed = 0x5eed;
+	it(`freeBranchName returns the base or the lowest free -N, never a taken ref (seed ${seed})`, async () => {
+		let state = seed;
+		const rand = () => ((state = (state * 1103515245 + 12345) >>> 0) >>> 16) / 65536;
+		for (let i = 0; i < 24; i++) {
+			const base = `feat/p-${i}`;
+			const baseTaken = i === 0 ? false : i === 1 ? true : rand() < 0.7;
+			const suffixes = [2, 3, 4, 5, 6].filter(() => (i === 2 ? true : rand() < 0.5));
+			const taken = new Set([...(baseTaken ? [base] : []), ...suffixes.map(n => `${base}-${n}`)]);
+			for (const name of taken) git(repo, "branch", name);
+			// Taken suffixes stop at 6, so the answer is at most -7.
+			const expected = baseTaken ? `${base}-${[2, 3, 4, 5, 6, 7].find(n => !taken.has(`${base}-${n}`))}` : base;
+			const got = await freeBranchName(repo, base);
+			expect({ seed, base, taken: [...taken], got }).toEqual({ seed, base, taken: [...taken], got: expected });
+			expect(taken.has(got)).toBe(false);
+		}
+		expect(await freeBranchName(path.join(root, "not-a-repo"), "feat/x")).toBe("feat/x");
 	});
 
 	it("replays staged and unstaged tracked edits into a ww-created worktree", async () => {
