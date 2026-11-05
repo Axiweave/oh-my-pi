@@ -197,19 +197,31 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		expect(create).toHaveBeenCalledTimes(2);
 	});
 
-	it("speckit starts B with /speckit.specify, and is refused where the command is missing", async () => {
+	it("speckit follows the commands of B's directory and starts B plain where they lack /speckit.specify", async () => {
 		const { h, create, handler } = await spawnHarness();
-		vi.spyOn(h.mode, "showError").mockImplementation(() => {});
-		await startRun(h);
-		await expect(handler({ mode: "fresh", text: "billing retry", speckit: true })).rejects.toThrow(
-			"speckit needs the /speckit.specify command in this project",
-		);
-		expect(create).not.toHaveBeenCalled();
+		using bare = TempDir.createSync("@pi-spawn-bare-");
+		using kit = TempDir.createSync("@pi-spawn-kit-");
+		fs.mkdirSync(path.join(kit.path(), ".omp", "commands"), { recursive: true });
+		fs.writeFileSync(path.join(kit.path(), ".omp", "commands", "speckit.specify.md"), "Spec: $ARGUMENTS\n");
+		const spawn = async (cwd?: string) => {
+			await startRun(h);
+			const result = await handler({ mode: "fresh", text: "billing retry", speckit: true, cwd });
+			return { result, start: fs.readFileSync(create.mock.calls.at(-1)![0].startFile!, "utf8") };
+		};
+		const skipped = (dir: string) => `; spec-kit skipped: no /speckit.specify in ${dir}`;
 
+		// A without the command, B in A's directory.
+		const plain = await spawn();
+		expect(plain.start).toBe("billing retry");
+		expect(plain.result).toEndWith(skipped(h.session.sessionManager.getCwd()));
+
+		// The check reads B's directory, not A's, both ways.
+		expect(await spawn(kit.path())).toMatchObject({ start: "/speckit.specify billing retry" });
 		h.mode.fileSlashCommands.add("speckit.specify");
-		await startRun(h);
-		await handler({ mode: "fresh", text: "billing retry", speckit: true });
-		expect(fs.readFileSync(create.mock.calls[0]![0].startFile!, "utf8")).toBe("/speckit.specify billing retry");
+		const bareRun = await spawn(bare.path());
+		expect(bareRun.start).toBe("billing retry");
+		expect(bareRun.result).toEndWith(skipped(bare.path()));
+		expect(await spawn()).toMatchObject({ start: "/speckit.specify billing retry" });
 	});
 
 	it("a /spawn window stays open for its whole run and frees the next /spawn at agent_end (SC-006)", async () => {

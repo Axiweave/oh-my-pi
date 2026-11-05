@@ -8817,9 +8817,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		if (launch.apiKeyOverride) throw new Error(FORK_API_KEY_REFUSAL);
 		const { mode } = request;
-		if (request.speckit && !this.fileSlashCommands.has("speckit.specify")) {
-			throw new Error("speckit needs the /speckit.specify command in this project");
-		}
 		const sourceCwd = this.sessionManager.getCwd();
 		let forkFile: string | undefined;
 		if (mode === "fork" || mode === "fork_handoff") {
@@ -8859,7 +8856,24 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 		// B expands it as a file command, so spec-kit and speckit-auto see a typed `/speckit.specify`.
-		if (request.speckit) start = `/speckit.specify ${start}`;
+		// B's commands come from its own directory; a new worktree has the source's. Without the
+		// command B still starts, plain, and A reports the skip instead of dropping the task.
+		let speckitSkipped = false;
+		if (request.speckit) {
+			const commands =
+				request.cwd === undefined || path.resolve(request.cwd) === path.resolve(sourceCwd)
+					? this.fileSlashCommands
+					: new Set(
+							(
+								await loadSlashCommands({
+									cwd: request.cwd,
+									extensionRoots: this.session.effectiveExtensionRoots,
+								})
+							).map(cmd => cmd.name),
+						);
+			if (commands.has("speckit.specify")) start = `/speckit.specify ${start}`;
+			else speckitSkipped = true;
+		}
 		const suffix = randomSiblingSuffix();
 		// A repeat spawn for the same work reuses the model's name: take the next free `-N`.
 		const branch =
@@ -8918,7 +8932,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		writeSpawnAnnouncement(name);
 		this.showStatus(`Spawned ${name}`);
-		return `Spawned ${name} in ${dir} (${mode})`;
+		const result = `Spawned ${name} in ${dir} (${mode})`;
+		return speckitSkipped ? `${result}; spec-kit skipped: no /speckit.specify in ${dir}` : result;
 	}
 
 	/** Spawned child side: publish `cci-state`/`cci-work` on this zmx session for the parent's `/despawn`. */
