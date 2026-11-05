@@ -197,6 +197,21 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		expect(create).toHaveBeenCalledTimes(2);
 	});
 
+	it("speckit starts B with /speckit.specify, and is refused where the command is missing", async () => {
+		const { h, create, handler } = await spawnHarness();
+		vi.spyOn(h.mode, "showError").mockImplementation(() => {});
+		await startRun(h);
+		await expect(handler({ mode: "fresh", text: "billing retry", speckit: true })).rejects.toThrow(
+			"speckit needs the /speckit.specify command in this project",
+		);
+		expect(create).not.toHaveBeenCalled();
+
+		h.mode.fileSlashCommands.add("speckit.specify");
+		await startRun(h);
+		await handler({ mode: "fresh", text: "billing retry", speckit: true });
+		expect(fs.readFileSync(create.mock.calls[0]![0].startFile!, "utf8")).toBe("/speckit.specify billing retry");
+	});
+
 	it("a /spawn window stays open for its whole run and frees the next /spawn at agent_end (SC-006)", async () => {
 		const { h, create, handler } = await spawnHarness();
 		vi.spyOn(h.session, "prompt").mockResolvedValue(true);

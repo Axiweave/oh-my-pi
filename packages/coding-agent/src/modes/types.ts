@@ -110,6 +110,8 @@ export interface InteractiveModeInitOptions {
 	autoStartCollab?: boolean;
 	/** A mode that `--goal` or `--plan-yolo` starts after init; the speckit-auto startup default gives way to it. */
 	startupBlocker?: "goal" | "plan";
+	/** A `/spawn` child that starts work: the speckit-auto startup default applies even to a forked conversation. */
+	spawnStart?: boolean;
 }
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &

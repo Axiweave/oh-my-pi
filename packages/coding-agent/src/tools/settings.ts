@@ -896,6 +896,19 @@ export const cfgSpawnConfirm = register({
 	},
 });
 
+export const cfgSpawnWorktree = register({
+	id: "spawn.worktree",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Spawn Worktree",
+		description:
+			"Start every /spawn task that changes code in its own new worktree and branch, for a pull-request workflow",
+	},
+});
+
 export const cfgForkStartReminder = register({
 	id: "fork.startReminder",
 	type: "boolean",

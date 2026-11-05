@@ -9,9 +9,10 @@ Create one new top-level omp session in its own zmx session, from a `/spawn` req
 
 Optional fields:
 - `cwd`: absolute path of an existing directory on this host. Default: this session's directory. After you made a worktree with a tool the request names, `cwd` is the path that tool printed.
-- `new_worktree`: `true` starts the new session in a new branch and worktree made from the current commit, with a copy of the uncommitted changes. Only when the request asks for a new worktree and names no tool. NEVER with `cwd`. When the new session needs a clean tree, say so in `text`.
+- `new_worktree`: `true` starts the new session in a new branch and worktree made from the current commit, with a copy of the uncommitted changes. Only when the request or the `/spawn` instructions ask for a new worktree and the request names no tool. NEVER with `cwd`. When the new session needs a clean tree, say so in `text`.
 - `branch`: branch name for `new_worktree` only. REQUIRED with `new_worktree`: a short kebab-case name for the topic (`feat/<topic>`), with the issue ID first only when the request names one (`feat/<id>-<topic>`). NEVER a date or a generic name. A name that exists gets a `-2`, `-3`, … suffix.
 - `model`: `provider/id`. Set ONLY when the request names a model other than this session's.
+- `speckit`: `true` makes the new session start with `/speckit.specify`, with `text` (or the summary for `handoff_summary`) as the feature description. ONLY when the `/spawn` instructions offer it. NEVER with `fork`.
 
 Call it once per task of the request, one call at a time. NEVER do the requested work yourself.
 

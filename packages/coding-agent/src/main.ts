@@ -757,6 +757,7 @@ async function runInteractiveMode(
 				clearInitialTerminalHistory: true,
 				autoStartCollab: joinLink === undefined,
 				startupBlocker: startupGoal !== undefined ? "goal" : startsPlanYolo ? "plan" : undefined,
+				spawnStart: spawnStartText !== undefined,
 			}),
 		);
 		startDeferredStartupWork?.();
@@ -866,8 +867,8 @@ async function runInteractiveMode(
 
 	if (spawnStartText !== undefined) {
 		try {
-			// Literal, like the `<file>` block it replaces: a leading `/` must not run a command in B.
-			await session.prompt(spawnStartText, { streamingBehavior: "steer", expandPromptTemplates: false });
+			// File commands expand, so a `/speckit.specify` start runs spec-kit. Extension commands never run in B.
+			await session.prompt(spawnStartText, { streamingBehavior: "steer", runCommands: false });
 		} catch (error: unknown) {
 			mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
 		}

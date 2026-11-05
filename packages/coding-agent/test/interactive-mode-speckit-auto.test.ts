@@ -1642,6 +1642,15 @@ describe("InteractiveMode speckit-auto mode", () => {
 				expect(mode.speckitAutoEnabled).toBe(false);
 				expect(saved()).toBeUndefined();
 			});
+
+			it(`turns a /spawn child with a forked conversation on at the ${scope} default`, async () => {
+				configure(scope);
+				session.sessionManager.appendMessage({ ...createAssistantMessage("earlier"), timestamp: ++clock });
+				session.sessionManager.appendCustomEntry(speckitAuto.SPECKIT_AUTO_ENTRY, { enabled: false, scope });
+				await start({ spawnStart: true });
+
+				expect(mode.getSpeckitAutoDescription()).toBe(description(scope));
+			});
 		}
 
 		it("leaves the mode off when the default is off", async () => {

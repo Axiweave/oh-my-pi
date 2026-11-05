@@ -11,6 +11,12 @@ Each task has its own fields:
 - `text` for `fresh`: a self-contained opening prompt with only this task. The new session sees nothing else.
 - `text` for `handoff_summary`: this task's focus. Each task gets its own summary.
 - `cwd`, `new_worktree`, `model`: set only what the request asks for this task. A new worktree with no named tool → `new_worktree`.
+{{#if worktree}}
+- Pull-request workflow: a task that changes code (feature, fix, refactor) ALWAYS gets its own new worktree, even when the request does not ask. Set `new_worktree` and `branch`, unless the request names a directory or a worktree tool. A task that only reads or investigates gets none.
+{{/if}}
+{{#if speckit}}
+- `speckit`: `true` when the request asks for spec-kit (`speckit`), or for a non-trivial feature. The new session then runs the spec-kit workflow and starts with `/speckit.specify`. `text` is the feature description (for `handoff_summary`, the summary focus). Without such a request, NEVER for a small fix, an investigation, or `fork`. NEVER when the request asks for no spec.
+{{/if}}
 - `branch`: ALWAYS set it with `new_worktree`. Use the rule under "Branch name".
 - A setup the request gives all tasks applies to each task separately: "each in its own worktree" = one worktree per task.
 {{#if askEnabled}}

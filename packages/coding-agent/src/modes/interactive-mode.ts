@@ -511,7 +511,13 @@ import {
 import { isWarpCliAgentProtocolActive } from "./warp-events";
 import { journalJudgmentUsage } from "../judgment";
 import { customMessageContentText } from "../session/checkpoint-entries";
-import { cfgAskEnabled, cfgSpawnConfirm, cfgTasksTodoClearDelay, cfgTodoHud } from "../tools/settings";
+import {
+	cfgAskEnabled,
+	cfgSpawnConfirm,
+	cfgSpawnWorktree,
+	cfgTasksTodoClearDelay,
+	cfgTodoHud,
+} from "../tools/settings";
 import { cfgWorktreeOnExit, cfgWorktreeOnStart } from "../task/settings";
 import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
@@ -3057,7 +3063,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// default through handleNewCommand instead. `speckitAuto.defaultOnStartup`
 		// follows the same rule, after plan mode so an active plan mode blocks it.
 		await this.#applyPlanModeDefault();
-		this.#applySpeckitAutoDefault(options.startupBlocker);
+		this.#applySpeckitAutoDefault(options.startupBlocker, options.spawnStart);
 
 		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
 		// One-shot: consumeDraft removes the sidecar after read so the next
@@ -4128,17 +4134,20 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * Turns the mode on in a brand-new session when `speckitAuto.defaultOnStartup` asks for it.
 	 * Brand-new means no conversation and no saved speckit-auto entry on the branch, so a
-	 * resumed session keeps its own state. Called at launch, after `/new`, and after `/delete`.
+	 * resumed session keeps its own state. A `/spawn` child that starts work counts as new
+	 * even when it forks A's conversation. Called at launch, after `/new`, and after `/delete`.
 	 */
-	#applySpeckitAutoDefault(startupBlocker?: "goal" | "plan"): void {
+	#applySpeckitAutoDefault(startupBlocker?: "goal" | "plan", spawnStart = false): void {
 		if (this.speckitAutoEnabled) return;
 		const scope = cfgSpeckitAutoDefaultOnStartup.get(this.session.settings);
 		if (scope === "off") return;
-		if (this.sessionManager.buildSessionContext().messages.length > 0) return;
-		const saved = this.sessionManager
-			.getBranch()
-			.some(entry => entry.type === "custom" && entry.customType === SPECKIT_AUTO_ENTRY);
-		if (saved) return;
+		if (!spawnStart) {
+			if (this.sessionManager.buildSessionContext().messages.length > 0) return;
+			const saved = this.sessionManager
+				.getBranch()
+				.some(entry => entry.type === "custom" && entry.customType === SPECKIT_AUTO_ENTRY);
+			if (saved) return;
+		}
 		// A global default stays quiet in projects without spec-kit.
 		if (SPECKIT_PHASE_COMMANDS.some(phase => !this.fileSlashCommands.has(`speckit.${phase}`))) return;
 		const blocker = startupBlocker ?? this.#speckitAutoBlocker();
@@ -8671,6 +8680,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				request: text,
 				askEnabled: cfgAskEnabled.get(this.settings),
 				confirm: cfgSpawnConfirm.get(this.settings),
+				worktree: cfgSpawnWorktree.get(this.settings),
+				speckit: this.fileSlashCommands.has("speckit.specify"),
 			});
 			const images = input?.images?.length ? input.images : undefined;
 			try {
@@ -8806,6 +8817,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		if (launch.apiKeyOverride) throw new Error(FORK_API_KEY_REFUSAL);
 		const { mode } = request;
+		if (request.speckit && !this.fileSlashCommands.has("speckit.specify")) {
+			throw new Error("speckit needs the /speckit.specify command in this project");
+		}
 		const sourceCwd = this.sessionManager.getCwd();
 		let forkFile: string | undefined;
 		if (mode === "fork" || mode === "fork_handoff") {
@@ -8844,6 +8858,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.ui.requestRender();
 			}
 		}
+		// B expands it as a file command, so spec-kit and speckit-auto see a typed `/speckit.specify`.
+		if (request.speckit) start = `/speckit.specify ${start}`;
 		const suffix = randomSiblingSuffix();
 		// A repeat spawn for the same work reuses the model's name: take the next free `-N`.
 		const branch =
