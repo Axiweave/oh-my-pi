@@ -158,6 +158,7 @@ import {
 	type AgentSession,
 	type AgentSessionEvent,
 	type DroppedPrompt,
+	PromptDroppedError,
 	type ResolvedRoleModel,
 	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
 } from "../session/agent-session";
@@ -326,7 +327,12 @@ import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "./status-line-host";
 import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { Composer, type ComposerPreferences, type ComposerStatusCache } from "@oh-my-pi/pi-tui/prompt/composer";
+import {
+	Composer,
+	type ComposerPreferences,
+	type ComposerStatusCache,
+	type SendMode,
+} from "@oh-my-pi/pi-tui/prompt/composer";
 import { PINNED_HUD_TOGGLE_ID } from "../task/output-manager";
 import { setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { MAGIC_KEYWORDS } from "./magic-keywords";
@@ -1462,6 +1468,8 @@ interface SpeckitStart {
 }
 /** Tick cadence of speckit-auto mode; the gap between the decision and the submit is the grace period. */
 const SPECKIT_TICK_MS = 800;
+/** Tries for one `pi:send` follow-up that omp keeps dropping before it starts (FR-031). */
+const IDE_SEND_ATTEMPTS = 3;
 /** Deadline of one speckit-auto turn check. */
 const SPECKIT_JUDGE_TIMEOUT_MS = 15_000;
 /** `/speckit-auto next` and `resume` run inside their own editor submit; the start guard must not count it. */
@@ -2315,6 +2323,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui = this.composer.ui;
 		this.editor = this.composer.editor;
 		this.composer.onAction = name => this.#handleIdeAction(name);
+		this.composer.onSend = (mode, text) => this.#handleIdeSend(mode, text);
+		this.composer.onShowStatus = message => this.showStatus(message);
 		this.editor.magicKeywordsEnabled = () => cfgMagicKeywordsEnabled.get(this.settings);
 		this.editor.placeholder = () => this.#composerHint();
 		this.editor.prediction = () => this.#eventController.composerPrediction.text;
@@ -4372,6 +4382,103 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		void this.handleForkSpawnCommand(false);
+	}
+
+	/** Tail of the `pi:send` chain: each follow-up starts after the one before it was admitted. */
+	#sendChain: Promise<void> = Promise.resolve();
+
+	/**
+	 * Set by main.ts for a Session with a start prompt; resolves once that prompt is
+	 * admitted. `pi:send` follow-ups wait for it, so the start prompt goes first.
+	 * main.ts sets it right after the constructor, before the chain's first step runs.
+	 */
+	spawnStartAdmitted: Promise<void> | undefined;
+
+	/** `queue` and `guide` follow-ups this handler put in omp's queues, with the messages it queued. */
+	#sendQueued: { text: string; queued: readonly AgentMessage[] }[] = [];
+
+	/** `pi:send` prompts that have not settled. A `stop` waits for them after its abort. */
+	#sendPending = new Set<Promise<void>>();
+
+	/**
+	 * Runs a `pi:send` follow-up (contracts/omp-send-packet.md). It needs no editor,
+	 * so an open dialog does not block it. Packets run in one chain, so one that
+	 * arrives during a `stop` waits for it (research D6). A step ends when its
+	 * prompt is admitted, not when the turn ends, so `guide` can still steer.
+	 * A `stop` keeps arrival order (FR-031): after its abort, the earlier follow-ups
+	 * that did not run go first, then the stop text.
+	 */
+	#handleIdeSend(mode: SendMode, text: string): void {
+		this.#sendChain = this.#sendChain
+			.then(async () => {
+				await this.spawnStartAdmitted;
+				// Our queued follow-ups that omp has not taken from its queues yet.
+				const stillQueued = () => {
+					const queued = [...this.session.agent.peekSteeringQueue(), ...this.session.agent.peekFollowUpQueue()];
+					return this.#sendQueued.filter(entry => queued.includes(entry.queued.at(-1)!));
+				};
+				this.#sendQueued = stillQueued();
+				if (mode === "stop") {
+					const earlier = [...this.#sendPending];
+					// Take ours out before the abort, or its drain runs a queued steer ahead of an earlier follow-up.
+					const stranded = stillQueued();
+					this.#sendQueued = [];
+					this.session.dropQueuedMessages(stranded.flatMap(entry => entry.queued));
+					await this.session.abort({ reason: USER_INTERRUPT_LABEL });
+					await this.session.waitForIdle();
+					// A follow-up that the abort dropped in its turn setup is sent again (#sendIde).
+					await Promise.all(earlier);
+					for (const entry of stranded) await this.#sendIde(entry.text, "followUp").done;
+				}
+				await this.#sendIde(text, mode === "queue" ? "followUp" : mode === "guide" ? "steer" : undefined).admitted;
+			})
+			.catch(error => this.showError(error instanceof Error ? error.message : String(error)));
+	}
+
+	/**
+	 * Prompts one `pi:send` follow-up. `admitted` resolves once omp admits it.
+	 * `done` settles with the prompt and never rejects. A drop with no reason (an
+	 * abort or a session change) sends the text again once the session is idle,
+	 * up to {@link IDE_SEND_ATTEMPTS} times. Other failures show one error line.
+	 * The text never goes into the editor.
+	 */
+	#sendIde(text: string, streamingBehavior: "steer" | "followUp" | undefined) {
+		const admitted = Promise.withResolvers<void>();
+		const done = (async () => {
+			for (let attempt = 1; ; attempt++) {
+				try {
+					// As with the start prompt, file commands expand, but extension and custom commands never run.
+					await this.session.prompt(text, {
+						streamingBehavior,
+						runCommands: false,
+						throwOnDrop: true,
+						onPromptAdmitted: admitted.resolve,
+						onPromptQueued: queued => {
+							if (streamingBehavior) this.#sendQueued.push({ text, queued });
+						},
+					});
+					return;
+				} catch (error) {
+					if (!(error instanceof PromptDroppedError) || error.reason || attempt === IDE_SEND_ATTEMPTS) throw error;
+				}
+				await this.session.waitForIdle();
+			}
+		})()
+			.catch(error =>
+				this.showError(
+					error instanceof PromptDroppedError
+						? `Follow-up dropped before it started${error.reason ? `: ${error.reason}` : "."}`
+						: error instanceof Error
+							? error.message
+							: String(error),
+				),
+			)
+			.finally(() => {
+				admitted.resolve();
+				this.#sendPending.delete(done);
+			});
+		this.#sendPending.add(done);
+		return { admitted: admitted.promise, done };
 	}
 
 	#armSpeckitTick(): void {

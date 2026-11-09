@@ -708,6 +708,8 @@ async function runInteractiveMode(
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
+	// `pi:send` follow-ups wait until the start prompt is admitted (InteractiveMode.spawnStartAdmitted).
+	const spawnStartAdmitted = spawnStartText !== undefined ? Promise.withResolvers<void>() : undefined;
 	try {
 		mode = new InteractiveModeConstructor(
 			session,
@@ -721,6 +723,7 @@ async function runInteractiveMode(
 			subagentEventBus,
 			refreshScopedModelsAfterLogin,
 		);
+		mode.spawnStartAdmitted = spawnStartAdmitted?.promise;
 		startupLease?.adopt();
 	} catch (error) {
 		startupLease?.dispose();
@@ -868,9 +871,15 @@ async function runInteractiveMode(
 	if (spawnStartText !== undefined) {
 		try {
 			// File commands expand, so a `/speckit.specify` start runs spec-kit. Extension commands never run in B.
-			await session.prompt(spawnStartText, { streamingBehavior: "steer", runCommands: false });
+			await session.prompt(spawnStartText, {
+				streamingBehavior: "steer",
+				runCommands: false,
+				onPromptAdmitted: spawnStartAdmitted?.resolve,
+			});
 		} catch (error: unknown) {
 			mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
+		} finally {
+			spawnStartAdmitted?.resolve();
 		}
 	}
 
