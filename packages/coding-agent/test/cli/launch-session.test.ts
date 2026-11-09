@@ -124,10 +124,26 @@ exit 0
 		expect((await $`git -C ${repo} worktree list`.text()).includes("[eng-1]")).toBe(false);
 	});
 
+	it("starts in a --cwd that is not a Git checkout when no --branch is given", async () => {
+		const next = prng(SEED + 1);
+		const prompt = `x${Array.from({ length: 30 }, () => PIECES[Math.floor(next() * PIECES.length)]).join("")}`;
+		const plain = path.join(root, "bin");
+		const { stdout, exitCode } = await launch(["--cwd", plain, "--json", "--", "omp"], prompt);
+		expect(exitCode, `seed ${SEED + 1}`).toBe(0);
+		const result = JSON.parse(stdout);
+		expect(result.dir).toBe(plain);
+		expect(result.branch).toBeNull();
+		expect(fs.readFileSync(path.join(zmxDir, "start"), "utf8")).toBe(prompt);
+	});
+
 	it.each([
 		["a missing --cwd", () => ["--json", "--", "omp"], "go"],
 		["a relative --cwd", () => ["--cwd", "repo", "--json", "--", "omp"], "go"],
-		["a --cwd that is not a Git checkout", () => ["--cwd", path.join(root, "bin"), "--json", "--", "omp"], "go"],
+		[
+			"a --cwd that is not a Git checkout with --branch",
+			() => ["--cwd", path.join(root, "bin"), "--branch", "b", "--json", "--", "omp"],
+			"go",
+		],
 		["a label key without cci-", () => ["--cwd", repo, "--label", "launch=1", "--json", "--", "omp"], "go"],
 		["a label without =", () => ["--cwd", repo, "--label", "cci-launch", "--json", "--", "omp"], "go"],
 		["an empty prompt", () => ["--cwd", repo, "--json", "--", "omp"], " \n\t"],

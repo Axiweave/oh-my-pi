@@ -27,7 +27,7 @@ async function launch(
 ): Promise<{ name: string; dir: string; branch: string | null }> {
 	const { cwd, branch } = flags;
 	if (!cwd || !path.isAbsolute(cwd)) throw new Error("--cwd must be an absolute path");
-	if (!vcs.git(cwd)) throw new Error(`--cwd is not a Git checkout: ${cwd}`);
+	if (branch && !vcs.git(cwd)) throw new Error(`--cwd is not a Git checkout: ${cwd}`);
 	const labels: ZmxLabels = {};
 	for (const label of flags.label ?? []) {
 		const eq = label.indexOf("=");
@@ -57,7 +57,7 @@ export default class LaunchSession extends Command {
 	static description = commandHelp.description;
 
 	static flags = {
-		cwd: Flags.string({ description: "Absolute path of the Git checkout the Session starts in" }),
+		cwd: Flags.string({ description: "Absolute path the Session starts in (a Git checkout with --branch)" }),
 		branch: Flags.string({ description: "Start in a new worktree on this branch (next free -N when taken)" }),
 		label: Flags.string({ description: "Add a cci-* zmx label KEY=VALUE (repeatable)", multiple: true }),
 		json: Flags.boolean({ description: "Print one JSON line" }),
