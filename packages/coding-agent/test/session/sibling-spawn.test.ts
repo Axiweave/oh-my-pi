@@ -3,11 +3,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as sessionWorktree from "@oh-my-pi/pi-coding-agent/session/session-worktree";
 import {
 	encodeLabels,
 	listChildren,
 	parseZmxList,
 	siblingName,
+	spawnSession,
 	spawnWindowShouldClose,
 	takeSpawnStartText,
 	worktreeFromLabels,
@@ -264,5 +268,106 @@ describe(`sibling-spawn properties (seed ${SEED})`, () => {
 		}
 		expect(spawnWorkText(undefined)).toBe("");
 		expect(spawnWorkText(noise.join("\n"))).toBe("");
+	});
+});
+
+type FailStep = "none" | "branch" | "worktree" | "startFile" | "attach" | "attachThrow";
+const FAIL_STEPS: FailStep[] = ["none", "none", "branch", "worktree", "startFile", "attach", "attachThrow"];
+
+describe(`spawnSession (seed ${SEED + 9})`, () => {
+	it("leaves no session, worktree, branch, or start file after a failed step; takes the next free branch", async () => {
+		const g = gen(prng(SEED + 9));
+		const settings = Settings.isolated();
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "omp-spawn-session-"));
+		try {
+			for (let run = 0; run < RUNS; run++) {
+				const failAt = g.pick(FAIL_STEPS);
+				const at = `seed ${SEED + 9} run ${run} fail ${failAt}`;
+				const base = `feat/b${g.int(3)}`;
+				const taken = [base, `${base}-2`, `${base}-3`].filter(() => g.int(2) === 0);
+				// Fake Git and zmx: the branches, worktrees, and live sessions they hold.
+				const branches = new Set(["main", ...taken]);
+				const worktrees = new Set(taken.map(b => `/wt/${b}`));
+				const sessions = new Set<string>();
+				const before = { branches: [...branches].sort(), worktrees: [...worktrees].sort() };
+				const useBranch = failAt === "branch" || failAt === "worktree" || g.int(2) === 0;
+				const text = failAt === "startFile" || g.int(4) > 0 ? g.text(20) : undefined;
+				const publish = g.int(2) === 0;
+				const parent = g.pick([undefined, "cci-omp-a-abc123"]);
+				let childEnv: Record<string, string | undefined> | undefined;
+				const { signal } = new AbortController();
+				vi.spyOn(os, "tmpdir").mockReturnValue(failAt === "startFile" ? path.join(tmp, "missing") : tmp);
+				vi.spyOn(vcs, "git").mockReturnValue({
+					refExists: async (ref: string) => {
+						if (failAt === "branch") throw new Error("git failed");
+						return branches.has(ref.replace(/^refs\/heads\//, ""));
+					},
+				} as never);
+				vi.spyOn(sessionWorktree, "createSessionWorktree").mockImplementation(
+					async (cwd, _settings, branch, options) => {
+						// The launch signal reaches the worktree step, so a cancel stops a slow add.
+						expect(options?.signal, at).toBe(signal);
+						if (failAt === "worktree") throw new Error("worktree failed");
+						if (branches.has(branch)) throw new Error(`Branch '${branch}' already exists`);
+						branches.add(branch);
+						worktrees.add(`/wt/${branch}`);
+						return { path: `/wt/${branch}`, branch, sourceCwd: cwd, baseCommit: "0", keptChanges: true };
+					},
+				);
+				vi.spyOn(sessionWorktree, "removeSessionWorktree").mockImplementation(async wt => {
+					worktrees.delete(wt.path);
+					branches.delete(wt.branch);
+				});
+				vi.spyOn(ptree, "exec").mockImplementation((async (
+					argv: string[],
+					options: { env?: Record<string, string | undefined> },
+				) => {
+					const ok = { stdout: "", stderr: "", exitCode: 0, ok: true };
+					if (argv[1] === "kill") sessions.delete(argv[2]!);
+					if (argv[1] !== "attach") return ok;
+					// zmx attach --labels LABELS NAME ...argv: the session exists even when attach then fails.
+					sessions.add(argv[4]!);
+					childEnv = options.env;
+					if (failAt === "attachThrow") throw new Error("spawn failed");
+					return failAt === "attach" ? { stdout: "", stderr: "boom", exitCode: 1, ok: false } : ok;
+				}) as never);
+				try {
+					const call = spawnSession({
+						dir: "/src/repo",
+						branch: useBranch ? base : undefined,
+						text,
+						argv: ["omp"],
+						env: {},
+						labels: parent ? { "cci-parent": parent } : {},
+						publishState: publish,
+						settings,
+						signal,
+					});
+					if (failAt !== "none") {
+						await expect(call, at).rejects.toThrow();
+						expect([...sessions], at).toEqual([]);
+						expect([...branches].sort(), at).toEqual(before.branches);
+						expect([...worktrees].sort(), at).toEqual(before.worktrees);
+						expect(fs.readdirSync(tmp), at).toEqual([]);
+						continue;
+					}
+					const result = await call;
+					const free = [base, `${base}-2`, `${base}-3`, `${base}-4`].find(b => !taken.includes(b));
+					expect(result.branch, at).toBe(useBranch ? free! : null);
+					expect([...sessions], at).toEqual([result.name]);
+					for (const b of before.branches) expect(branches.has(b), at).toBe(true);
+					for (const w of before.worktrees) expect(worktrees.has(w), at).toBe(true);
+					expect(childEnv?.OMP_PUBLISH_STATE, at).toBe(publish ? "1" : undefined);
+					expect(childEnv?.OMP_SPAWN_PARENT, at).toBe(parent);
+					const startFile = childEnv?.OMP_SPAWN_START_FILE;
+					expect(startFile === undefined ? undefined : fs.readFileSync(startFile, "utf8"), at).toBe(text);
+				} finally {
+					vi.restoreAllMocks();
+					for (const file of fs.readdirSync(tmp)) fs.rmSync(path.join(tmp, file));
+				}
+			}
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
 	});
 });

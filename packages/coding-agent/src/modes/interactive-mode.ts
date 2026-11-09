@@ -5,7 +5,6 @@
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as os from "node:os";
 import { type Agent, AgentBusyError, type AgentMessage, agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Message, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
@@ -178,29 +177,24 @@ import type { SessionContext } from "../session/session-context";
 import type { SessionManager } from "../session/session-manager";
 import {
 	canAutoCreateWorktree,
-	createSessionWorktree,
 	decideWorktreeExit,
 	freeBranchName,
 	describeWorktreeRisk,
 	inspectSessionWorktree,
 	planWorktreeExit,
 	removeExitWorktrees,
-	removeSessionWorktree,
 	type SessionWorktree,
 	type SessionWorktreeState,
 	type WorktreeExitAction,
 	type WorktreeExitPlan,
 } from "../session/session-worktree";
 import {
-	createSibling,
 	killSibling,
 	listChildren,
 	publishState,
-	randomSiblingSuffix,
-	siblingName,
+	spawnSession,
 	spawnWindowShouldClose,
 	worktreeFromLabels,
-	worktreeLabels,
 	writeSpawnAnnouncement,
 	zmxEntryDir,
 	type ZmxListEntry,
@@ -3113,7 +3107,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (event.type === "message_start" && this.#spawnPreviousTools && isSpawnKickoff(event.message)) {
 					this.#spawnKickoffSeen = true;
 				}
-				if (process.env.OMP_SPAWN_PARENT && process.env.ZMX_SESSION) this.#publishSpawnState(event);
+				if ((process.env.OMP_SPAWN_PARENT || process.env.OMP_PUBLISH_STATE) && process.env.ZMX_SESSION)
+					this.#publishSpawnState(event);
 			}),
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
 		);
@@ -8874,7 +8869,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (commands.has("speckit.specify")) start = `/speckit.specify ${start}`;
 			else speckitSkipped = true;
 		}
-		const suffix = randomSiblingSuffix();
 		// A repeat spawn for the same work reuses the model's name: take the next free `-N`.
 		const branch =
 			request.new_worktree && request.branch ? await freeBranchName(sourceCwd, request.branch.trim()) : undefined;
@@ -8891,45 +8885,16 @@ export class InteractiveMode implements InteractiveModeContext {
 			});
 			if (!confirmed) return "Spawn declined";
 		}
-		let worktree: SessionWorktree | undefined;
-		if (branch) {
-			try {
-				// Never cleans the source checkout: A keeps its changes (FR-023).
-				worktree = await createSessionWorktree(sourceCwd, this.settings, branch, { keepChanges: true });
-			} catch (error) {
-				throw new Error(`Worktree creation failed: ${error instanceof Error ? error.message : String(error)}`);
-			}
-		}
-		const dir = worktree?.path ?? request.cwd ?? sourceCwd;
-		const name = siblingName(parent, dir, suffix);
-		let startFile: string | undefined;
-		try {
-			if (start !== undefined) {
-				const file = path.join(os.tmpdir(), `omp-spawn-${name}.md`);
-				// B reads and deletes it at startup (takeSpawnStartText).
-				await fs.writeFile(file, start, { mode: 0o600, flag: "wx" });
-				startFile = file;
-			}
-			await createSibling({
-				name,
-				dir,
-				argv: forkFile ? [...launch.argv, "--fork", forkFile] : launch.argv,
-				env: launch.env,
-				labels: { "cci-parent": parent, ...(worktree ? worktreeLabels(worktree) : {}) },
-				startFile,
-			});
-		} catch (error) {
-			let message = error instanceof Error ? error.message : String(error);
-			if (startFile) await fs.rm(startFile, { force: true });
-			if (worktree) {
-				try {
-					await removeSessionWorktree(worktree, false);
-				} catch (cleanupError) {
-					message += `\n${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
-				}
-			}
-			throw new Error(message);
-		}
+		const { name, dir } = await spawnSession({
+			dir: branch ? sourceCwd : (request.cwd ?? sourceCwd),
+			branch,
+			text: start,
+			argv: forkFile ? [...launch.argv, "--fork", forkFile] : launch.argv,
+			env: launch.env,
+			labels: { "cci-parent": parent },
+			publishState: false,
+			settings: this.settings,
+		});
 		writeSpawnAnnouncement(name);
 		this.showStatus(`Spawned ${name}`);
 		const result = `Spawned ${name} in ${dir} (${mode})`;

@@ -11,9 +11,11 @@ import { writeTerminalSequence } from "@oh-my-pi/pi-tui/terminal";
 import { wrapTmuxPassthroughIfNeeded } from "@oh-my-pi/pi-tui/tmux";
 import { logger, ptree } from "@oh-my-pi/pi-utils";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import type { Settings } from "../config/settings";
 import { quoteOscArg } from "../utils/external-editor";
-import type { SessionWorktree } from "./session-worktree";
+import { createSessionWorktree, freeBranchName, removeSessionWorktree, type SessionWorktree } from "./session-worktree";
 
 export type SpawnMode = "fresh" | "fork" | "fork_handoff" | "handoff_summary";
 
@@ -106,8 +108,9 @@ function zmxFailure(result: ptree.ExecResult): string {
  * Create B with `zmx attach --labels … NAME …argv`. Without a TTY on stdin zmx
  * creates the session and returns. B must not inherit A's zmx target or Emacs
  * buffer. `startFile` holds B's first message (see {@link takeSpawnStartText});
- * it is set or cleared per child, so B never passes its own on. On failure the
- * half-made session is killed and the error is thrown.
+ * it is set or cleared per child, so B never passes its own on. `publishState`
+ * makes B publish `cci-state`/`cci-work` without a `cci-parent` label. On
+ * failure, or when `signal` aborts, the half-made session is killed and the error is thrown.
  */
 export async function createSibling(options: {
 	name: string;
@@ -116,8 +119,10 @@ export async function createSibling(options: {
 	env: Record<string, string | undefined>;
 	labels: ZmxLabels;
 	startFile?: string;
+	publishState?: boolean;
+	signal?: AbortSignal;
 }): Promise<void> {
-	const { name, dir, argv, env, labels, startFile } = options;
+	const { name, dir, argv, env, labels, startFile, publishState, signal } = options;
 	let failure: string | undefined;
 	try {
 		const result = await ptree.exec(["zmx", "attach", "--labels", encodeLabels(labels), name, ...argv], {
@@ -129,18 +134,89 @@ export async function createSibling(options: {
 				ZMX_SESSION_PREFIX: undefined,
 				EMACS_BUFFER_NAME: undefined,
 				OMP_SPAWN_PARENT: labels["cci-parent"],
+				OMP_PUBLISH_STATE: publishState ? "1" : undefined,
 				[SPAWN_START_FILE_ENV]: startFile,
 			},
 			allowNonZero: true,
 			timeout: ZMX_TIMEOUT_MS,
+			signal,
 		});
 		if (result.exitCode !== 0) failure = zmxFailure(result);
 	} catch (error) {
 		failure = error instanceof Error ? error.message : String(error);
 	}
+	if (failure === undefined && signal?.aborted) failure = String(signal.reason);
 	if (failure === undefined) return;
 	await ptree.exec(["zmx", "kill", name], { allowNonZero: true, timeout: ZMX_TIMEOUT_MS }).catch(() => {});
 	throw new Error(`zmx could not create ${name}: ${failure}`);
+}
+
+/**
+ * Start a Session in its own zmx session (contracts/omp-launch-session.md).
+ * `/spawn` and `omp launch-session` share it. With `branch`, the Session runs
+ * in a new worktree of `dir` on the next free name for `branch`. `text`, when
+ * set, goes to the child through a mode-0600 start file. On a failure, or when
+ * `signal` aborts, it removes what the earlier steps made, then throws.
+ */
+export async function spawnSession(options: {
+	dir: string;
+	branch?: string;
+	text?: string;
+	argv: string[];
+	env: Record<string, string | undefined>;
+	labels: ZmxLabels;
+	publishState: boolean;
+	settings: Settings;
+	signal?: AbortSignal;
+}): Promise<{ name: string; dir: string; branch: string | null }> {
+	const { text, argv, env, labels, publishState, settings, signal } = options;
+	signal?.throwIfAborted();
+	let worktree: SessionWorktree | undefined;
+	if (options.branch) {
+		const branch = await freeBranchName(options.dir, options.branch);
+		try {
+			// Never cleans the source checkout: it keeps its changes (FR-023).
+			worktree = await createSessionWorktree(options.dir, settings, branch, { keepChanges: true, signal });
+		} catch (error) {
+			throw new Error(`Worktree creation failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	const dir = worktree?.path ?? options.dir;
+	const name = siblingName(labels["cci-parent"], dir, randomSiblingSuffix());
+	let startFile: string | undefined;
+	try {
+		// The ww path and the worktree steps after git do not take the signal, so check it here.
+		signal?.throwIfAborted();
+		if (text !== undefined) {
+			const file = path.join(os.tmpdir(), `omp-spawn-${name}.md`);
+			// The child reads and deletes it at startup (takeSpawnStartText).
+			await fs.promises.writeFile(file, text, { mode: 0o600, flag: "wx" });
+			startFile = file;
+		}
+		// createSibling kills the zmx session it half made.
+		await createSibling({
+			name,
+			dir,
+			argv,
+			env,
+			labels: { ...labels, ...(worktree ? worktreeLabels(worktree) : {}) },
+			startFile,
+			publishState,
+			signal,
+		});
+	} catch (error) {
+		let message = error instanceof Error ? error.message : String(error);
+		if (startFile) await fs.promises.rm(startFile, { force: true });
+		if (worktree) {
+			try {
+				await removeSessionWorktree(worktree, false);
+			} catch (cleanupError) {
+				message += `\n${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+			}
+		}
+		throw new Error(message);
+	}
+	return { name, dir, branch: worktree?.branch ?? null };
 }
 
 async function listZmx(): Promise<ZmxListEntry[]> {

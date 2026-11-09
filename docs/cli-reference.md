@@ -316,6 +316,7 @@ Run `omp <command> --help` for each command's own flags and examples.
 | `images`, `img`             | Inspect, diagnose, probe, and purge image publication backends.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |                                                                                                                                                      |
 | `install`                   | Install or link an extension package (alias of `plugin install` / `plugin link`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | [extensions](./extensions.md)                                                                                                                        |
 | `join`                      | Join a shared collab session (same as `/join`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | [collab](./collab.md)                                                                                                                                |
+| `launch-session`            | Start an omp Session in its own zmx session for an outside caller (for example the Intake): the opening prompt comes on stdin, `--branch` adds a worktree on the next free branch name, and `--json` prints one line `{"name","dir","branch"}` or `{"error"}`.                                                                                                                                                                                                                                                                                                                                                         | [Launch sessions](#launch-sessions)                                                                                                                  |
 | `login`                     | Log in to a model provider from the terminal (counterpart of `/login`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |                                                                                                                                                      |
 | `models`                    | List, search, and refresh available models.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | [models](./models.md)                                                                                                                                |
 | `plugin`, `plugins`         | Manage plugins (install, uninstall, list, etc.).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | [extensions](./extensions.md), [marketplace](./marketplace.md)                                                                                       |
@@ -363,3 +364,51 @@ commit's own ignore rules, after its tree and index have been written. Caches
 ignored by the target remain, even if the source did not ignore them. Nested
 repositories are preserved and symlinks are not followed. This target-ignore
 cleanup is skipped when keeping the source's uncommitted changes.
+
+### Launch sessions
+
+`omp launch-session` starts a Session in a new zmx session, the same way
+`/spawn` starts a Sibling Session. A program such as the Intake runs it:
+
+```bash
+echo "Fix ENG-123" | omp launch-session --cwd /abs/repo --branch eng-123 \
+  --label cci-launch=x1y2 --json -- omp --profile work --auto-approve
+```
+
+- stdin carries the opening prompt. It must not be empty. The prompt goes to
+  the Session through a mode-0600 start file, so `zmx list` never shows it.
+- `--cwd` is an absolute path to a Git checkout.
+- `--branch` starts the Session in a new worktree. A taken name gets the next
+  free `-N` suffix (`eng-123-2`). Without `--branch`, the Session runs in `--cwd`.
+- `--label KEY=VALUE` adds one zmx label. Keys start with `cci-`. Values are
+  stored as base64url.
+- The words after `--` are the omp command that runs in the zmx session.
+
+With `--json`, success prints `{"name":"cci-omp-…","dir":"…","branch":"eng-123"}`
+(`branch` is `null` without `--branch`) and exits 0. A refusal or failure prints
+`{"error":"<reason>"}` and exits 1, and no zmx session, worktree, branch, or
+start file from the call remains. The Session publishes `cci-state` and
+`cci-work` on its zmx session, like a Sibling Session.
+
+#### Follow-up packet `pi:send`
+
+A running Session takes a follow-up message as one APC packet on its terminal
+input, for example through `zmx send NAME <packet>`:
+
+```text
+ESC _ pi:send;<mode>.<payload> ESC \
+```
+
+`<payload>` is the UTF-8 text as unpadded base64url (at most 64 KiB of text).
+`<mode>` selects the delivery:
+
+| Mode    | Effect                                                                       |
+| ------- | ---------------------------------------------------------------------------- |
+| `queue` | Waits until the running turn ends, then runs. Starts a turn when idle.       |
+| `guide` | Joins the running turn as a steering message. Starts a turn when idle.       |
+| `stop`  | Stops the running turn, waits until the Session is idle, then starts a turn. |
+
+Packets run in arrival order, also when a `stop` waits for its turn to end. An
+open dialog does not block a packet, and the draft in the editor does not
+change. A packet with a bad mode or payload does nothing and shows one status
+line.

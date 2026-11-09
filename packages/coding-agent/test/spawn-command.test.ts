@@ -442,10 +442,13 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 
 			expect(showError).not.toHaveBeenCalled();
 			expect(create).toHaveBeenCalledTimes(1);
-			const { name, argv, labels, startFile } = create.mock.calls[0]![0];
+			const { name, argv, labels, startFile, publishState } = create.mock.calls[0]![0];
 			expect(argv.slice(-2)).toEqual(["--fork", path.resolve(file)]);
 			expect(startFile).toBeUndefined();
 			expect(labels).toEqual({ "cci-parent": "cci-omp-spawncmd-abc123" });
+			// A Sibling Session publishes its state through cci-parent, not OMP_PUBLISH_STATE.
+			expect(publishState).toBe(false);
+			expect(name.startsWith("cci-omp-")).toBe(true);
 			expect(announce.mock.calls).toEqual([[name]]);
 			expect(showStatus.mock.calls).toEqual([[`Spawned ${name}`]]);
 			expect(prompt).not.toHaveBeenCalled();

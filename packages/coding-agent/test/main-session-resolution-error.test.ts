@@ -10,7 +10,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Args } from "@oh-my-pi/pi-coding-agent/cli/args";
-import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createSessionManager, SessionResolutionError, writeStartupNotice } from "@oh-my-pi/pi-coding-agent/main";
 import {
 	collectPendingToolCalls,
@@ -57,7 +57,7 @@ function buildForkArgs(fork: string, noSession = false, sessionDir?: string): Ar
 	};
 }
 
-const stubSettings = { get: () => undefined } as unknown as Settings;
+const stubSettings = Settings.isolated();
 
 const ORIGINAL_STDOUT_WRITE = process.stdout.write.bind(process.stdout);
 const ORIGINAL_STDERR_WRITE = process.stderr.write.bind(process.stderr);

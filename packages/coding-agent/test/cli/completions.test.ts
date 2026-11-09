@@ -258,7 +258,8 @@ describe("live completion surface", () => {
 		expect(stdout).toContain("_omp_call sessions");
 		expect(stdout).toContain("command omp __complete $kind");
 		// Hidden/default commands must NOT surface as completable subcommands.
-		expect(stdout).not.toContain("_omp_cmd_launch");
+		// `\b`: the visible `launch-session` command renders as `_omp_cmd_launch_session`.
+		expect(stdout).not.toMatch(/_omp_cmd_launch\b/);
 		expect(stdout).not.toContain("_omp_cmd___complete");
 	}, 30_000);
 });
