@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setWorktreesDir } from "@oh-my-pi/pi-utils";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { Settings } from "../../src/config/settings";
 import {
 	canAutoCreateWorktree,
@@ -170,6 +171,78 @@ describe("session worktree helpers (real git)", () => {
 		} finally {
 			process.env.PATH = savedPath;
 		}
+	});
+
+	it("deletes the new branch when git cannot add the worktree", async () => {
+		// A read-only worktree base lets createBranch succeed and worktreeAdd fail.
+		const base = path.join(root, "wt");
+		await fs.mkdir(base);
+		await fs.chmod(base, 0o555);
+		try {
+			await expect(create()).rejects.toThrow();
+		} finally {
+			await fs.chmod(base, 0o755);
+		}
+		expect(branchSha(repo, branch)).toBeNull();
+		expect(worktreePaths(repo)).toEqual([repo]);
+	});
+
+	it("aborts a slow worktree add on the signal and removes the branch and worktree", async () => {
+		// The add makes the worktree, then waits for the signal, as a slow clone does.
+		const proto = Object.getPrototypeOf(vcs.requireGit(repo));
+		const realAdd = proto.worktreeAdd;
+		const waiting = Promise.withResolvers<void>();
+		const spy = spyOn(proto, "worktreeAdd").mockImplementation(async function (
+			this: unknown,
+			p: string,
+			ref: string,
+			opts: unknown,
+			signal?: AbortSignal,
+		) {
+			await realAdd.call(this, p, ref, opts);
+			if (!signal) throw new Error("worktreeAdd got no signal");
+			const { promise, reject } = Promise.withResolvers<never>();
+			signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+			waiting.resolve();
+			return promise;
+		});
+		try {
+			const controller = new AbortController();
+			const pending = createSessionWorktree(repo, Settings.isolated({ "worktree.ww": false }), branch, {
+				signal: controller.signal,
+			});
+			await Promise.race([waiting.promise, pending]);
+			expect(worktreePaths(repo)).toHaveLength(2);
+			controller.abort(new Error("cancelled"));
+			await expect(pending).rejects.toThrow("cancelled");
+		} finally {
+			spy.mockRestore();
+		}
+		expect(branchSha(repo, branch)).toBeNull();
+		expect(worktreePaths(repo)).toEqual([repo]);
+	});
+
+	it("removes the ww worktree and branch when the change replay fails", async () => {
+		// Fake `ww create`: the new worktree's tracked.txt differs, so the staged diff cannot apply.
+		const bin = path.join(root, "bin");
+		await fs.mkdir(bin);
+		await Bun.write(
+			path.join(bin, "ww"),
+			`#!/bin/sh\nset -e\ndest="${root}/ww-$(echo "$2" | tr / -)"\ngit worktree add -q -b "$2" "$dest" >&2\necho other > "$dest/tracked.txt"\necho "$dest"\n`,
+		);
+		await fs.chmod(path.join(bin, "ww"), 0o755);
+		await Bun.write(path.join(repo, "tracked.txt"), "staged\n");
+		git(repo, "add", ".");
+		const savedPath = process.env.PATH;
+		process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+		try {
+			await expect(createSessionWorktree(repo, Settings.isolated(), branch)).rejects.toThrow();
+		} finally {
+			process.env.PATH = savedPath;
+		}
+		expect(branchSha(repo, branch)).toBeNull();
+		expect(worktreePaths(repo)).toEqual([repo]);
+		expect(await exists(path.join(root, "ww-wt-test-session"))).toBe(false);
 	});
 
 	it("removes a clean worktree and deletes its branch", async () => {

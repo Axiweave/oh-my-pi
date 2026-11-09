@@ -89,6 +89,7 @@
 
 ### Fixed
 
+- `/wt`, `worktree.onStart`, `/spawn`, and `omp launch-session` no longer leave a new branch or worktree behind when the worktree create fails. Before, a failed `git worktree add` kept the new branch, and a failed change replay after `ww create` kept the ww worktree.
 - A loop no longer repeats a prompt that you typed between runs instead of its own prompt. Only the first prompt after `/loop`, `/loop … <prompt>`, or `/guided-loop` sets the loop prompt. A later prompt runs once, and the loop keeps its schedule. Esc pauses the loop and keeps its prompt. A typed prompt does not start it again, and `/loop` with arguments resumes it. A switch to another session (`/new`, `/resume`, `/delete`, a branch, an in-place `/fork`) now turns loop mode off, so the old session's loop prompt does not run in the new session. A cancelled switch keeps the loop. A reset loop keeps running across its own resets. When a hook cancels the reset, the loop pauses and does not send its prompt into the old context. Automatic runs also wait while a session switch is in progress.
 - With cyber mode on, background job captions and job widgets no longer use a built-in `smol` default model that the cyber allowlist excludes. Before, the `widget` role fallback skipped the allowlist.
 - A snapcompact archive's text budget now uses the `compaction.modelOverrides` threshold for the reading model. Before, the budget used only `compaction.modelThresholds`.

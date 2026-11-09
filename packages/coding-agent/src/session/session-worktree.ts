@@ -129,13 +129,15 @@ export async function cleanSourceCheckoutIfConfigured(
 }
 /**
  * Create the worktree for `/wt`. Throws with a user-facing message when `cwd`
- * is not a git checkout, `branch` already exists, or git refuses.
+ * is not a git checkout, `branch` already exists, or git refuses. A failure
+ * after the branch or worktree exists removes them before it throws. `signal`
+ * aborts the native worktree add, and that failure cleans up the same way.
  */
 export async function createSessionWorktree(
 	cwd: string,
 	settings: Settings,
 	branch: string,
-	options: { keepChanges?: boolean } = {},
+	options: { keepChanges?: boolean; signal?: AbortSignal } = {},
 ): Promise<SessionWorktree> {
 	const keepChanges = options.keepChanges ?? true;
 	try {
@@ -167,12 +169,22 @@ export async function createSessionWorktree(
 	await fs.mkdir(path.dirname(worktreePath), { recursive: true });
 
 	await repository.createBranch(branch, baseCommit, false);
-	const result = await repository.worktreeAdd(worktreePath, branch, {
-		detach: false,
-		clone: cfgWorktreeClone.get(settings),
-		backend: parseIsolationBackend(cfgIsolationBackend.get(settings)),
-		keepChanges,
-	});
+	const result = await repository
+		.worktreeAdd(
+			worktreePath,
+			branch,
+			{
+				detach: false,
+				clone: cfgWorktreeClone.get(settings),
+				backend: parseIsolationBackend(cfgIsolationBackend.get(settings)),
+				keepChanges,
+			},
+			options.signal,
+		)
+		.catch(async (err: unknown) => {
+			await discardFailedWorktree(repository, worktreePath, branch);
+			throw err;
+		});
 	return {
 		path: await fs.realpath(worktreePath),
 		branch,
@@ -202,18 +214,29 @@ async function createWwWorktree(
 	if (result.exitCode !== 0 || !destination) {
 		throw new Error(`ww create failed: ${result.stderr.toString().trim() || `exit code ${result.exitCode}`}`);
 	}
-	const worktreePath = await fs.realpath(destination);
-	if (keepChanges) {
-		const target = vcs.requireGit(worktreePath);
-		const staged = await repository.diffText({ cached: true, binary: true });
-		if (staged) {
-			await target.applyPatch(staged, { cached: true });
-			await target.applyPatch(staged, {});
+	try {
+		const worktreePath = await fs.realpath(destination);
+		if (keepChanges) {
+			const target = vcs.requireGit(worktreePath);
+			const staged = await repository.diffText({ cached: true, binary: true });
+			if (staged) {
+				await target.applyPatch(staged, { cached: true });
+				await target.applyPatch(staged, {});
+			}
+			const unstaged = await repository.diffText({ binary: true });
+			if (unstaged) await target.applyPatch(unstaged, {});
 		}
-		const unstaged = await repository.diffText({ binary: true });
-		if (unstaged) await target.applyPatch(unstaged, {});
+		return { path: worktreePath, branch, viaWw: true, sourceCwd: cwd, baseCommit, keptChanges: keepChanges };
+	} catch (err) {
+		await discardFailedWorktree(repository, destination, branch);
+		throw err;
 	}
-	return { path: worktreePath, branch, viaWw: true, sourceCwd: cwd, baseCommit, keptChanges: keepChanges };
+}
+
+/** Best effort: remove the worktree and branch a failed create made, so a failure leaves neither behind. */
+async function discardFailedWorktree(repository: VcsGitRepo, worktreePath: string, branch: string): Promise<void> {
+	await repository.worktreeRemove(worktreePath, true).catch(() => false);
+	await repository.deleteBranch(branch, true).catch(() => false);
 }
 
 export interface WorktreeDestination {
