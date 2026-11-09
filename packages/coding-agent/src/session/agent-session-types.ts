@@ -459,7 +459,8 @@ export interface PromptOptions {
 	runCommands?: boolean;
 	/**
 	 * Reject with `PromptDroppedError` when the prompt is dropped before
-	 * reaching the agent, instead of resolving `true` (default: false).
+	 * reaching the agent, instead of resolving `true` (default: false). The
+	 * caller then owns the drop: the host's `setPromptDropped` hook is not called.
 	 */
 	throwOnDrop?: boolean;
 	/** Image attachments. */

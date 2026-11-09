@@ -665,9 +665,10 @@ class AgentStartPolicyChangedError extends Error {
  * prompt was dropped before reaching the agent (an abort, session transition,
  * or usage preflight denial won the race with turn setup). The prompt was not
  * persisted, so resubmitting it is safe. Headless drivers use this to retry.
+ * `reason` says why the session refused it (e.g. the cost cap); absent for an abort.
  */
 export class PromptDroppedError extends Error {
-	constructor() {
+	constructor(readonly reason?: string) {
 		super("Prompt dropped before provider dispatch.");
 		this.name = "PromptDroppedError";
 	}
@@ -8602,7 +8603,8 @@ export class AgentSession implements SettingsScope {
 	 *
 	 * A prompt dropped before dispatch also resolves `true` (RPC reports it as
 	 * aborted once no run started); pass `throwOnDrop: true` to reject with
-	 * {@link PromptDroppedError} instead.
+	 * {@link PromptDroppedError} instead. The caller then owns the drop: the
+	 * {@link setPromptDropped} hook does not hear of it.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		return this.#admitSubmission(() => this.#prompt(text, options));
@@ -8778,6 +8780,7 @@ export class AgentSession implements SettingsScope {
 			);
 			outcome.sessionClaimed = queued;
 			if (!queued && this.#promptGeneration !== queueGeneration && !options?.synthetic) {
+				if (options?.throwOnDrop) throw new PromptDroppedError();
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			return true;
@@ -8824,6 +8827,7 @@ export class AgentSession implements SettingsScope {
 		if (this.#promptGeneration !== preflightGeneration) {
 			outcome.sessionClaimed = false;
 			if (!options?.synthetic) {
+				if (options?.throwOnDrop) throw new PromptDroppedError();
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			return true;
@@ -8934,7 +8938,7 @@ export class AgentSession implements SettingsScope {
 			});
 		} catch (error) {
 			turnError = error;
-			if (error instanceof AgentStartPolicyChangedError && message.role === "user") {
+			if (error instanceof AgentStartPolicyChangedError && message.role === "user" && !options?.throwOnDrop) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			throw error;
@@ -8947,15 +8951,15 @@ export class AgentSession implements SettingsScope {
 			void this.#finishTurnObservation(observation, turnError);
 		}
 		outcome.sessionClaimed = dispatched;
+		const refusal = !dispatched && this.#costCapRefusal !== refusalBeforeDispatch ? this.#costCapRefusal : undefined;
+		if (!dispatched && options?.throwOnDrop) throw new PromptDroppedError(refusal?.message);
 		if (!dispatched && message.role === "user") {
 			// An abort (Esc), preflight denial or the cost cap raced turn setup: the
 			// prompt never reached the agent or the session file. Hand it back to the
 			// host so the user can edit/resubmit instead of losing it (tree/branch
 			// can't offer a message that was never persisted).
-			const refusal = this.#costCapRefusal !== refusalBeforeDispatch ? this.#costCapRefusal : undefined;
 			this.#promptDropped?.({ text: typedText, images: options?.images, reason: refusal?.message });
 		}
-		if (!dispatched && options?.throwOnDrop) throw new PromptDroppedError();
 		return true;
 	}
 
