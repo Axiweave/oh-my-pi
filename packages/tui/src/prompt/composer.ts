@@ -248,6 +248,23 @@ function rowTargetCandidates(target: Component): ((local: number) => string[]) |
 	};
 }
 
+/** How a `pi:send` follow-up reaches the session: queued after the turn, steered into it, or after a stop. */
+export type SendMode = "queue" | "guide" | "stop";
+
+/** `<mode>.<unpadded base64url UTF-8 text>`, or `undefined` for a bad mode, a bad payload, or empty text. */
+function decodeSendPacket(value: string): { mode: SendMode; text: string } | undefined {
+	const match = /^(queue|guide|stop)\.([A-Za-z0-9_-]*)$/.exec(value);
+	// One base64 character past a full group carries fewer than 8 bits: no valid encoding ends so.
+	if (!match || match[2]!.length % 4 === 1) return undefined;
+	try {
+		const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+		const text = decoder.decode(Buffer.from(match[2]!, "base64url"));
+		return text ? { mode: match[1] as SendMode, text } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Canonical interactive composer, usable before session/settings exist and updatable in place.
  * It owns the terminal, welcome header, and editor; InteractiveMode later supplies authoritative
@@ -257,6 +274,22 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	readonly ui: TUI;
 	/** Receives each `pi:action;<name>` packet. InteractiveMode sets it after it adopts the composer; unset drops the packet. */
 	onAction?: (name: string) => void;
+	/** Valid `pi:send` packets that arrived before {@link onSend} was set, in arrival order. */
+	#pendingSends: { mode: SendMode; text: string }[] = [];
+	#onSend?: (mode: SendMode, text: string) => void;
+	/**
+	 * Receives each valid `pi:send;<mode>.<base64url text>` packet (contracts/omp-send-packet.md); never touches the draft.
+	 * Packets that arrive before it is set are held and delivered in order when it is set.
+	 */
+	get onSend(): ((mode: SendMode, text: string) => void) | undefined {
+		return this.#onSend;
+	}
+	set onSend(handler: ((mode: SendMode, text: string) => void) | undefined) {
+		this.#onSend = handler;
+		if (handler) for (const send of this.#pendingSends.splice(0)) handler(send.mode, send.text);
+	}
+	/** Shows one status line, for a `pi:send` packet with a bad mode or payload. */
+	onShowStatus?: (message: string) => void;
 	#editor: CustomEditor;
 	readonly #header = new Container();
 	readonly #bootstrapInputGap = new Spacer(1);
@@ -361,10 +394,15 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			// `pi:prompt;<name>` replaces the leading slash command (or nests a wrapper in
 			// front of it); `pi:keyword;<word>` puts a standalone word (ultrathink,
 			// orchestrate, workflowz, …) at the message start; `pi:action;<name>` runs a
-			// named host action and never touches the editor.
-			const match = /^\x1b_pi:(prompt|keyword|action);([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
+			// named host action and `pi:send;<mode>.<payload>` a follow-up; neither touches the editor.
+			const match = /^\x1b_pi:(prompt|keyword|action|send);([^\s/\x00-\x1f\x7f-\x9f]+)\x1b\\$/u.exec(data);
 			if (match?.[1] === "action") this.onAction?.(match[2] ?? "");
-			else if (match && this.ui.getFocused() === this.editor) {
+			else if (data.startsWith("\x1b_pi:send;")) {
+				const send = match ? decodeSendPacket(match[2] ?? "") : undefined;
+				if (!send) this.onShowStatus?.("Ignored a pi:send packet: bad mode or payload.");
+				else if (this.#onSend) this.#onSend(send.mode, send.text);
+				else this.#pendingSends.push(send);
+			} else if (match && this.ui.getFocused() === this.editor) {
 				// A `->` / `=>` queue draft keeps its header line: the command or keyword
 				// belongs to the queued body, not in front of the shorthand.
 				const body = queueShorthandBodyStart(this.editor.getText());

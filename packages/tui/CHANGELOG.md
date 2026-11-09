@@ -14,6 +14,7 @@
 - Added `SpeckitAutoStatus.stopAfter`. When it is set, the `mode` segment shows `Speckit→<phase>` instead of `Speckit`, for example `Speckit→analyze · plan`.
 - Added `CustomEditor.toggleQueuePrefix` and the `app.message.toggleQueue` keybinding (default `Alt+Q`, `Alt+Shift+Q`). The toggle adds a `->` header line to the draft, or removes any `->` / `=>` prefix. The cursor keeps its place in the body.
 - Added `Composer.onAction`. It receives the name of each `ESC _ pi:action;<name> ESC \` packet, and the packet never reaches the editor.
+- Added `Composer.onSend`, `Composer.onShowStatus`, and the `SendMode` type (`queue`, `guide`, `stop`). `onSend` receives the mode and the decoded text of each `ESC _ pi:send;<mode>.<base64url text> ESC \` packet, and the packet never reaches the editor. A packet that arrives before `onSend` is set waits, and `onSend` gets it in arrival order when it is set. A bad mode, a bad payload, or empty text calls `onShowStatus` once and does not call `onSend`.
 
 ### Fixed
 
