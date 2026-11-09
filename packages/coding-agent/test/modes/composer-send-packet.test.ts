@@ -14,10 +14,9 @@ import type {
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import * as siblingSpawn from "@oh-my-pi/pi-coding-agent/session/sibling-spawn";
 import { COMPOSER_DEFAULTS, Composer, type SendMode } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { ptree, TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
 
 const SEED = 0x24_5e_4d;
@@ -280,7 +279,9 @@ describe("InteractiveMode pi:send handler", () => {
 				listeners.push(listener);
 				return subscribe(listener);
 			});
-			const published = vi.spyOn(siblingSpawn, "publishState").mockResolvedValue();
+			const exec = vi
+				.spyOn(ptree, "exec")
+				.mockResolvedValue({ stdout: "", stderr: "", exitCode: 0, ok: true } as ptree.ExecResult);
 			vi.spyOn(vcs, "repo").mockReturnValue(null);
 			vi.spyOn(vcs, "git").mockReturnValue(null);
 			h.mode.ui.injectDebugInput(packet("queue", "follow-up"));
@@ -295,14 +296,29 @@ describe("InteractiveMode pi:send handler", () => {
 				["prompt", "start", "steer"],
 				["prompt", "follow-up", "followUp"],
 			]);
-			// The follow-up's turn reaches the cci-state subscriber that init set up.
+			// Each follow-up turn reaches the cci-state subscriber that init set up.
 			const turn = [
 				{ type: "agent_start" },
 				{ type: "message_start", message: { role: "user", content: "follow-up", timestamp: 1 } },
 				{ type: "agent_end", messages: [] },
 			] as unknown as AgentSessionEvent[];
-			for (const event of turn) for (const listener of listeners) await listener(event);
-			expect(published.mock.calls).toEqual([["working", "follow-up"], ["idle"]]);
+			const sets = () => exec.mock.calls.map(([argv]) => argv as string[]).filter(argv => argv[1] === "set");
+			for (let n = 0; n < 2; n++) for (const event of turn) for (const listener of listeners) await listener(event);
+			for (let i = 0; i < 100 && sets().length < 4; i++) await Promise.resolve();
+			// Each `zmx set` argv decoded to its labels: cci-turn rides with cci-state=idle, 1 then 2.
+			const labels = sets().map(argv =>
+				Object.fromEntries(
+					argv
+						.slice(3)
+						.map(pair => [pair.split("=")[0], Buffer.from(pair.split("=")[1]!, "base64url").toString()]),
+				),
+			);
+			expect(labels).toEqual([
+				{ "cci-state": "working", "cci-work": "follow-up" },
+				{ "cci-state": "idle", "cci-work": "", "cci-turn": "1" },
+				{ "cci-state": "working", "cci-work": "follow-up" },
+				{ "cci-state": "idle", "cci-work": "", "cci-turn": "2" },
+			]);
 		} finally {
 			for (const [key, value] of Object.entries(env)) {
 				if (value === undefined) delete process.env[key];

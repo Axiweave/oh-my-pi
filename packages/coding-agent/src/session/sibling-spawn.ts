@@ -272,17 +272,19 @@ export function spawnWorkText(work: string | undefined): string {
 /**
  * Publish B's working state on its own zmx session for the parent's
  * `/despawn` confirmation (`cci-work` is {@link spawnWorkText}). `idle`
- * removes it. Never rejects: a failure is logged at debug.
+ * removes it. A `turn` goes in the same `zmx set` call as `cci-turn`.
+ * Never rejects: a failure is logged at debug.
  */
-export async function publishState(state: "working" | "idle", work?: string): Promise<void> {
+export async function publishState(state: "working" | "idle", work?: string, turn?: number): Promise<void> {
 	const session = process.env.ZMX_SESSION;
 	if (!session) return;
-	const text = state === "working" ? spawnWorkText(work) : "";
+	const labels: ZmxLabels = { "cci-state": state, "cci-work": state === "working" ? spawnWorkText(work) : "" };
+	if (turn !== undefined) labels["cci-turn"] = String(turn);
 	try {
-		const result = await ptree.exec(
-			["zmx", "set", session, ...encodeLabels({ "cci-state": state, "cci-work": text }).split(" ")],
-			{ allowNonZero: true, timeout: ZMX_TIMEOUT_MS },
-		);
+		const result = await ptree.exec(["zmx", "set", session, ...encodeLabels(labels).split(" ")], {
+			allowNonZero: true,
+			timeout: ZMX_TIMEOUT_MS,
+		});
 		if (result.exitCode !== 0) logger.debug("zmx set cci-state failed", { session, error: zmxFailure(result) });
 	} catch (error) {
 		logger.debug("zmx set cci-state failed", { session, error: String(error) });

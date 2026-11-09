@@ -2017,6 +2017,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#spawnWorkPending = false;
 	// Spawned child side: chains `zmx set` calls so a late `working` never lands after `idle`.
 	#spawnStatePublish: Promise<void> = Promise.resolve();
+	// Spawned child side: agent_end count, published as `cci-turn`.
+	#spawnTurn = 0;
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
 	// In-flight #enterVibeMode promise: set before the activateVibeTools await
@@ -9022,7 +9024,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#spawnStatePublish = this.#spawnStatePublish.then(() => publishState("working", work));
 		} else if (event.type === "agent_end") {
 			this.#spawnWorkPending = false;
-			this.#spawnStatePublish = this.#spawnStatePublish.then(() => publishState("idle"));
+			const turn = ++this.#spawnTurn;
+			this.#spawnStatePublish = this.#spawnStatePublish.then(() => publishState("idle", undefined, turn));
 		}
 	}
 
