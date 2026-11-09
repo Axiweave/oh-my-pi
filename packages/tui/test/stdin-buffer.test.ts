@@ -995,6 +995,42 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual([`${head}\x1b\\`]);
 		});
 
+		const sendSeed = 0x5e4d_0054;
+		it.each([
+			["on", true],
+			["off", false],
+		])(
+			`keeps a 64 KiB pi:send packet whole across small delayed reads, kitty %s (seed ${sendSeed})`,
+			(_name, kitty) => {
+				// contracts/omp-send-packet.md: `zmx send` over SSH may split the packet anywhere,
+				// with gaps past the key flush timer. Run r first cuts the packet after byte 3 + r,
+				// so each prefix of the `\x1b_pi:` opener waits out the timer once. A cut after the
+				// bare `\x1b_` is left out: without the kitty protocol it is Alt+_ for every APC reply.
+				setKittyProtocolActive(kitty);
+				vi.useFakeTimers();
+				let state = sendSeed;
+				const next = (max: number) => {
+					state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+					return state % max;
+				};
+				const packet = `\x1b_pi:send;queue.${Buffer.from("🙂x\n".repeat(10_922)).toString("base64url")}\x1b\\`;
+				for (let run = 0; run < 8; run++) {
+					emittedSequences = [];
+					for (let at = 0; at < packet.length;) {
+						const end = at === 0 ? 3 + run : Math.min(packet.length, at + 1 + next(64));
+						processInput(packet.slice(at, end));
+						vi.advanceTimersByTime(at === 0 ? 50 : next(40));
+						at = end;
+					}
+					vi.advanceTimersByTime(1000);
+					expect(
+						emittedSequences.length === 1 && emittedSequences[0] === packet,
+						`seed ${sendSeed} kitty ${kitty} run ${run}: ${emittedSequences.length} sequences, first ${JSON.stringify(emittedSequences[0]?.slice(0, 16))}`,
+					).toBe(true);
+				}
+			},
+		);
+
 		it("preserves the next input after an interrupted OSC across chunk boundaries", () => {
 			for (const partial of ["\x1b]", "\x1b]5522;type=read:status=DATA;AA"]) {
 				for (const next of ["\x1b]5522;type=paste:status=OK\x07", "\x1b]52;c;AA==\x1b\\", "\x1b[A"]) {

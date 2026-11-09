@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Without the kitty keyboard protocol, a `pi:` host packet (`ESC _ pi:…`) that arrives in pieces with pauses no longer becomes typed text. `StdinBuffer` now holds `ESC _ pi:` as the start of a string sequence, the same as other APC replies.
 - The status-line `mode` segment now shows `Prewalk` beside the active mode (plan, goal, vibe, speckit auto, or loop). Before, an armed prewalk took the whole segment and hid the mode, for example `Speckit · on`.
 - Escape no longer lets a hidden autocomplete popup reappear after it interrupts the active response. Added `Editor.cancelAutocomplete()`.
 - Image validation now rejects unrecognized bytes labeled as a supported image format before verified paste preparation.

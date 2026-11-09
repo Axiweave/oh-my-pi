@@ -82,9 +82,9 @@ const STRING_DORMANT_MS = 10_000;
 // that diverges is recognized as soon as it does:
 // - OSC: numeric command then `;` (`\x1b]11;`, `\x1b]5522;`).
 // - DCS: DECRQSS/XTGETTCAP `\x1bP1$r` / `\x1bP1+r`, XTVERSION `\x1bP>|`, DA3 `\x1bP!|`.
-// - APC: kitty graphics `\x1b_G`, TSP `\x1b_tsp;`, Glyph Protocol `\x1b_25a1;`.
+// - APC: kitty graphics `\x1b_G`, TSP `\x1b_tsp;`, Glyph Protocol `\x1b_25a1;`, omp host packets `\x1b_pi:`.
 const LEGACY_STRING_REPLY_OPENER =
-	/^(?:\x1b\]\d+(?:;|$)|\x1bP(?:\d(?:[$+](?:r|$)|$)|[>!](?:\||$))|\x1b_(?:G|t(?:s(?:p(?:;|$)|$)|$)|2(?:5(?:a(?:1(?:;|$)|$)|$)|$)))/;
+	/^(?:\x1b\]\d+(?:;|$)|\x1bP(?:\d(?:[$+](?:r|$)|$)|[>!](?:\||$))|\x1b_(?:G|t(?:s(?:p(?:;|$)|$)|$)|2(?:5(?:a(?:1(?:;|$)|$)|$)|$)|p(?:i(?::|$)|$)))/;
 
 // SGR mouse report bodies live between `<` and the terminating `M`/`m`.
 // Matched only when the trailing byte is a valid terminator, so the regex
