@@ -609,7 +609,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		get description() {
 			return `Toggle loop mode. While enabled, the next prompt you send becomes the loop prompt and re-submits after every yield. Later prompts run once and keep the loop prompt. Bound it with a count/duration, run it on a fixed schedule with \`every <duration>\` (it runs again that long after each run starts), or gate it with \`--until '<cmd>'\` / \`--while '<cmd>'\` — the command's exit status decides whether the next iteration runs. /loop with arguments replaces a running loop or resumes a paused one. ${formatKeyHint("escape")} pauses the loop; a bare /loop disables it. Changing the session disables it.`;
 		},
-		inlineHint: "[count|duration] [every <duration>] [--while|--until '<cmd>'] [prompt]",
+		inlineHint: "[count|duration] [every [+]<duration>] [--while|--until '<cmd>'] [prompt]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.speckitAutoEnabled) return "Loop: blocked by speckit-auto mode";

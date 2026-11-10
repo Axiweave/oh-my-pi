@@ -3929,8 +3929,20 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(parsed);
 			return undefined;
 		}
+		// `every +<duration>` arms a run one interval out; with nothing to repeat there is nothing to arm.
+		if (parsed.later && !parsed.prompt && !this.loopPrompt) {
+			this.showError("every +<duration> needs a prompt, for example /loop every +1h check CI.");
+			return undefined;
+		}
 		const replacing = this.loopModeEnabled;
 		this.#enableLoopMode(parsed.limit, parsed.condition, Boolean(parsed.prompt), parsed.intervalMs);
+		if (parsed.later) {
+			// No run now: the interval counts from this command, and the dispatcher gets no prompt.
+			if (parsed.prompt) this.setLoopPrompt(parsed.prompt);
+			else this.#loopRunStartedAt = Date.now();
+			this.#scheduleLoopAutoSubmit();
+			return undefined;
+		}
 		if (replacing) {
 			// A new prompt goes through the dispatcher and restarts the schedule.
 			// Otherwise re-arm the kept prompt; this also resumes a paused loop. During a
@@ -8735,8 +8747,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Keep the copyable `/loop` line: the next status would otherwise overwrite it in place.
 		this.lastStatus = undefined;
 		const loopPrompt = await this.handleLoopCommand(request.args);
-		// The interview already ended; handleLoopCommand showed the error.
-		if (!loopPrompt) return "cancelled";
+		// `every +<duration>` armed its first run instead of returning a prompt.
+		if (!loopPrompt) return this.loopModeEnabled && this.loopPrompt ? "started" : "cancelled";
 		// Same first run as a typed `/loop … prompt`: a manual run once the tool turn ends.
 		this.setLoopPrompt(loopPrompt);
 		this.#loopFirstRunQueued = true;

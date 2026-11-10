@@ -30,7 +30,7 @@ const TIME_UNITS_MS = new Map<string, number>([
 ]);
 
 const LOOP_USAGE =
-	"Usage: /loop [count|duration] [every <duration>] [--while|--until '<command>'] [prompt]. Examples: /loop 10, /loop every 15m check CI, /loop 20 --until 'bun test' fix the failing tests. A bare /loop turns loop mode off.";
+	"Usage: /loop [count|duration] [every [+]<duration>] [--while|--until '<command>'] [prompt]. Examples: /loop 10, /loop every 15m check CI, /loop every +1h check CI (first run in 1h), /loop 20 --until 'bun test' fix the failing tests. A bare /loop turns loop mode off.";
 
 /**
  * Flag → `until` polarity. `--while` continues while the command succeeds;
@@ -50,6 +50,8 @@ export interface ParsedLoopArgs {
 	prompt?: string;
 	/** Fixed time between the starts of two runs, from `every <duration>`. */
 	intervalMs?: number;
+	/** `every +<duration>`: the first run waits one interval instead of starting at once. */
+	later?: boolean;
 }
 
 /**
@@ -82,6 +84,7 @@ export function parseLoopArgs(args: string): ParsedLoopArgs | string {
 		condition: conditionResult.condition,
 		prompt: conditionResult.rest || undefined,
 		intervalMs: intervalResult.intervalMs,
+		later: intervalResult.later,
 	};
 }
 
@@ -117,15 +120,16 @@ function takeLoopLimit(input: string): { limit?: LoopLimitConfig; rest: string }
 	return LOOP_USAGE;
 }
 
-/** Split an optional `every <duration>` clause off the argument string. */
-function takeLoopInterval(input: string): { intervalMs?: number; rest: string } | string {
+/** Split an optional `every [+]<duration>` clause off the argument string. */
+function takeLoopInterval(input: string): { intervalMs?: number; later?: boolean; rest: string } | string {
 	const keyword = splitFirstToken(input);
 	if (keyword.token.toLowerCase() !== "every") return { rest: input };
 	const value = splitFirstToken(keyword.rest);
 	if (!value.token) return "every needs a duration, for example /loop every 15m.";
-	const token = value.token.toLowerCase();
+	const later = value.token.startsWith("+");
+	const token = value.token.slice(later ? 1 : 0).toLowerCase();
 	// "every file has a test": prose, not an interval.
-	if (!/^[+-]?\d/.test(token)) return { rest: input };
+	if (!/^[+-]?\d/.test(value.token)) return { rest: input };
 
 	const duration = takeDuration(token, value.rest, value.separated);
 	if (typeof duration === "string") return duration;
@@ -136,7 +140,7 @@ function takeLoopInterval(input: string): { intervalMs?: number; rest: string } 
 	if (next.token.toLowerCase() === "every" && /^[+-]?\d/.test(splitFirstToken(next.rest).token)) {
 		return "Use only one every.";
 	}
-	return { intervalMs: duration.durationMs, rest: duration.rest };
+	return { intervalMs: duration.durationMs, later: later || undefined, rest: duration.rest };
 }
 
 /**

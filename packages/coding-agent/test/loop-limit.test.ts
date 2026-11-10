@@ -313,7 +313,7 @@ describe("every clause", () => {
 		["every 15m every 5m", "Use only one every."],
 	])("%p is an error", (input, error) => {
 		const parsed = parseLoopArgs(input);
-		if (error === "LOOP_USAGE") expect(parsed).toStartWith("Usage: /loop [count|duration] [every <duration>]");
+		if (error === "LOOP_USAGE") expect(parsed).toStartWith("Usage: /loop [count|duration] [every [+]<duration>]");
 		else expect(parsed).toBe(error);
 	});
 
@@ -323,6 +323,19 @@ describe("every clause", () => {
 
 	test("only the first duration after every belongs to the interval", () => {
 		expect(parseLoopArgs("every 15m 2h go")).toEqual({ intervalMs: 900_000, prompt: "2h go" });
+	});
+
+	test.each<[string, ParsedLoopArgs]>([
+		["every +1h go", { intervalMs: 3_600_000, later: true, prompt: "go" }],
+		[
+			"3 every +90 seconds go",
+			{ limit: { kind: "iterations", iterations: 3 }, intervalMs: 90_000, later: true, prompt: "go" },
+		],
+		["every 1h +2 go", { intervalMs: 3_600_000, prompt: "+2 go" }],
+		["every + 1h", { prompt: "every + 1h" }],
+		["every ++1h", { prompt: "every ++1h" }],
+	])("every with + prefix: %p", (input, expected) => {
+		expect(parseLoopArgs(input)).toEqual(expected);
 	});
 
 	test("property: a ; after any clause parses the same as a space", () => {

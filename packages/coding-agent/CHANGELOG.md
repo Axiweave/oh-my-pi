@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added `/loop every +<duration>`, for example `/loop every +1h check CI`. The `+` skips the immediate run: the first run starts one interval after the command, then the loop repeats on the interval as before. The guided-loop `loop` tool accepts `every: "+1h"` too.
 - Added the `worktree.ww` setting (default `true`). When the `ww` CLI is on PATH, `/wt`, `worktree.onStart`, and `/spawn` new worktrees use `ww create <branch>`. ww selects the destination and copies untracked and ignored files. omp applies the staged and unstaged tracked changes to the new worktree.
 - Added `/spawn <request>`. The model turns the request into a call to the hidden `spawn_session` tool, which starts a new top-level omp session in its own zmx session (fresh, fork, fork with a handoff note, or handoff summary, with an optional directory, new worktree, or model) and announces it to Emacs. The `spawn.confirm` setting (default off) asks yes/no first.
 - Added `/despawn`. It lists the sessions that this session spawned, ends the one you pick, and applies `worktree.onExit` to a worktree that the spawn created.

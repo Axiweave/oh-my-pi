@@ -714,6 +714,17 @@ describe("InteractiveMode loop auto-submit", () => {
 				expect(mode.loopIntervalMs).toBe(30_000);
 			});
 
+			it("every +<duration> runs nothing now and the first run one interval later", async () => {
+				const start = Date.now();
+				waitForRun();
+				expect(await mode.handleLoopCommand("every +60s tick")).toBeUndefined();
+				expect(mode.loopPrompt).toBe("tick");
+				await advance(MINUTE - 1);
+				expect(runs).toHaveLength(0);
+				await advance(1);
+				expect(runs).toEqual([{ text: "tick", at: start + MINUTE }]);
+			});
+
 			it("changes nothing on an invalid replace", async () => {
 				vi.spyOn(mode, "showError").mockImplementation(() => {});
 				mode.loopLimit = createLoopLimitRuntime({ kind: "iterations", iterations: 5 });

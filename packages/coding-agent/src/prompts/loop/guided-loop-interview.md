@@ -18,7 +18,7 @@ Before other work, interview in normal conversation:
 
 Setup ready only when these are settled:
 1. Prompt — what each run checks, does, and reports.
-2. Frequency — after each turn, or `every <duration>` (seconds, minutes, hours: `45s`, `15m`, `1h30m`).
+2. Frequency — after each turn, or `every <duration>` (seconds, minutes, hours: `45s`, `15m`, `1h30m`); `every +<duration>` waits one interval before the first run.
 3. Stop rule — run count, total time, `while` / `until` shell command, or none.
 
 Ask only about these parts; `/loop` sets nothing else. No stop rule → warn once that the loop runs until a bare `/loop` and spends tokens on each run; then accept the answer.
