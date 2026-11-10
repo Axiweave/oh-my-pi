@@ -20,7 +20,7 @@ import { ptree, TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
 
 const SEED = 0x24_5e_4d;
-const MODES: SendMode[] = ["queue", "guide", "stop"];
+const MODES: SendMode[] = ["queue", "guide", "stop", "notice"];
 
 // mulberry32
 function prng(seed: number): () => number {
@@ -121,7 +121,10 @@ describe(`composer pi:send packets (seed ${SEED})`, () => {
 		composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
 		composer.start();
 		const next = prng(SEED);
-		const early = Array.from({ length: 12 }, (_, run) => [MODES[run % 3]!, genText(next, run)] as [SendMode, string]);
+		const early = Array.from(
+			{ length: 12 },
+			(_, run) => [MODES[run % MODES.length]!, genText(next, run)] as [SendMode, string],
+		);
 		for (const [mode, text] of early) term.sendInput(packet(mode, text));
 		const sent: [SendMode, string][] = [];
 		composer.onSend = (mode, text) => sent.push([mode, text]);
@@ -172,10 +175,11 @@ describe("InteractiveMode pi:send handler", () => {
 	});
 
 	/**
-	 * An InteractiveMode whose session records prompt/abort/waitForIdle calls in
-	 * order. With `holdAbort`, `abort` records its call, then waits for `releaseAbort`.
+	 * An InteractiveMode whose session records prompt/abort/waitForIdle/sendCustomMessage
+	 * calls in order. With `holdAbort`, `abort` records its call, then waits for
+	 * `releaseAbort`. With `holdIdle`, `waitForIdle` does the same with `releaseIdle`.
 	 */
-	async function harness(holdAbort = false) {
+	async function harness(holdAbort = false, holdIdle = false) {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-send-packet-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -205,6 +209,7 @@ describe("InteractiveMode pi:send handler", () => {
 			return promise;
 		};
 		const abortGate = Promise.withResolvers<void>();
+		const idleGate = Promise.withResolvers<void>();
 		vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
 			record(["prompt", text, options?.streamingBehavior]);
 			return true;
@@ -215,10 +220,107 @@ describe("InteractiveMode pi:send handler", () => {
 		});
 		vi.spyOn(session, "waitForIdle").mockImplementation(async () => {
 			record(["waitForIdle"]);
+			if (holdIdle) await idleGate.promise;
+		});
+		vi.spyOn(session, "sendCustomMessage").mockImplementation(async (message, options) => {
+			record(["sendCustomMessage", message, options]);
+			return false;
 		});
 		const showError = vi.spyOn(mode, "showError").mockImplementation(() => {});
-		return { mode, session: theSession, calls, settled, showError, releaseAbort: abortGate.resolve };
+		return {
+			mode,
+			session: theSession,
+			calls,
+			settled,
+			showError,
+			releaseAbort: abortGate.resolve,
+			releaseIdle: idleGate.resolve,
+		};
 	}
+
+	const NOTICE = { customType: "intake-notice", content: "n", display: true, attribution: "agent" };
+
+	it("sends a notice as one display-only custom message once the session is idle, with no prompt and no turn", async () => {
+		const h = await harness();
+		h.mode.ui.injectDebugInput(packet("notice", "n"));
+		await h.settled(2);
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+		// No deliverAs and no triggerTurn: an idle session appends and paints it without a turn.
+		expect(h.calls).toEqual([["waitForIdle"], ["sendCustomMessage", NOTICE, undefined]]);
+		expect(h.showError).not.toHaveBeenCalled();
+	});
+
+	it("keeps arrival order around a notice at an idle session", async () => {
+		const h = await harness();
+		h.mode.ui.injectDebugInput(packet("queue", "q1"));
+		h.mode.ui.injectDebugInput(packet("notice", "n"));
+		h.mode.ui.injectDebugInput(packet("queue", "q2"));
+		await h.settled(4);
+		expect(h.calls).toEqual([
+			["prompt", "q1", "followUp"],
+			["waitForIdle"],
+			["sendCustomMessage", NOTICE, undefined],
+			["prompt", "q2", "followUp"],
+		]);
+	});
+
+	it("holds a notice until a busy session is idle, and a later guide still steers the running turn", async () => {
+		const h = await harness(false, true);
+		Object.defineProperty(h.session, "isStreaming", { get: () => true, configurable: true });
+		h.mode.ui.injectDebugInput(packet("notice", "n"));
+		h.mode.ui.injectDebugInput(packet("guide", "g"));
+		await h.settled(2);
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+		expect(h.calls).toEqual([["waitForIdle"], ["prompt", "g", "steer"]]);
+		h.releaseIdle();
+		await h.settled(3);
+		expect(h.calls.at(-1)).toEqual(["sendCustomMessage", NOTICE, undefined]);
+		expect(h.calls.length).toBe(3);
+	});
+
+	/** Each `zmx set` argv the spied `ptree.exec` got, decoded to its labels. */
+	function zmxSetLabels(exec: { mock: { calls: unknown[][] } }) {
+		return exec.mock.calls
+			.map(([argv]) => argv as string[])
+			.filter(argv => argv[1] === "set")
+			.map(argv =>
+				Object.fromEntries(
+					argv
+						.slice(3)
+						.map(pair => [pair.split("=")[0], Buffer.from(pair.split("=")[1]!, "base64url").toString()]),
+				),
+			);
+	}
+
+	/** Runs `body` with this process in a zmx session that publishes `cci-state`. */
+	async function inPublishingChild(body: () => Promise<void>) {
+		const env = { ZMX_SESSION: process.env.ZMX_SESSION, OMP_PUBLISH_STATE: process.env.OMP_PUBLISH_STATE };
+		process.env.ZMX_SESSION = "cci-send-startup";
+		process.env.OMP_PUBLISH_STATE = "1";
+		try {
+			await body();
+		} finally {
+			for (const [key, value] of Object.entries(env)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	}
+
+	it("publishes cci-state=idle at turn 0 once at startup when the child has no start prompt", async () => {
+		await inPublishingChild(async () => {
+			await harness();
+			const exec = vi
+				.spyOn(ptree, "exec")
+				.mockResolvedValue({ stdout: "", stderr: "", exitCode: 0, ok: true } as ptree.ExecResult);
+			vi.spyOn(vcs, "repo").mockReturnValue(null);
+			vi.spyOn(vcs, "git").mockReturnValue(null);
+			await mode!.init({ suppressWelcomeIntro: true });
+			for (let i = 0; i < 100 && zmxSetLabels(exec).length < 1; i++) await Promise.resolve();
+			for (let i = 0; i < 20; i++) await Promise.resolve();
+			expect(zmxSetLabels(exec)).toEqual([{ "cci-state": "idle", "cci-work": "", "cci-turn": "0" }]);
+		});
+	});
 
 	it("maps queue to followUp, guide to steer, and stop to abort, waitForIdle, then prompt", async () => {
 		const h = await harness();
@@ -265,10 +367,7 @@ describe("InteractiveMode pi:send handler", () => {
 	});
 
 	it("holds a packet sent during startup until main.ts admits the start prompt, so its turn publishes state", async () => {
-		const env = { ZMX_SESSION: process.env.ZMX_SESSION, OMP_PUBLISH_STATE: process.env.OMP_PUBLISH_STATE };
-		process.env.ZMX_SESSION = "cci-send-startup";
-		process.env.OMP_PUBLISH_STATE = "1";
-		try {
+		await inPublishingChild(async () => {
 			const h = await harness();
 			// main.ts sets the gate right after the constructor (runInteractiveMode).
 			const startAdmitted = Promise.withResolvers<void>();
@@ -302,29 +401,16 @@ describe("InteractiveMode pi:send handler", () => {
 				{ type: "message_start", message: { role: "user", content: "follow-up", timestamp: 1 } },
 				{ type: "agent_end", messages: [] },
 			] as unknown as AgentSessionEvent[];
-			const sets = () => exec.mock.calls.map(([argv]) => argv as string[]).filter(argv => argv[1] === "set");
 			for (let n = 0; n < 2; n++) for (const event of turn) for (const listener of listeners) await listener(event);
-			for (let i = 0; i < 100 && sets().length < 4; i++) await Promise.resolve();
-			// Each `zmx set` argv decoded to its labels: cci-turn rides with cci-state=idle, 1 then 2.
-			const labels = sets().map(argv =>
-				Object.fromEntries(
-					argv
-						.slice(3)
-						.map(pair => [pair.split("=")[0], Buffer.from(pair.split("=")[1]!, "base64url").toString()]),
-				),
-			);
-			expect(labels).toEqual([
+			for (let i = 0; i < 100 && zmxSetLabels(exec).length < 4; i++) await Promise.resolve();
+			// With a start prompt, no idle at startup: cci-turn rides with cci-state=idle, 1 then 2.
+			expect(zmxSetLabels(exec)).toEqual([
 				{ "cci-state": "working", "cci-work": "follow-up" },
 				{ "cci-state": "idle", "cci-work": "", "cci-turn": "1" },
 				{ "cci-state": "working", "cci-work": "follow-up" },
 				{ "cci-state": "idle", "cci-work": "", "cci-turn": "2" },
 			]);
-		} finally {
-			for (const [key, value] of Object.entries(env)) {
-				if (value === undefined) delete process.env[key];
-				else process.env[key] = value;
-			}
-		}
+		});
 	});
 
 	/** An InteractiveMode on a real session whose model answers through `handler`. */

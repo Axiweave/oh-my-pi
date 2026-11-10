@@ -248,12 +248,15 @@ function rowTargetCandidates(target: Component): ((local: number) => string[]) |
 	};
 }
 
-/** How a `pi:send` follow-up reaches the session: queued after the turn, steered into it, or after a stop. */
-export type SendMode = "queue" | "guide" | "stop";
+/**
+ * How a `pi:send` text reaches the session: queued after the turn, steered into it, after a stop,
+ * or as a `notice` that enters the context once the session is idle and starts no turn.
+ */
+export type SendMode = "queue" | "guide" | "stop" | "notice";
 
 /** `<mode>.<unpadded base64url UTF-8 text>`, or `undefined` for a bad mode, a bad payload, or empty text. */
 function decodeSendPacket(value: string): { mode: SendMode; text: string } | undefined {
-	const match = /^(queue|guide|stop)\.([A-Za-z0-9_-]*)$/.exec(value);
+	const match = /^(queue|guide|stop|notice)\.([A-Za-z0-9_-]*)$/.exec(value);
 	// One base64 character past a full group carries fewer than 8 bits: no valid encoding ends so.
 	if (!match || match[2]!.length % 4 === 1) return undefined;
 	try {

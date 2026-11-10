@@ -49,7 +49,7 @@ fi
 if [ "$1" = attach ]; then
   printf '%s\\n' "$@" > "$ZMX_DIR/argv"
   printf '%s' "$OMP_PUBLISH_STATE" > "$ZMX_DIR/publish"
-  cat "$OMP_SPAWN_START_FILE" > "$ZMX_DIR/start" && rm -f "$OMP_SPAWN_START_FILE"
+  [ -n "$OMP_SPAWN_START_FILE" ] && cat "$OMP_SPAWN_START_FILE" > "$ZMX_DIR/start" && rm -f "$OMP_SPAWN_START_FILE"
 fi
 exit 0
 `,
@@ -137,6 +137,18 @@ exit 0
 	});
 
 	it.each([
+		["empty", ""],
+		["whitespace-only", " \n\t"],
+	])("starts the child with no start file on %s stdin", async (_case, stdin) => {
+		const { stdout, exitCode, calls } = await launch(["--cwd", repo, "--json", "--", "omp"], stdin);
+		expect(exitCode).toBe(0);
+		expect(Object.keys(JSON.parse(stdout)).sort()).toEqual(["branch", "dir", "name"]);
+		expect(calls).toBe("attach\n");
+		expect(fs.readFileSync(path.join(zmxDir, "publish"), "utf8")).toBe("1");
+		expect(fs.existsSync(path.join(zmxDir, "start"))).toBe(false);
+	});
+
+	it.each([
 		["a missing --cwd", () => ["--json", "--", "omp"], "go"],
 		["a relative --cwd", () => ["--cwd", "repo", "--json", "--", "omp"], "go"],
 		[
@@ -146,7 +158,6 @@ exit 0
 		],
 		["a label key without cci-", () => ["--cwd", repo, "--label", "launch=1", "--json", "--", "omp"], "go"],
 		["a label without =", () => ["--cwd", repo, "--label", "cci-launch", "--json", "--", "omp"], "go"],
-		["an empty prompt", () => ["--cwd", repo, "--json", "--", "omp"], " \n\t"],
 		["an empty CHILD_ARGV", () => ["--cwd", repo, "--json", "--"], "go"],
 	] as const)("refuses %s with one {error} line, exit 1, and no zmx call", async (_case, args, stdin) => {
 		const { stdout, exitCode, calls } = await launch([...args()], stdin);

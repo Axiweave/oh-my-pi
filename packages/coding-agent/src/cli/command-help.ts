@@ -106,7 +106,7 @@ export const installHelp = {
 export const joinHelp = { description: "Join a shared collab session (same as /join)" } satisfies CommandMetadata;
 
 export const launchSessionHelp = {
-	description: "Start an omp Session in its own zmx session; the opening prompt comes on stdin",
+	description: "Start an omp Session in its own zmx session; the opening prompt comes on stdin (empty: no prompt)",
 } satisfies CommandMetadata;
 
 export const modelsHelp = { description: "List, search, and refresh available models" } satisfies CommandMetadata;

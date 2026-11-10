@@ -1,7 +1,7 @@
 /**
  * Start a Session in its own zmx session for an outside caller, such as the
  * Intake (contracts/omp-launch-session.md). The opening prompt comes on stdin,
- * so `zmx list` never shows it.
+ * so `zmx list` never shows it. Empty stdin starts the Session with no prompt.
  */
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
@@ -37,13 +37,12 @@ async function launch(
 		labels[key] = label.slice(eq + 1);
 	}
 	if (childArgv.length === 0) throw new Error("no omp command after --");
-	const text = await Bun.stdin.text();
-	if (text.trim() === "") throw new Error("the prompt on stdin is empty");
+	const stdin = await Bun.stdin.text();
 	const settings = await Settings.init({ cwd });
 	return spawnSession({
 		dir: cwd,
 		branch,
-		text,
+		text: stdin.trim() === "" ? undefined : stdin,
 		argv: childArgv,
 		env: {},
 		labels,
@@ -65,6 +64,7 @@ export default class LaunchSession extends Command {
 
 	static examples = [
 		`# Start a Session on a new branch; the prompt comes on stdin\n  echo "Fix ENG-123" | ${APP_NAME} launch-session --cwd ~/src/app --branch eng-123 --label cci-launch=x1 --json -- ${APP_NAME} --auto-approve`,
+		`# Start a Session with no prompt: empty stdin\n  ${APP_NAME} launch-session --cwd ~/src/app --json -- ${APP_NAME} </dev/null`,
 	];
 
 	async run(): Promise<void> {

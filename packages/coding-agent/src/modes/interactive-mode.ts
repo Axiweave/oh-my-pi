@@ -3098,6 +3098,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#jobSettleListener = undefined;
 		});
 
+		const publishesSpawnState = Boolean(
+			(process.env.OMP_SPAWN_PARENT || process.env.OMP_PUBLISH_STATE) && process.env.ZMX_SESSION,
+		);
 		this.#eventBusUnsubscribers.push(
 			this.session.subscribe(event => {
 				if (event.type === "model_changed") {
@@ -3119,11 +3122,14 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (event.type === "message_start" && this.#spawnPreviousTools && isSpawnKickoff(event.message)) {
 					this.#spawnKickoffSeen = true;
 				}
-				if ((process.env.OMP_SPAWN_PARENT || process.env.OMP_PUBLISH_STATE) && process.env.ZMX_SESSION)
-					this.#publishSpawnState(event);
+				if (publishesSpawnState) this.#publishSpawnState(event);
 			}),
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
 		);
+		// A child with no start prompt is idle now, at turn 0. Its outside caller sends nothing before the first `cci-state`.
+		if (!options.spawnStart && publishesSpawnState) {
+			this.#spawnStatePublish = this.#spawnStatePublish.then(() => publishState("idle", undefined, 0));
+		}
 		// Cache the live model for the next status-bar prepaint: init-time
 		// reconciliations (#reconcileModeFromSession, #enterPlanMode for
 		// plan.defaultOnStartup) can change the model before this subscription
@@ -4414,6 +4420,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** `pi:send` prompts that have not settled. A `stop` waits for them after its abort. */
 	#sendPending = new Set<Promise<void>>();
 
+	/** Tail of the `notice` sends: each waits until the session is idle, in arrival order. */
+	#noticeChain: Promise<void> = Promise.resolve();
+
 	/**
 	 * Runs a `pi:send` follow-up (contracts/omp-send-packet.md). It needs no editor,
 	 * so an open dialog does not block it. Packets run in one chain, so one that
@@ -4421,11 +4430,32 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * prompt is admitted, not when the turn ends, so `guide` can still steer.
 	 * A `stop` keeps arrival order (FR-031): after its abort, the earlier follow-ups
 	 * that did not run go first, then the stop text.
+	 * A `notice` is a display-only custom message that starts no turn. It waits
+	 * until the session is idle. When the session is busy, it leaves the chain,
+	 * so a later `stop` or `guide` does not wait for the turn to end.
 	 */
 	#handleIdeSend(mode: SendMode, text: string): void {
 		this.#sendChain = this.#sendChain
 			.then(async () => {
 				await this.spawnStartAdmitted;
+				if (mode === "notice") {
+					// Idle: wait here, so a later packet keeps its order behind this notice.
+					const busy = this.session.isStreaming;
+					this.#noticeChain = this.#noticeChain
+						.then(async () => {
+							await this.session.waitForIdle();
+							// ponytail: a turn that starts between waitForIdle and this call takes the notice as a steer.
+							await this.session.sendCustomMessage({
+								customType: "intake-notice",
+								content: text,
+								display: true,
+								attribution: "agent",
+							});
+						})
+						.catch(error => this.showError(error instanceof Error ? error.message : String(error)));
+					if (!busy) await this.#noticeChain;
+					return;
+				}
 				// Our queued follow-ups that omp has not taken from its queues yet.
 				const stillQueued = () => {
 					const queued = [...this.session.agent.peekSteeringQueue(), ...this.session.agent.peekFollowUpQueue()];

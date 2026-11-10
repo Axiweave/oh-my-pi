@@ -375,8 +375,9 @@ echo "Fix ENG-123" | omp launch-session --cwd /abs/repo --branch eng-123 \
   --label cci-launch=x1y2 --json -- omp --profile work --auto-approve
 ```
 
-- stdin carries the opening prompt. It must not be empty. The prompt goes to
-  the Session through a mode-0600 start file, so `zmx list` never shows it.
+- stdin carries the opening prompt. The prompt goes to the Session through a
+  mode-0600 start file, so `zmx list` never shows it. Empty or whitespace-only
+  stdin starts the Session with no prompt.
 - `--cwd` is an absolute path to a Git checkout.
 - `--branch` starts the Session in a new worktree. A taken name gets the next
   free `-N` suffix (`eng-123-2`). Without `--branch`, the Session runs in `--cwd`.
@@ -388,7 +389,8 @@ With `--json`, success prints `{"name":"cci-omp-…","dir":"…","branch":"eng-1
 (`branch` is `null` without `--branch`) and exits 0. A refusal or failure prints
 `{"error":"<reason>"}` and exits 1, and no zmx session, worktree, branch, or
 start file from the call remains. The Session publishes `cci-state` and
-`cci-work` on its zmx session, like a Sibling Session.
+`cci-work` on its zmx session, like a Sibling Session. A Session with no prompt
+publishes `cci-state=idle` with `cci-turn=0` at startup.
 
 #### Follow-up packet `pi:send`
 
@@ -402,13 +404,15 @@ ESC _ pi:send;<mode>.<payload> ESC \
 `<payload>` is the UTF-8 text as unpadded base64url (at most 64 KiB of text).
 `<mode>` selects the delivery:
 
-| Mode    | Effect                                                                       |
-| ------- | ---------------------------------------------------------------------------- |
-| `queue` | Waits until the running turn ends, then runs. Starts a turn when idle.       |
-| `guide` | Joins the running turn as a steering message. Starts a turn when idle.       |
-| `stop`  | Stops the running turn, waits until the Session is idle, then starts a turn. |
+| Mode     | Effect                                                                                                                                         |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queue`  | Waits until the running turn ends, then runs. Starts a turn when idle.                                                                         |
+| `guide`  | Joins the running turn as a steering message. Starts a turn when idle.                                                                         |
+| `stop`   | Stops the running turn, waits until the Session is idle, then starts a turn.                                                                   |
+| `notice` | Waits until the Session is idle, then adds the text as an `intake-notice` card to the chat and the model context. It never starts a turn.     |
 
-Packets run in arrival order, also when a `stop` waits for its turn to end. An
-open dialog does not block a packet, and the draft in the editor does not
-change. A packet with a bad mode or payload does nothing and shows one status
-line.
+Packets run in arrival order, also when a `stop` waits for its turn to end. A
+`notice` that arrives during a turn does not hold later packets: they run while
+the notice waits for the Session to be idle. An open dialog does not block a
+packet, and the draft in the editor does not change. A packet with a bad mode
+or payload does nothing and shows one status line.
