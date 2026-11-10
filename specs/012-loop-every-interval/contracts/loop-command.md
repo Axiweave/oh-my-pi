@@ -21,6 +21,7 @@ The parts must come in this order. Text after the last part that parses is `PROM
 | Input | Result |
 |---|---|
 | `every 15m check CI` | interval 15 min, prompt `check CI` |
+| `every +1h check CI` | interval 1 h, first run 1 h after the command (`later`), prompt `check CI` |
 | `every 15 minutes` | interval 15 min, no prompt |
 | `8h every 15m --until 'gh pr checks' check CI` | time limit 8 h, interval 15 min, until-condition, prompt |
 | `3 every 1h30m` | count 3, interval 90 min |

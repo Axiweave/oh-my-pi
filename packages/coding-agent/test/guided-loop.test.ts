@@ -245,6 +245,21 @@ describe("guided loop", () => {
 			expect(interviewFacts(h)).toEqual(ENDED);
 		});
 
+		it("yes with every +<duration>: starts the loop and queues no first run", async () => {
+			h = await createHarness();
+			stubPrompt(h);
+			await h.mode.handleGuidedLoopCommand("check CI");
+			const followUp = stubFollowUp(h);
+			stubConfirm(h, true);
+
+			expect(await request(h, { op: "start", args: "every +1h check CI" })).toBe("started");
+
+			expect(h.mode.loopModeEnabled).toBe(true);
+			expect(h.mode.loopIntervalMs).toBe(3_600_000);
+			expect(h.mode.loopPrompt).toBe("check CI");
+			expect(followUp).not.toHaveBeenCalled();
+		});
+
 		it("counts the first interval from when the queued first run starts, not from the tool call", async () => {
 			const MINUTE = 60_000;
 			const TOOL_TAIL = 20_000;

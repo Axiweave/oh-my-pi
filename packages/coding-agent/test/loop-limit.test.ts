@@ -290,13 +290,15 @@ describe("every clause", () => {
 						? { kind: "iterations" as const, iterations: limitAmount }
 						: { kind: "duration" as const, durationMs: limitAmount * 60_000 };
 			const withCondition = random(2) === 1;
-			const input = `${limitText}every ${intervalText}${withCondition ? " --until 'x'" : ""} p`;
+			const later = random(2) === 1;
+			const input = `${limitText}every ${later ? "+" : ""}${intervalText}${withCondition ? " --until 'x'" : ""} p`;
 
 			expect({ input, parsed: parseLoopArgs(input) }).toEqual({
 				input,
 				parsed: {
 					limit,
 					intervalMs,
+					later: later || undefined,
 					condition: withCondition ? { command: "x", until: true } : undefined,
 					prompt: "p",
 				},
