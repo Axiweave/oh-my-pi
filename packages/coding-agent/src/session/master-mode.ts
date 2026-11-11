@@ -1,6 +1,6 @@
 import { InternalUrlRouter } from "../internal-urls";
 import { recoverConflictUriPrefix } from "../tools/conflict-detect";
-import { unwrapHashlineHeaderPath } from "../tools/plan-mode-guard";
+import { unwrapHashlineHeaderPath } from "../tools/hashline-header-path";
 
 /**
  * Master mode session-level state, mirroring {@link ../vibe/state.ts}. The main agent

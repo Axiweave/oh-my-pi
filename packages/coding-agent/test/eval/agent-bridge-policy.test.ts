@@ -357,15 +357,12 @@ describe("runEvalAgent", () => {
 		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual(["p/requested:high"]);
 	});
 
-	it("rejects an ambiguous or blank per-call model on agent() before dispatch", async () => {
+	it("rejects an ambiguous per-call model on agent() before dispatch", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
 		await expect(runEvalAgent({ prompt: "work", model: "default" }, { session: makeSession() })).rejects.toThrow(
 			/"@default"/,
-		);
-		await expect(runEvalAgent({ prompt: "work", model: "   " }, { session: makeSession() })).rejects.toThrow(
-			/invalid `model`/,
 		);
 		expect(runSpy).not.toHaveBeenCalled();
 	});
@@ -380,6 +377,20 @@ describe("runEvalAgent", () => {
 		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual(["p/preferred:high", "p/alternative"]);
 	});
 
+	// One-element rows: `it.each` spreads an array row, so a bare `[]` would pass no model.
+	it.each([[""], ["   "], [[]]])("treats a blank agent() model (%p) as omitted", async model => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
+		const session = makeSession({
+			activeModel: "p/current",
+			modelString: "p/fallback",
+			settings: Settings.isolated({ "task.isolation.enabled": false }),
+		});
+
+		await runEvalAgentAndWait({ prompt: "work", model }, { session });
+
+		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual(["p/current"]);
+	});
 	it("returns host-parsed data for caller, agent, and inherited schemas", async () => {
 		const agentSchema = { type: "object" };
 		const sessionSchema = { type: "object" };

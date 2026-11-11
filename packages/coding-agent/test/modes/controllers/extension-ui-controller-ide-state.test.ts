@@ -114,6 +114,7 @@ function createControllerContext() {
 		editorContainer,
 		ui,
 		hookEditor: undefined,
+		closeLinkBrowser: () => {},
 	} as unknown as TestContext;
 
 	return { ctx, editor, editorContainer, ui };

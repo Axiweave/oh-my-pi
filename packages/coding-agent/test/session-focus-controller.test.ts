@@ -163,6 +163,7 @@ function makeHarness(
 				resetTranscriptAnchors++;
 			},
 			restorePendingToolResults() {},
+			runSerialized: (run: () => Promise<void>) => run(),
 		},
 		statusLine: {
 			setSession: (session: AgentSession, focusedAgentId?: string) => {
@@ -427,13 +428,20 @@ describe("SessionFocusController", () => {
 			},
 		});
 		const errors: string[] = [];
-		Object.assign(h.ctx, { showError: (message: string) => errors.push(message) });
+		// The return to main runs on the serialized dispatch chain, so await the reported error itself.
+		const reported = Promise.withResolvers<void>();
+		Object.assign(h.ctx, {
+			showError: (message: string) => {
+				errors.push(message);
+				reported.resolve();
+			},
+		});
 		const worker = makeSessionStub();
 		registerSub(h.registry, "Worker", worker.session, MAIN_AGENT_ID);
 		await h.controller.focusAgent("Worker");
 
 		h.registry.setStatus("Worker", "parked");
-		await flushAsync();
+		await reported.promise;
 
 		expect(errors).toEqual(["Failed to return to main session: main replay failed"]);
 		expect(h.controller.focusedAgentId).toBeUndefined();
@@ -921,6 +929,7 @@ describe("pickRecentFocusableAgentId", () => {
 			status: "running",
 			session: null,
 			sessionFile: `${id}.jsonl`,
+			generation: 0,
 			createdAt: 1000,
 			lastActivity: 1000,
 			...overrides,

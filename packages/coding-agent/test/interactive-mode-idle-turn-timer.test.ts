@@ -36,7 +36,7 @@ describe("InteractiveMode idle turn timer under the pi brand preset", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, new EventBus());
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, new EventBus());
 	});
 
 	afterAll(async () => {

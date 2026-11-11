@@ -218,6 +218,15 @@ describe("InputController skill queue chip metadata", () => {
 		await editor.onSubmit?.(editor.getText());
 
 		expect(showError).not.toHaveBeenCalled();
+		if (!isStreaming) {
+			// An idle session hands a skill first item to the run loop, which expands it (#10802).
+			expect(promptCustomMessage).not.toHaveBeenCalled();
+			expect(ctx.onInputCallback).toHaveBeenCalledTimes(1);
+			expect(ctx.onInputCallback).toHaveBeenCalledWith(
+				expect.objectContaining({ text: "/skill:test-skill check remaining work", streamingBehavior: "followUp" }),
+			);
+			return;
+		}
 		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
 		const [message, options] = promptCustomMessage.mock.calls[0]!;
 		expect(message.content).toContain("Do the thing.");

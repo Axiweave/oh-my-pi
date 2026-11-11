@@ -6,7 +6,6 @@
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
-import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { writeTerminalSequence } from "@oh-my-pi/pi-tui/terminal";
 import { wrapTmuxPassthroughIfNeeded } from "@oh-my-pi/pi-tui/tmux";
 import { logger, ptree } from "@oh-my-pi/pi-utils";
@@ -302,9 +301,9 @@ export function writeSpawnAnnouncement(name: string): void {
 
 /**
  * The spawn window closes at the end of a run unless the run's last `ask` or
- * `spawn_session` call is an `ask` with no answer: it has no result, an error
- * result (cancelled or interrupted), or a "chat about this" result. The
- * user's reply run still needs the spawn tool then.
+ * `spawn_session` call is an `ask` with no answer: it has no result or an
+ * error result (cancelled or interrupted). The user's reply run still needs
+ * the spawn tool then.
  */
 export function spawnWindowShouldClose(messages: readonly AgentMessage[]): boolean {
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -316,10 +315,9 @@ export function spawnWindowShouldClose(messages: readonly AgentMessage[]): boole
 			if (block.name === "spawn_session") return true;
 			if (block.name !== "ask") continue;
 			const result = messages.find(
-				(m, k): m is ToolResultMessage<AskToolDetails | undefined> =>
-					k > i && m.role === "toolResult" && m.toolCallId === block.id,
+				(m, k): m is ToolResultMessage => k > i && m.role === "toolResult" && m.toolCallId === block.id,
 			);
-			return result !== undefined && !result.isError && !result.details?.chatRedirect;
+			return result !== undefined && !result.isError;
 		}
 	}
 	return true;

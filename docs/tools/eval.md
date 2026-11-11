@@ -93,7 +93,6 @@ A requested unavailable runtime raises `ToolError` with the bounded, sanitized p
 - `language`: the backend used; `languages`: the distinct backend list. These retain the historical multi-cell-compatible shape, but a current call has one backend.
 - `cells[].views`: pretty views of printed values, in print order, as `{ text, view }` where `text` is the exact span of `output` the value printed and `view` is a `table` (data frames, `console.table`), `json` (dicts/lists/plain objects printing longer than 80 chars or multiple lines), or `markdown` (Python objects with `_repr_markdown_`). Renderers show the view in place of the matching text; the model only sees the text. At most 16 views per cell are kept, and a view whose JSON exceeds 32 KiB is dropped; dropped views show as their text.
 - `images`: present on live updates when images have arrived; final images are content blocks.
-- `statusEvents`: deduplicated helper/tool status events.
 - `notice`: optional backend notice.
 - `meta`: output truncation/artifact metadata supplied by `toolResult(...)`.
 - `async`: present when the cell was auto-backgrounded as an async job (`{ state, jobId, type: "eval" }`).
@@ -131,6 +130,7 @@ With `eval.autoBackground.enabled` (default `false`), a cell that outlives `eval
 - Persistent worker VM keyed by `js:${sessionId}`; `reset` recreates the VM and is destructive to concurrent users of that session id.
 - Runs under Bun and exposes host globals including `Bun`, `Buffer`, `fetch`, `process`, `require`, `createRequire`, `fs`, and Web Crypto.
 - Top-level `await` and bare `return` work through async wrapping.
+- A trailing expression or top-level `return` value prints as `console.log` would. As in Python, other trailing statements print nothing: an assignment (`globalThis.items = items`, or a destructuring `({ a } = obj)`), a declaration, a loop or an `if` block. Assigned promises still settle within the run and report rejections. A parenthesized assignment prints its value, like Python's `(x := value)`.
 - Static top-level imports and dynamic imports are rewritten through the local module loader. Local filesystem imports are cache-busted between cells; bare package and scheme/URL imports retain normal cache identity.
 - Awaited regions can interleave with another session sharing the executor; synchronous code still blocks the worker event loop.
 
@@ -207,6 +207,7 @@ A stateless, tool-free one-shot model call that returns a `CompletionHandle` imm
 - `model`: `"smol"`, `"default"`, or `"slow"` tier; default is the active/default tier.
 - For the `"slow"` tier, configured role selectors honor explicit concrete effort suffixes including `:max` and `:off`; `:max` is clamped to the target model's supported levels. Bare, `:auto`, and `:inherit` primary selectors retain tier-default behavior, including recomputing the default for root fallback models. With an explicit concrete or `:off` primary effort, bare and `:auto` root fallbacks inherit that effective setting and clamp it for their model. Nested fallbacks inherit their immediate parent candidate's effective setting. An explicit concrete effort or `:off` fallback suffix overrides inheritance. `"smol"` and `"default"` retain their existing provider-option behavior.
 - Effort extraction follows the shared selector grammar: strict suffixes such as `:low` and `:off` take precedence even when model matching retains that suffix in an exact model ID. Literal-ID protection applies to the ambiguous `:max` and `:auto` suffixes, with case-insensitive provider and model ID matching.
+- `attempts` lists the fallback candidates tried so far, in order, without waiting: JS `await handle.attempts()`, Python `handle.attempts`. Each entry is `{ model, effort, outcome, error? }`: `effort` is the reasoning effort sent (`"off"` = disabled, `null` = provider default); `outcome` is `running`, `no-credentials`, `succeeded`, `failed`, or `cancelled`. The `succeeded` entry is the model that answered.
 - `schema`: JSON Schema for a synthetic `respond` tool; `.wait()` then returns parsed data.
 - Unresolved tier and invalid arguments fail handle allocation; JS's immediate pending-handle wrapper exposes that rejection when awaited/used. Missing credentials, error/abort stops, empty output, and invalid structured output surface from `.wait()`.
 - Handles are process-local, owned by the calling agent, and evicted 30 minutes after settling (or when the owner session ends).
@@ -245,7 +246,8 @@ Use `@default` instead of the ambiguous literals `default` or `inherit`.
 
 The shared resolver retains role identity and tries the requested candidates in order for working credentials.
 If none has credentials, the call fails instead of selecting the parent's model, unless the selection includes `@default`.
-Empty arrays, blank elements, comma-only selectors, and invalid thinking suffixes fail preflight.
+A blank selector (`""`, whitespace, or `[]`) counts as omitted.
+Blank elements in a non-empty array, comma-only selectors, and invalid thinking suffixes fail preflight.
 A selector that matches no available model also fails the call.
 Literal model IDs with colon suffixes retain their identity.
 
@@ -277,7 +279,7 @@ With `eval.tools.enabled` (default on), a cell can turn a function into a tool o
 - Python: `@tool` / `@tool(name=..., description=...)`; the JSON Schema is inferred from type hints (`str`, `int`, `float`, `bool`, `list[...]`, `dict[...]`, `Literal`, `Optional`, `Annotated[T, "description"]`) and defaults; positional-only parameters are rejected. Async functions are awaited.
 - JS: `tool(fn, { name?, description?, parameters? })`; `fn` receives one args object.
 - `tool.defined()` lists names; `tool.undefine(name)` removes one. Redefining replaces.
-- Consumers: `task` items' `tools`, `agent(tools=...)`, `workpool(tools=...)`. The host resolves names against the retained Python and JS kernels (a name defined in both is an error) and exposes each as an essential custom tool of the child session. Calls run on a dedicated runner thread (Python) or inside the worker's run context (JS), so a parent cell blocked in `wait()` can still serve them. A tool that raises reports the error to the caller; the kernel keeps running. A kernel that is not running yields an error result instead.
+- Consumers: `task` items' `tools`, `agent(tools=...)`, `workpool(tools=...)`. The host resolves names against the retained Python and JS kernels (a name defined in both is an error) and exposes each as an essential custom tool of the child session. Calls run on a dedicated runner thread (Python) or inside the worker's run context (JS), so a parent cell blocked in `wait()` can still serve them. Async Python tools all run on one shared tool event loop (not the cell loop), so a module-level `asyncio.Lock()` can serialize concurrent calls from several subagents; a caller that gives up (interrupt, cancellation) cancels its async call's coroutine, while a sync tool runs to completion. A tool that raises reports the error to the caller; the kernel keeps running. A kernel that is not running yields an error result instead.
 - Unknown names fail the `task`/`agent()` call synchronously; plan mode rejects `tools` entirely.
 
 ## Side effects and cancellation
@@ -298,6 +300,7 @@ With `eval.tools.enabled` (default on), a cell can turn a function into a tool o
 - Eval subagent spawning obeys `task.maxRecursionDepth` (default `2`; negative values allow unlimited depth). Each `workpool()` caps its own live workers at `task.maxConcurrency` (default 32, `0` unbounded). `agent()` takes no `task.maxConcurrency` slot: every handle is a running background job counted against the session-wide `async.maxJobs` cap (default and maximum 100), which it shares with every other background job in the session, including async `bash`, async `task` spawns, `workpool()` pools and nested subagents' jobs. `agent()` fails with `Background job limit reached` once that cap is full. Completion/judgment requests have their own fixed 32-request cap.
 - Malformed params are schema errors; unavailable/disabled backends and missing session are `ToolError`s.
 - Runtime exceptions become backend output with nonzero exit. Interactive stdin is an error. Output truncation does not fail the call.
+- Unhandled JavaScript promise rejections fail the cell while it is running. A rejection attributed to a finished cell keeps the kernel state and appears once at the start of the next cell's output, with its originating cell and error stack; bridge-call errors include the tool name or prelude action (for example, `browser.call`). The next cell shows at most ten late errors and counts any additional rejections.
 - A dead retained managed kernel may be replaced and the invocation retried once by its executor.
 
 ## Notes

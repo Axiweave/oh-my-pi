@@ -47,7 +47,7 @@ async function createHarness(composer?: Composer): Promise<Harness> {
 		toolRegistry: new Map<string, Tool>(initialTools.map(tool => [tool.name, tool] as const)),
 		rebuildSystemPrompt: async () => ({ systemPrompt: ["Test"] }),
 	});
-	const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, undefined, composer);
+	const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, composer);
 	vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
 	vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
 	mode.ui.requestRender = vi.fn();

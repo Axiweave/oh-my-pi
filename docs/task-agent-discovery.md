@@ -41,7 +41,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 - `output` is passed through as opaque schema data
 - `read-summarize: false` (normalized to `readSummarize`) disables structural summaries for the subagent's `read` tool — `runSubprocess` applies a `read.summarize.enabled: false` override on the child's isolated settings (`src/task/executor.ts`). `scout` ships with it disabled. When absent, the child inherits the parent's read-summary setting.
 - `model` accepts one selector, CSV, or an array. Entries are tried in order after role aliases are expanded.
-- `thinking-level` / `thinking` selects the agent's configured effort. When `task.enableEffort` (default `false`) exposes it, a task item's `effort` (`low`, `medium`, `high`, `xhigh`, `max`, the `auto` mode ladder) takes precedence at launch. OMP maps level i of 5 to the first of the selected model's n eligible levels whose position k/n is at least i/5; eligible levels are the supported levels at or above `low`, or all levels if none reach `low`. It then clamps the result to `task.maxEffort` (default `max`). The ceiling is carried across retry-fallback model switches. If the selected model has no supported effort at or below the ceiling, the spawn fails; models without a controllable effort surface instead fall back to their normal selector.
+- `thinking-level` / `thinking` selects the agent's configured effort. When `task.enableEffort` (default `false`) exposes it, a task item's `effort` (`low`, `medium`, `high`, `xhigh`, `max`, the `auto` mode ladder) takes precedence at launch, except for a [user-tagged model agent](#effort-level-suffix) whose tag names a level and whose call names no `model`. OMP maps level i of 5 to the first of the selected model's n eligible levels whose position k/n is at least i/5; eligible levels are the supported levels at or above `low`, or all levels if none reach `low`. It then clamps the result to `task.maxEffort` (default `max`). The ceiling is carried across retry-fallback model switches. If the selected model has no supported effort at or below the ceiling, the spawn fails; models without a controllable effort surface instead fall back to their normal selector.
 - `blocking: true` makes the parent wait for that agent even when async task execution is enabled
 - `structured: true` keeps structured results for that agent while `task.structured` (default `false`) is off: its task spawns get the `yield` tool and resolve their output schema exactly as with `task.structured: true` (see [structured-output precedence](#model-and-structured-output-precedence)). With `task.structured` on, the field changes nothing; `false` or absent follows the setting. The caller-side `outputSchema`/`schemaMode` task parameters stay hidden while the setting is off. The decision is made from the resolved agent in `resolveEffectiveSubagentPolicy()`, so plan-mode spawns keep it, and cold revival restores `yield` from the child's persisted tool list.
 - `autoloadSkills` names skills from the parent session to inject before the first child prompt; unknown names are ignored
@@ -101,6 +101,19 @@ On submit, each first-mentioned model receives a branch-local pseudonym (`m1`, `
 Tagging a model never rewrites the model-facing `task` description mid-session: the description lists the pseudonyms baked into the current base prompt, and later tags arrive as a hidden `session-agents` system notice on the next user turn. The notice rides the same channel as the eval-prelude and tool-roster deltas, so the provider cache prefix stays byte-stable. The next base-prompt rebuild absorbs the live set into the description.
 
 Pseudonyms survive `/resume`; rewinding before a model's first mention frees its number. Repeating a selector reuses its pseudonym. Unknown selectors remain literal, as do mentions in `!`/`$` local-execution drafts. Tokens require whitespace boundaries: autocomplete adds the trailing space. When two models share a display name in one draft, the second remains a literal selector to avoid ambiguous expansion.
+
+### Effort level suffix
+
+A tag can set the subagent's initial effort with a level suffix on the full selector, such as `^anthropic/claude-opus-5-5:high`. In the composer, typing `:` after a mention lists the supported levels of the three best-ranked models for the text before the colon. For example, type `^opus:` and pick a row to insert `^anthropic/claude-opus-5-5:high`. Model ids that contain the typed text, such as `qwen3:8b` or `glm-4.7:max`, are listed before the level rows. Registration needs the exact `provider/id`, with or without a level. The chip shows the level ("Claude Opus 5.5 · high"), and each model and level pair gets its own pseudonym: tagging one model at `high` and at `low` in one session gives `m1` and `m2`.
+
+- Without a level, the agent follows the normal task effort policy: the task template's `auto` thinking, or the task item's `effort` hint when `task.enableEffort` exposes it. `:auto` is the same tag as no suffix.
+- With a level, the tagged level is the subagent's initial effort. The task item's `effort` hint is ignored, and neither `task.maxEffort` nor `providers.autoThinkingMaxEffort` caps the tagged level.
+- A [per-call `model`](#model-and-structured-output-precedence) for a level-tagged agent replaces the tagged model. The tag's level then no longer applies, and the call's `effort` hint and `task.maxEffort` apply as for any agent. Omit `model` to use the tagged model and effort.
+- Some routes still change the model or the level before launch: `task.agentModelOverrides`, a `before_subagent_spawn` handler that replaces the model patterns, and auth fallback to the parent session's model.
+- After launch, `/effort` on a focused subagent, a prewalk hand-off, or a retry fallback can change the level, as for any subagent.
+- Only levels the model supports register a tag; `:off`, `:inherit`, unsupported levels, and an abbreviation whose full selector is another model's id (`:ma` beside a literal `…:max` model) stay literal text.
+- Level names accept the same unambiguous abbreviations as `--thinking`, and the chip shows the full name. `:hi` means `high` and `:lo` means `low`. The task tool's `effort` hint uses the five-level ladder instead (`low`, `medium`, `high`, `xhigh`, `max`) and maps it onto the model's supported levels.
+- Asking for an effort in prose, such as "use this model with high effort", does not set the level. The delegating model can pass only the `effort` hint, and only when `task.enableEffort` is on. To choose the level yourself, add the suffix to the tag.
 
 Session definitions are appended after discovered agents, so an existing agent with the same name wins. Normal spawn restrictions and model-override precedence still apply. Synthetic prompts cannot register models.
 
@@ -236,7 +249,8 @@ The per-call selector wins over review-plan remapping, saved agent overrides, an
 
 The shared preflight validates a per-call `model` before dispatch.
 Use `@default` instead of the ambiguous literals `default` or `inherit`.
-An empty selection or a selector with no available match fails the spawn and names the selector.
+A blank selection (`""`, whitespace, or `[]`) counts as omitted, so the call uses the next precedence source.
+A selector with no available match fails the spawn and names the selector.
 The resolver does not silently select a lower-precedence source.
 For a task batch, set `model` on each task item. A top-level batch `model` remains invalid.
 

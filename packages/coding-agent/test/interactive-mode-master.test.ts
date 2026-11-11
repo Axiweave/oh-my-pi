@@ -132,7 +132,7 @@ describe("InteractiveMode master mode", () => {
 			createVibeTools: () => VIBE_TOOL_NAMES.map(stubTool),
 			asyncJobManager: jobs,
 		});
-		const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, new EventBus());
+		const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, new EventBus());
 		opened.push({ session, mode, jobs });
 		return { session, mode };
 	}

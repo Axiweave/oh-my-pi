@@ -17,7 +17,6 @@ import {
 	formatErrorDetail,
 	formatExpandHint,
 	formatMoreItems,
-	formatStatusIcon,
 	PREVIEW_LIMITS,
 	previewWindowRows,
 	type RenderedStringCache,
@@ -86,6 +85,8 @@ export interface WriteToolDetails {
 	message?: CoordinationDetails;
 	proc?: ProcWriteDetails;
 	cfg?: CfgWriteDetails;
+	/** Set when the write touched no files: a peer message, a reply, or a background-work cancellation. */
+	touchesNoFiles?: boolean;
 }
 
 interface WriteRenderArgs {
@@ -443,13 +444,12 @@ function formatStreamingContent(
 	language: string | undefined,
 	uiTheme: Theme,
 	contentWidth: number,
-	spinnerFrame?: number,
 	cache?: RenderedStringCache,
 	streamKey?: WriteStreamingPreviewStateCarrier,
 	argsComplete?: boolean,
 ): string {
 	if (!content) return "";
-	const bodyText = cachedRenderedString(cache, uiTheme, expanded, `${language ?? ""}:${contentWidth}`, content, () => {
+	return cachedRenderedString(cache, uiTheme, expanded, `${language ?? ""}:${contentWidth}`, content, () => {
 		const state = updateStreamingPreview(streamKey, content, language, uiTheme, argsComplete === true);
 		// The unfinished trailing line: plain until its terminating newline arrives,
 		// highlighted once `argsComplete` flushed it through the stateful parser.
@@ -489,21 +489,21 @@ function formatStreamingContent(
 			// (`NNN `) since the gutter and its first wrapped row share a line.
 			const innerWidth = Math.max(1, contentWidth - lineNumberWidth - 1);
 			const budget = writePreviewRowBudget();
-			// Reserve the trailing "(streaming)" row, plus the "(N earlier lines)"
-			// row while the head is capped, so the body totals `budget` rows.
-			let fit = sliceStreamingContentTail(content, innerWidth, Math.max(1, budget - 2));
+			// Reserve the "(N earlier lines)" row while the head is capped, so the
+			// body totals `budget` rows. The "streaming" label sits in the bottom border.
+			let fit = sliceStreamingContentTail(content, innerWidth, Math.max(1, budget - 1));
 			const measuredTotal = totalLines - fit.stripped;
-			if (fit.consumedLines >= measuredTotal && fit.visualRows <= budget - 2) {
+			if (fit.consumedLines >= measuredTotal && fit.visualRows <= budget - 1) {
 				// Whole file already fits: no earlier-lines marker is needed, so the
 				// content may claim the row that marker would have taken.
-				fit = sliceStreamingContentTail(content, innerWidth, Math.max(1, budget - 1));
+				fit = sliceStreamingContentTail(content, innerWidth, budget);
 			}
 			startIndex = measuredTotal - fit.consumedLines;
 			// The marker row is shown either because lines are hidden, or because a
 			// single over-budget line had its rows cut. Decided before emission so
 			// the reservation and the emitted rows cannot disagree.
-			markerShown = startIndex > 0 || fit.visualRows > budget - 2;
-			contentTarget = Math.max(1, budget - (markerShown ? 2 : 1));
+			markerShown = startIndex > 0 || fit.visualRows > budget - 1;
+			contentTarget = Math.max(1, budget - (markerShown ? 1 : 0));
 			if (state) {
 				// The window ends on the unfinished tail whenever the payload does not
 				// end on a newline, so the tail rides along as its last line.
@@ -528,13 +528,12 @@ function formatStreamingContent(
 			highlighted = highlightCode(visibleText, language);
 		}
 
-		let text = "\n\n";
 		if (expanded) {
-			for (let i = 0; i < highlighted.length; i++) {
-				const gutter = uiTheme.fg("dim", `${String(i + 1).padStart(lineNumberWidth, " ")} `);
-				text += `${gutter}${replaceTabs(highlighted[i] ?? "")}\n`;
-			}
-			return text;
+			const expandedRows = highlighted.map(
+				(line, i) =>
+					`${uiTheme.fg("dim", `${String(i + 1).padStart(lineNumberWidth, " ")} `)}${replaceTabs(line ?? "")}`,
+			);
+			return `\n\n${expandedRows.join("\n")}`;
 		}
 		const innerWidth = Math.max(1, contentWidth - lineNumberWidth - 1);
 		const rows = previewBodyRows(
@@ -551,24 +550,17 @@ function formatStreamingContent(
 		// empty payload does. When lines *are* hidden the frame stays, padded, so a
 		// window that fits only the file-ending newline cannot collapse it.
 		if (rows.length === 0 && hidden === 0) return "";
+		const out: string[] = [];
 		if (markerShown) {
-			const label = hidden > 0 ? `… (${hidden} earlier line${hidden === 1 ? "" : "s"})` : "…";
-			text += `${uiTheme.fg("dim", label)}\n`;
+			out.push(uiTheme.fg("dim", hidden > 0 ? `… (${hidden} earlier line${hidden === 1 ? "" : "s"})` : "…"));
 			// Filler sits below the marker, never at the head: callers strip leading
 			// blank body rows, which would silently eat the padding and restore the
 			// jitter this is here to remove.
-			for (let i = rows.length; i < contentTarget; i++) text += "\n";
+			for (let i = rows.length; i < contentTarget; i++) out.push("");
 		}
-		for (const row of rows) text += `${row}\n`;
-		return text;
+		out.push(...rows);
+		return `\n\n${out.join("\n")}`;
 	});
-	if (bodyText.length === 0) return "";
-	// The animated glyph lives on this trailing line — inside the transcript's
-	// volatile-tail holdback — never in the header: an animating head row pins
-	// the native-scrollback commit boundary at the top of the block, so a long
-	// expanded preview could never scroll-append mid-stream.
-	const spinner = spinnerFrame !== undefined ? `${formatStatusIcon("running", uiTheme, spinnerFrame)} ` : "";
-	return `${bodyText}${spinner}${uiTheme.fg("dim", `… (streaming)`)}`;
 }
 
 function wrapWritePreviewRows(lines: string[], width: number): string[] {
@@ -851,17 +843,6 @@ export const writeToolRenderer = {
 		// rather than an archive member or database row selector.
 		const pathDisplay =
 			filePath && args.content !== undefined ? fileHyperlink(pendingFileLinkPath(rawPath), styledPath) : styledPath;
-		// No status icon on the head row: it's the head of the framed block, and
-		// native-scrollback commits are prefix-only — an animated glyph would pin
-		// the commit boundary at the top, and the pending hourglass just adds
-		// noise. The liveness cue rides the trailing "(streaming)" line instead.
-		const header = renderStatusLine(
-			{
-				title: "Write",
-				description: `${langIcon} ${pathDisplay}`,
-			},
-			uiTheme,
-		);
 		// Raw content, not normalizeDisplayText(args.content): the collapsed
 		// streaming path normalizes only its tail window, so a full-payload
 		// normalize on every reveal tick would re-introduce the O(n²) streaming
@@ -872,6 +853,16 @@ export const writeToolRenderer = {
 		return framedToolCard(
 			uiTheme,
 			({ contentWidth }) => {
+				// Only a live spinner fills the icon slot, as in Edit's call card.
+				const header = renderStatusLine(
+					{
+						icon: options?.spinnerFrame === undefined ? undefined : "running",
+						spinnerFrame: options?.spinnerFrame,
+						title: "Write",
+						description: `${langIcon} ${pathDisplay}`,
+					},
+					uiTheme,
+				);
 				const body = content
 					? formatStreamingContent(
 							content,
@@ -879,7 +870,6 @@ export const writeToolRenderer = {
 							lang,
 							uiTheme,
 							contentWidth,
-							options?.spinnerFrame,
 							streamingCache,
 							// `options` is the ToolExecutionComponent's persistent
 							// render-state object — a stable identity across reveal ticks
@@ -893,6 +883,8 @@ export const writeToolRenderer = {
 				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 				return {
 					header,
+					// The label ends with the args: once the content is complete the write is just running.
+					footerMeta: body && !options?.argsComplete ? uiTheme.fg("dim", "streaming") : undefined,
 					sections: bodyLines.length > 0 ? [{ content: wrapWritePreviewRows(bodyLines, contentWidth) }] : [],
 					phase: "pending",
 					borderColor: "borderMuted",

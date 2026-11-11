@@ -158,6 +158,7 @@ function makeHarness(): {
 		addAutocompleteProvider,
 		syncComposerShape: vi.fn(),
 		syncExtensionLinks: vi.fn(),
+		closeLinkBrowser: () => {},
 	} as unknown as InteractiveModeContext;
 
 	const controller = new ExtensionUiController(ctx);
@@ -187,7 +188,7 @@ function createRunner(): ExtensionRunner {
 
 const actions = {
 	sendMessage: () => {},
-	sendUserMessage: () => {},
+	sendUserMessage: async () => {},
 	appendEntry: () => {},
 	setLabel: () => {},
 	getActiveTools: () => [],

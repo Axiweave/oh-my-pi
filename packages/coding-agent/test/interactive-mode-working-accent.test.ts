@@ -51,6 +51,8 @@ async function createHarness(sessionName: string): Promise<Harness> {
 	}
 
 	const tempDir = TempDir.createSync("@pi-working-accent-");
+	// Settings.init keeps an instance an earlier file loaded (e.g. from the user's config).
+	resetSettingsForTest();
 	await Settings.init({ inMemory: true, cwd: tempDir.path() });
 	await initTheme(false);
 	const sessionManager = SessionManager.inMemory(tempDir.path());
@@ -119,7 +121,8 @@ describe("InteractiveMode working-message session accent cache", () => {
 			mode.syncComposerShape();
 			startStableLoader(mode);
 			const rendered = Bun.stripANSI(renderLoader(mode)).trimStart();
-			expect(rendered.startsWith(`${theme.getSpinnerFrames()[0]}  `)).toBe(true);
+			// The Loader starts on the shared spinner clock's frame, not always frame 0.
+			expect(theme.getSpinnerFrames().some(frame => rendered.startsWith(`${frame}  `))).toBe(true);
 			expect(rendered).not.toContain(appKey(mode.keybindings, "app.interrupt"));
 		} finally {
 			cfgComposerStyleFooterMode.clearOverride(settings);

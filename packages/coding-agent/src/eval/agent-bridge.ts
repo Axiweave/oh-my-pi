@@ -7,6 +7,7 @@ import { createEvalCustomTools, describeEvalTools } from "../task/eval-tools";
 import {
 	buildStructuredSubagentRecoveryHint,
 	invalidModelSelectorReason,
+	normalizeModelSelector,
 	reserveStructuredSubagentId,
 	resolveEffectiveSubagentPolicy,
 	runStructuredSubagent,
@@ -92,10 +93,10 @@ function parseAgentArgs(args: unknown): EvalAgentArgs {
 	if (result instanceof type.errors) {
 		throw new ToolError(`agent() received invalid arguments: ${result.summary}`);
 	}
-	// The wire layer rejects empty selectors before the shared preflight permits internal inheritance.
-	const selectorProblem = invalidModelSelectorReason(result.model, "agent()");
+	const model = normalizeModelSelector(result.model);
+	const selectorProblem = invalidModelSelectorReason(model, "agent()");
 	if (selectorProblem) throw new ToolError(selectorProblem);
-	return result;
+	return { ...result, model };
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {

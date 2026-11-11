@@ -7,7 +7,7 @@
  * provider request. Line numbers come from the IDE payload directly
  * (1-based), so `lineEnd` needs no derivation.
  */
-import type { MCPManager } from "./manager";
+import type { MCPManagerApi } from "./manager";
 
 export interface IDESelection {
 	lineStart: number;
@@ -72,7 +72,7 @@ function applySelectionChanged(params: unknown): void {
  * Register the `selection_changed` listener on an MCP manager.
  * Returns an unsubscribe function.
  */
-export function subscribeIdeSelection(manager: MCPManager): () => void {
+export function subscribeIdeSelection(manager: Pick<MCPManagerApi, "addNotificationListener">): () => void {
 	return manager.addNotificationListener((serverName, method, params) => {
 		if (serverName === "ide" && method === "selection_changed") {
 			applySelectionChanged(params);

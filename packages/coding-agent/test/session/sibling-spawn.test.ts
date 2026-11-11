@@ -75,7 +75,7 @@ function assistantCalls(names: string[]): AgentMessage {
 	} as unknown as AgentMessage;
 }
 
-type AskOutcome = "none" | "error" | "chat" | "answered";
+type AskOutcome = "none" | "error" | "answered";
 
 /** The toolResult of the ask call that `assistantCalls` made last, or nothing for `none`. */
 function askResult(outcome: AskOutcome): AgentMessage[] {
@@ -87,7 +87,6 @@ function askResult(outcome: AskOutcome): AgentMessage[] {
 			toolName: "ask",
 			content: [],
 			isError: outcome === "error",
-			details: outcome === "chat" ? { chatRedirect: true } : undefined,
 			timestamp: 0,
 		} as AgentMessage,
 	];
@@ -177,7 +176,7 @@ describe(`sibling-spawn properties (seed ${SEED})`, () => {
 	it("closes the spawn window unless the run's last ask or spawn_session call is an unanswered ask", () => {
 		const g = gen(prng(SEED + 3));
 		const other = ["read", "bash", "grep", "edit", "task"];
-		const outcomes: AskOutcome[] = ["none", "error", "chat", "answered"];
+		const outcomes: AskOutcome[] = ["none", "error", "answered"];
 		const noise = () =>
 			Array.from({ length: g.int(3) }, () => assistantCalls(Array.from({ length: g.int(3) }, () => g.pick(other))));
 		expect(spawnWindowShouldClose([])).toBe(true);

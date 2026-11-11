@@ -101,7 +101,7 @@ describe("InteractiveMode implementation review", () => {
 		});
 		return {
 			session: opened,
-			mode: new InteractiveMode(opened, "test", undefined, undefined, undefined, undefined, new EventBus()),
+			mode: new InteractiveMode(opened, "test", undefined, undefined, undefined, new EventBus()),
 		};
 	}
 

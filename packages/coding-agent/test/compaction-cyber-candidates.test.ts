@@ -178,6 +178,7 @@ describe("resolveContextPromotionTarget honors cyber mode protection", () => {
 				fitContextWindow: (model: Model<Api>) => model,
 			},
 			sessionId: () => "cyber-promotion-session",
+			sessionManager: { getBranch: () => [] },
 		} as unknown as SessionMaintenanceHost);
 	}
 

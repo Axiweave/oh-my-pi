@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import type { AuthStorage, ProviderRouting } from "@oh-my-pi/pi-ai/auth-storage";
+import { MissingApiKeyError } from "@oh-my-pi/pi-ai/error";
 import { createMockModel, type MockResponse, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import * as registry from "@oh-my-pi/pi-ai/registry";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context } from "@oh-my-pi/pi-ai/types";
 import { createCredential, createRoutingStorage, forAll, MODES } from "./helpers/routing-fixtures";
 
@@ -19,7 +22,12 @@ const context: Context = { systemPrompt: ["test"], messages: [{ role: "user", co
 async function withGateway(
 	routing: ProviderRouting,
 	respond: (apiKey: string) => MockResponse,
-	run: (send: (sessionId: string) => Promise<Response>, keys: string[], authStorage: AuthStorage) => Promise<void>,
+	run: (
+		send: (sessionId: string) => Promise<Response>,
+		keys: string[],
+		authStorage: AuthStorage,
+		stream: (sessionId: string) => Promise<unknown>,
+	) => Promise<void>,
 ): Promise<void> {
 	registerMockApi();
 	const { authStorage, store } = await createRoutingStorage({
@@ -54,8 +62,20 @@ async function withGateway(
 			headers: { Authorization: "Bearer test-token", "Content-Type": "application/json" },
 			body: JSON.stringify({ modelId: MODEL_ID, context, options: { sessionId }, stream: false }),
 		});
+	// The local path: `streamSimple` with a resolver over the same storage, as the coding agent's
+	// resolver makes its first lookup. Resolves to the stream's result, or to what it failed with.
+	const stream = (sessionId: string) =>
+		streamSimple(mock, context, {
+			sessionId,
+			apiKey: () => authStorage.keys.getWithCredential(PROVIDER, sessionId, { modelId: MODEL_ID }),
+		})
+			.result()
+			.then(
+				message => message,
+				(error: unknown) => error,
+			);
 	try {
-		await run(send, keys, authStorage);
+		await run(send, keys, authStorage, stream);
 	} finally {
 		await handle.close();
 		store.close();
@@ -149,6 +169,49 @@ describe("auth gateway account routing", () => {
 						request,
 						email: false,
 						session: false,
+					});
+				}
+				expect(keys).toEqual(["access-acct-0"]);
+			},
+		);
+	});
+
+	it("refuses a strict session's signed-out account even when the provider allows keyless requests", async () => {
+		// The fork contract: a strict request fails with MissingApiKeyError once its account is gone.
+		// The gateway maps that refusal to its generic 401, and the local stream keeps the error type.
+		// Neither path sends a keyless request.
+		const original = registry.getProviderDefinition;
+		await withGateway(
+			{ mode: "order", stays: "strict" },
+			() => ({ content: ["served"] }),
+			async (send, keys, _authStorage, stream) => {
+				vi.spyOn(registry, "getProviderDefinition").mockImplementation(id => {
+					const def = original(id);
+					return id === PROVIDER && def ? { ...def, allowsMissingApiKey: true } : def;
+				});
+				const first = await send("strict-session");
+				await first.body?.cancel();
+				expect(first.status).toBe(200);
+				expect(keys).toEqual(["access-acct-0"]);
+
+				vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (_provider, credentials) => {
+					const credential = credentials[PROVIDER] as OAuthCredentials;
+					if (credential.accountId === "acct-0")
+						throw new Error('HTTP 400 invalid_grant {"error":"invalid_grant"}');
+					return { apiKey: credential.access, newCredentials: credential };
+				});
+				for (let request = 0; request < 2; request++) {
+					const refused = await send("strict-session");
+					const body = await refused.text();
+					expect({ request, status: refused.status, keyless: body.includes("served") }).toEqual({
+						request,
+						status: 401,
+						keyless: false,
+					});
+					const local = await stream("strict-session");
+					expect({ request, missingApiKey: local instanceof MissingApiKeyError }).toEqual({
+						request,
+						missingApiKey: true,
 					});
 				}
 				expect(keys).toEqual(["access-acct-0"]);

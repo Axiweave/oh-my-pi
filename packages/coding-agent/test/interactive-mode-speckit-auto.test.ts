@@ -81,7 +81,7 @@ describe("InteractiveMode speckit-auto mode", () => {
 			modelRegistry,
 			asyncJobManager: jobs,
 		});
-		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, new EventBus());
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, new EventBus());
 		classify = vi.spyOn(speckitAuto, "classifySpeckitTurn").mockResolvedValue(CLEAN);
 		notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		reply = undefined;

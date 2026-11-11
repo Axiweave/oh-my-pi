@@ -61,6 +61,7 @@ import {
 	hasMisplacedBearer,
 	isAuthorized,
 	json,
+	noStoreErrorResponse,
 	readBearerToken,
 	resolveClientIdentity,
 	withCors,
@@ -590,7 +591,7 @@ async function handlePiNative(
 	const startedAt = performance.now();
 	const requestId = crypto.randomUUID();
 	const controller = mirrorRequestAbort(req);
-	const aborted = (): Response => piNative.formatError(499, "request_aborted", "client closed request");
+	const aborted = (): Response => noStoreErrorResponse(499, "request_aborted", "client closed request");
 	if (controller.signal.aborted) return aborted();
 
 	let body: unknown;
@@ -598,7 +599,7 @@ async function handlePiNative(
 		body = await req.json();
 	} catch (error) {
 		if (controller.signal.aborted) return aborted();
-		return piNative.formatError(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
+		return noStoreErrorResponse(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
 	}
 	if (controller.signal.aborted) return aborted();
 
@@ -608,15 +609,15 @@ async function handlePiNative(
 	} catch (error) {
 		if (controller.signal.aborted) return aborted();
 		const message = error instanceof Error ? error.message : String(error);
-		return piNative.formatError(400, "invalid_request_error", message);
+		return noStoreErrorResponse(400, "invalid_request_error", message);
 	}
 
 	const model = bootOpts.resolveModel(parsed.modelId);
 	if (!model) {
-		return piNative.formatError(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
+		return noStoreErrorResponse(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
 	}
 	const kindRejection = chatRouteRejection(model);
-	if (kindRejection) return piNative.formatError(400, "invalid_request_error", kindRejection);
+	if (kindRejection) return noStoreErrorResponse(400, "invalid_request_error", kindRejection);
 	const client = resolveClientIdentity(req.headers);
 	// Pi-native already parsed `streamOpts.sessionId` (when set by the
 	// client); fall back to the derived key so credential-stickiness lines
@@ -637,7 +638,7 @@ async function handlePiNative(
 		isWithinTurn(parsed.context.messages),
 	);
 	if (controller.signal.aborted) return aborted();
-	if ("status" in apiKey) return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
+	if ("status" in apiKey) return noStoreErrorResponse(apiKey.status, apiKey.type, apiKey.message);
 
 	// Per-session provider learning, owned by this gateway instance. The map is
 	// non-serializable, so `parseRequest` cannot accept one from the wire and
@@ -716,10 +717,10 @@ async function handlePiNative(
 					peer,
 				});
 				if (message.stopReason === "aborted") {
-					return piNative.formatError(499, "request_aborted", errorMessage);
+					return noStoreErrorResponse(499, "request_aborted", errorMessage);
 				}
 				const classified = classifyGatewayError(message.errorClassificationMessage ?? errorMessage);
-				return piNative.formatError(classified.status, classified.type, errorMessage);
+				return noStoreErrorResponse(classified.status, classified.type, errorMessage);
 			}
 			return json(
 				200,
@@ -730,7 +731,7 @@ async function handlePiNative(
 			if (controller.signal.aborted) return aborted();
 			const classified = classifyGatewayError(error);
 			logger.warn("auth-gateway non-streaming aborted", { format: "pi-native", error: classified.message, peer });
-			return piNative.formatError(classified.status, classified.type, classified.message);
+			return noStoreErrorResponse(classified.status, classified.type, classified.message);
 		} finally {
 			// Every non-streaming outcome — answered, upstream error, thrown,
 			// client gone — is done with the provider state here.
@@ -756,7 +757,7 @@ async function handlePiNative(
 		} catch (error) {
 			const classified = classifyGatewayError(error);
 			logger.warn("auth-gateway streamSimple threw", { format: "pi-native", error: classified.message, peer });
-			return piNative.formatError(classified.status, classified.type, classified.message);
+			return noStoreErrorResponse(classified.status, classified.type, classified.message);
 		}
 		if (controller.signal.aborted) return aborted();
 		void events

@@ -4,6 +4,7 @@ import { Settings } from "../../src/config/settings";
 import { runEvalWorkpool } from "../../src/eval/workpool-bridge";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import * as discovery from "../../src/task/discovery";
+import * as structured from "../../src/task/structured-subagent";
 import type { AgentDefinition } from "../../src/task/types";
 import { WorkPoolRegistry } from "../../src/task/workpool";
 import type { ToolSession } from "../../src/tools";
@@ -91,7 +92,7 @@ describe("runEvalWorkpool", () => {
 });
 
 describe("workpool model validation", () => {
-	for (const model of [" , ", [], ["p/valid", ""], [42], "default"]) {
+	for (const model of [" , ", ["p/valid", ""], [42], "default"]) {
 		it(`rejects invalid selection ${JSON.stringify(model)} before registering a pool`, async () => {
 			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [SCOUT], projectAgentsDir: null });
 			const session = makeSession();
@@ -101,4 +102,35 @@ describe("workpool model validation", () => {
 			expect(WorkPoolRegistry.global().get("Main", "invalid")).toBeUndefined();
 		});
 	}
+
+	// One-element rows: `it.each` spreads an array row, so a bare `[]` would pass no model.
+	it.each([[""], ["   "], [[]]])("treats a blank model (%p) as omitted", async model => {
+		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [SCOUT], projectAgentsDir: null });
+		const requested = Promise.withResolvers<unknown>();
+		vi.spyOn(structured, "runStructuredSubagent").mockImplementation(async request => {
+			requested.resolve(request.model);
+			throw new Error("stop after dispatch");
+		});
+		const session = makeSession();
+
+		await runEvalWorkpool({ op: "create", name: "blank", agent: "scout", model }, { session });
+		await runEvalWorkpool({ op: "push", name: "blank", items: ["one"] }, { session });
+
+		expect(await requested.promise).toBeUndefined();
+	});
+
+	// Losing the selector between bridge and pool would silently run workers on the agent's own model.
+	it("hands the pool selector to workers", async () => {
+		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [SCOUT], projectAgentsDir: null });
+		const requested = Promise.withResolvers<unknown>();
+		vi.spyOn(structured, "runStructuredSubagent").mockImplementation(async request => {
+			requested.resolve(request.model);
+			throw new Error("stop after dispatch");
+		});
+		const session = makeSession();
+		const model = ["p/small", "p/fallback"];
+		await runEvalWorkpool({ op: "create", name: "picked", agent: "scout", model }, { session });
+		await runEvalWorkpool({ op: "push", name: "picked", items: ["one"] }, { session });
+		expect(await requested.promise).toEqual(model);
+	});
 });

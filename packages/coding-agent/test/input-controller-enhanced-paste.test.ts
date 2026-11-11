@@ -613,7 +613,6 @@ describe("InputController enhanced-paste editor commit", () => {
 				undefined,
 				undefined,
 				undefined,
-				undefined,
 				new Composer({ terminal }),
 			);
 			const registry = AgentRegistry.global();
@@ -667,7 +666,6 @@ describe("InputController enhanced-paste editor commit", () => {
 		const mode = new InteractiveMode(
 			testSession.session,
 			"test",
-			undefined,
 			undefined,
 			undefined,
 			undefined,

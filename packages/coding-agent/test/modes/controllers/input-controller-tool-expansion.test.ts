@@ -9,11 +9,13 @@ describe("InputController tool output expansion", () => {
 	it("expands children and forces a full repaint so every live block re-renders", () => {
 		const expandable = { setExpanded: vi.fn() };
 		const inert = { render: vi.fn(() => []) };
+		const pendingShell = { setExpanded: vi.fn() };
 		const requestRender = vi.fn();
 		const showStatus = vi.fn();
 		const ctx = {
 			toolOutputExpanded: false,
 			chatContainer: { children: [expandable, inert] },
+			pendingShellContainer: { children: [pendingShell] },
 			ui: { requestRender },
 			showStatus,
 			refreshJobsReport: vi.fn(),
@@ -23,6 +25,7 @@ describe("InputController tool output expansion", () => {
 
 		expect(ctx.toolOutputExpanded).toBe(true);
 		expect(expandable.setExpanded).toHaveBeenCalledWith(true);
+		expect(pendingShell.setExpanded).toHaveBeenCalledWith(true);
 		// Expansion mutates every live block; the forced repaint re-renders them
 		// at their new heights in the same frame.
 		expect(requestRender).toHaveBeenCalledTimes(1);
@@ -58,6 +61,7 @@ describe("InputController tool output expansion", () => {
 			jobsViewOpen: true,
 			toolOutputExpanded: false,
 			chatContainer: { children: [] },
+			pendingShellContainer: { children: [] },
 			showStatus: vi.fn(),
 			ui: { requestRender: vi.fn() },
 			refreshJobsReport,

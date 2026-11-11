@@ -92,9 +92,7 @@ function makeSessionWithLastMessage(
 		isAdvisorUsingSubscription: () => advisorUsingSubscription,
 		isFastModeActive: () => false,
 		configuredThinkingLevel: () => undefined,
-		modelRegistry: {
-			isUsingOAuth: () => usingSubscription,
-		},
+		modelRegistry: { isUsingSubscription: () => usingSubscription },
 	};
 }
 

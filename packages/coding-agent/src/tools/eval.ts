@@ -69,6 +69,7 @@ import {
 	cfgEvalToolsEnabled,
 } from "../eval/settings";
 import { cfgTaskMaxRecursionDepth } from "../task/settings";
+import { shapeToolResult } from "../spotlight";
 import { cfgToolsMaxTimeout, cfgToolsSpeculativeExecutionEnabled } from "./settings";
 
 /** Language tokens the eval tool accepts, in stable display order. */
@@ -185,7 +186,7 @@ export interface EvalToolDescriptionOptions {
 	autoBackgroundEnabled?: boolean;
 	/** Advertise `@tool` / `tool(fn)` and the `tools` spawn option (`eval.tools.enabled`). */
 	evalTools?: boolean;
-	/** Push `workpool()` as the default for independent items (model delegation bias `eager`). Default: true. */
+	/** Push `workpool()` as the default for independent items (model delegation bias `eager`). Default: false. */
 	eagerDelegation?: boolean;
 	/** Point blocked callers at the `wait` tool; false when the session lacks it (subagents). Default: true. */
 	waitTool?: boolean;
@@ -210,7 +211,7 @@ function evalTemplateContext(options: EvalToolDescriptionOptions) {
 		py: options.py ?? true,
 		js: options.js ?? true,
 		evalTools: options.evalTools ?? true,
-		eagerDelegation: options.eagerDelegation ?? true,
+		eagerDelegation: options.eagerDelegation ?? false,
 		waitTool: options.waitTool ?? true,
 		autoBackgroundEnabled: options.autoBackgroundEnabled ?? false,
 		spawns: spawnPolicy.enabled,
@@ -384,6 +385,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			cfgTaskMaxRecursionDepth.get(session.settings),
 			session.taskDepth ?? 0,
 		);
+
 		return {
 			py: backends.python,
 			js: backends.js,
@@ -395,7 +397,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			preludes: this.#advertisedPreludes(session),
 			inlineTopics: session.isToolActive?.("read") === false,
 			autoProvision: cfgEvalAutoProvision.get(session.settings),
-			toolNames: session.getEvalBridgeToolNames?.(),
+			toolNames: session.getAdvertisedEvalToolNames?.(),
 			maxTimeout: cfgToolsMaxTimeout.get(session.settings),
 		};
 	}
@@ -484,6 +486,26 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	}
 
 	async execute(
+		toolCallId: string,
+		params: typeof evalSchema.infer,
+		signal?: AbortSignal,
+		onUpdate?: AgentToolUpdateCallback,
+		ctx?: AgentToolContext,
+	): Promise<AgentToolResult<EvalToolDetails | undefined>> {
+		const result = await this.#execute(toolCallId, params, signal, onUpdate, ctx);
+		if (!this.session) return result;
+		// Output shaped by the session's Spotlight experiment no longer matches the sink's line ranges.
+		return shapeToolResult(
+			this.session,
+			toolCallId,
+			{ tool: "eval", command: params.code, source: params.code, exitCode: result.isError ? 1 : 0 },
+			result,
+			signal,
+			{ dropTruncation: true },
+		);
+	}
+
+	async #execute(
 		_toolCallId: string,
 		params: typeof evalSchema.infer,
 		signal?: AbortSignal,
@@ -816,7 +838,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 
 			const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 2);
 			const images: ImageContent[] = [];
-			const callStatus: StatusEventLog = {};
 			const replies: string[] = [];
 
 			const cellResults: EvalCellResult[] = cells.map(cell => ({
@@ -848,10 +869,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				};
 				if (images.length > 0) {
 					details.images = images;
-				}
-				if (callStatus.statusEvents) {
-					details.statusEvents = callStatus.statusEvents;
-					details.statusEventsElided = callStatus.statusEventsElided;
 				}
 				if (replies.length > 0) {
 					details.replies = [...replies];
@@ -1034,7 +1051,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 									: undefined,
 							),
 						};
-						recordStatusEvent(callStatus, event);
+						// Kept on the cell only: a call-level copy doubled every persisted event.
 						recordStatusEvent(cellStatus, event);
 					}
 				}
@@ -1074,8 +1091,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						language: languages[0],
 						languages,
 						cells: cellResults,
-						statusEvents: callStatus.statusEvents,
-						statusEventsElided: callStatus.statusEventsElided,
 						replies: replies.length > 0 ? replies : undefined,
 						isError: true,
 					};
@@ -1106,8 +1121,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				language: languages[0],
 				languages,
 				cells: cellResults,
-				statusEvents: callStatus.statusEvents,
-				statusEventsElided: callStatus.statusEventsElided,
 				replies: replies.length > 0 ? replies : undefined,
 			};
 			if (notice) details.notice = notice;

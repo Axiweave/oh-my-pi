@@ -58,18 +58,22 @@ async function resolveMentionPath(
 	filePath: string,
 	cwd: string,
 ): Promise<{ resolvedPath: string; absolutePath: string; range?: { start: number; end: number } } | null> {
-	// Literal filenames win. Only a confirmed missing entry permits a range suffix.
-	let range: { start: number; end: number } | undefined;
-	const match = /^(.+):(\d+)(?:-(\d+))?$/.exec(filePath);
-	if (match && (await probeLiteralPathExists(filePath, cwd)) === "missing") {
-		const start = Number(match[2]);
-		const end = Number(match[3] ?? match[2]);
-		if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) return null;
-		filePath = match[1];
-		range = { start, end };
-	}
-	const absolutePath = resolveReadPath(filePath, cwd);
+	// Exact resolution only. The TUI @-selector inserts the real, complete path, so a
+	// mention that does not resolve to an existing file or directory is prose, not a file
+	// reference. Literal filenames win. Only a confirmed missing entry permits a range suffix.
+	// Resolution itself can throw (an internal-scheme URL such as `@local://x` is not a
+	// filesystem path), so it stays inside the try: an unresolvable mention is prose too.
 	try {
+		let range: { start: number; end: number } | undefined;
+		const match = /^(.+):(\d+)(?:-(\d+))?$/.exec(filePath);
+		if (match && (await probeLiteralPathExists(filePath, cwd)) === "missing") {
+			const start = Number(match[2]);
+			const end = Number(match[3] ?? match[2]);
+			if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) return null;
+			filePath = match[1];
+			range = { start, end };
+		}
+		const absolutePath = resolveReadPath(filePath, cwd);
 		await Bun.file(absolutePath).stat();
 		return { resolvedPath: filePath, absolutePath, range };
 	} catch {

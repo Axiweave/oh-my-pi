@@ -71,7 +71,6 @@ describe("InteractiveMode optimistic user row", () => {
 		mode = new InteractiveMode(
 			session,
 			"test",
-			undefined,
 			() => {},
 			undefined,
 			undefined,
