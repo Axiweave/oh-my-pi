@@ -36,6 +36,7 @@ const ALLOWED_TOOLS: Record<string, true> = {
 	ask: true,
 	goal: true,
 	loop: true,
+	spawn_session: true,
 };
 
 /** True when a `write` call only reaches coordination, reply, sandbox, or job-cancel targets. Any throw means false. */

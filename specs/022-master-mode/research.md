@@ -40,7 +40,7 @@ if (this.#masterModeState?.enabled) {
 | `todo`, `ask` | Allowed. |
 | `goal`, `loop` | Allowed. These are hidden tools that goal mode and the guided loop add. Without them FR-018 would fail. They are in `HIDDEN_TOOL_NAMES` (`tools/builtin-names.ts:36`). |
 | `write` | Allowed only for the internal targets below. |
-| Everything else | Refused. This covers `edit`, `ast_edit`, `ast_grep`, `eval`, `web_search`, `browser`, `computer`, `wait`, `lsp`, `debug`, `ida`, `github`, `checkpoint`, `rewind`, `new_context`, `context_notes`, the memory tools, `think`, `spawn_session`, every MCP tool (`mcp__*`, see `isMCPToolName` in `builtin-names.ts`), and every extension tool. A tool that omp does not know is also refused. |
+| Everything else | Refused. This covers `edit`, `ast_edit`, `ast_grep`, `eval`, `web_search`, `browser`, `computer`, `wait`, `lsp`, `debug`, `ida`, `github`, `checkpoint`, `rewind`, `new_context`, `context_notes`, the memory tools, `think`, every MCP tool (`mcp__*`, see `isMCPToolName` in `builtin-names.ts`), and every extension tool. A tool that omp does not know is also refused. |
 
 **The `write` check.** It is synchronous and uses the same router calls that `WriteTool.execute` uses (`tools/write.ts:912-1000`, the `touchesNoFiles` test at `:938`):
 

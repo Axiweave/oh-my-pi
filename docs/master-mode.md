@@ -43,7 +43,7 @@ While the mode is on, the guard runs before every main-agent tool call. A refuse
 | `bash` with `async: true` and no `name` | Allowed. |
 | `bash` without `async: true` | Refused (`foreground-bash`). |
 | `bash` with a non-blank `name` | Refused (`service-bash`). |
-| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop` | Allowed. |
+| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, `spawn_session` (`/spawn` turn only) | Allowed. |
 | `write` to `agent://`, `out://`, `local://`, or `proc://<id>/kill` | Allowed. |
 | `write` to any other target | Refused (`file-change`). |
 | `edit`, `ast_edit` | Refused (`file-change`). |

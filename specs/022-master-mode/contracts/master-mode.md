@@ -67,7 +67,7 @@ Every refusal text ends with `Do not retry or route around this block.` Each one
 | `bash` `{ command, async: true, name: "  " }` | Allow (a blank name is no name). |
 | `bash` `{ command }` or `{ command, async: false }` | Refuse, `foreground-bash`. |
 | `bash` `{ command, async: true, name: "dev" }` | Refuse, `service-bash`. |
-| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop` | Allow. |
+| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, `spawn_session` | Allow. |
 | `write` `{ path: "agent://…" }` | Allow. |
 | `write` `{ path: "out://…" }` | Allow. |
 | `write` `{ path: "local://notes.md" }` | Allow. |
@@ -78,7 +78,7 @@ Every refusal text ends with `Do not retry or route around this block.` Each one
 | `write` with a malformed selector, or no `path` | Refuse, `file-change`. |
 | `edit`, `ast_edit` | Refuse, `file-change`. |
 | `wait` | Refuse, `wait`. |
-| `eval`, `web_search`, `browser`, `computer`, `lsp`, `debug`, `ida`, `github`, `checkpoint`, `rewind`, `new_context`, `context_notes`, `ast_grep`, `think`, `spawn_session`, memory tools | Refuse, `other`. |
+| `eval`, `web_search`, `browser`, `computer`, `lsp`, `debug`, `ida`, `github`, `checkpoint`, `rewind`, `new_context`, `context_notes`, `ast_grep`, `think`, memory tools | Refuse, `other`. |
 | `mcp__*` names, extension tools, unknown names | Refuse, `other`. |
 
 ### Refusal texts
