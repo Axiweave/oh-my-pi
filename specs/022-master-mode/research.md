@@ -39,6 +39,7 @@ if (this.#masterModeState?.enabled) {
 | `read`, `grep`, `glob`, `find` | Allowed (user decision: not only internal URLs). |
 | `todo`, `ask` | Allowed. |
 | `goal`, `loop` | Allowed. These are hidden tools that goal mode and the guided loop add. Without them FR-018 would fail. They are in `HIDDEN_TOOL_NAMES` (`tools/builtin-names.ts:36`). |
+| `spawn_session` | Allowed. The hidden tool is active only in a `/spawn` turn that the user starts. It starts a sibling session and does not wait on its work. |
 | `write` | Allowed only for the internal targets below. |
 | Everything else | Refused. This covers `edit`, `ast_edit`, `ast_grep`, `eval`, `web_search`, `browser`, `computer`, `wait`, `lsp`, `debug`, `ida`, `github`, `checkpoint`, `rewind`, `new_context`, `context_notes`, the memory tools, `think`, every MCP tool (`mcp__*`, see `isMCPToolName` in `builtin-names.ts`), and every extension tool. A tool that omp does not know is also refused. |
 

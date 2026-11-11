@@ -116,7 +116,7 @@ UPSTREAM_DIVERGENCES.md
 These notes refer to [research.md](research.md) and [contracts/master-mode.md](contracts/master-mode.md).
 
 1. **Guard (R1, R2).** `#beforeToolCall` starts with `if (this.#masterModeState?.enabled) { const reason = masterRefusal(ctx.tool.name, ctx.args); if (reason) return { block: true, reason }; }`. It runs before the TTSR and extension logic, so a refused call never reaches them.
-2. **Allowlist (R2).** `task`, `bash` with `async: true` and no `name`, `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, and `write` to `agent://`, `out://`, `local://`, or `proc://<id>/kill`. Everything else is refused, including `xd://`.
+2. **Allowlist (R2).** `task`, `bash` with `async: true` and no `name`, `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, `spawn_session` (active only in a `/spawn` turn), and `write` to `agent://`, `out://`, `local://`, or `proc://<id>/kill`. Everything else is refused, including `xd://`.
 3. **Foreground task (R3).** `TaskTool` refuses a call when master mode is on and the call would run in the foreground. `#startSpeculative` returns `undefined` for the same case, so no run starts early.
 4. **Message (R5).** `#buildMasterModeMessage` renders `master-mode-active.md`. The prompt flow pushes it each turn after the vibe push. `sendMasterModeContext` is not added (R5).
 5. **Toggle (R6, R7).** `handleMasterModeCommand` toggles. Entry refuses on speckit-auto, plan, vibe, and a disabled `async.enabled`. Exit clears the state and removes the message. Exit does not abort the turn (US3/AC4).

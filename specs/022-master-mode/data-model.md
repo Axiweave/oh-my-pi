@@ -55,7 +55,7 @@ A fixed rule in `masterRefusal(toolName, args)`. It has no state and no setting.
 |---|---|
 | `task` | Always at the guard. `TaskTool` refuses a foreground run itself. |
 | `bash` | `args.async === true` and `args.name` is empty or blank. |
-| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop` | Always. |
+| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, `spawn_session` | Always. |
 | `write` | The target resolves through `InternalUrlRouter.instance().writeTarget` to a scheme with write scope `coordination`, `reply`, or `sandbox`, or to a URL that the scheme's `cancels` accepts. |
 | any other name | Never. |
 
