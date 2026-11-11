@@ -108,8 +108,8 @@ export interface InteractiveModeInitOptions {
 	clearInitialTerminalHistory?: boolean;
 	/** Opt into hosting when the caller owns outer startup readiness and shutdown. */
 	autoStartCollab?: boolean;
-	/** A mode that `--goal` or `--plan-yolo` starts after init; the speckit-auto startup default gives way to it. */
-	startupBlocker?: "goal" | "plan";
+	/** A mode that `--goal`, `--plan-yolo`, or `--master` starts after init; the speckit-auto startup default gives way to it. */
+	startupBlocker?: "goal" | "plan" | "master";
 	/**
 	 * A `/spawn` child that starts work: the speckit-auto startup default applies even to a forked conversation.
 	 * A child that publishes `cci-state` without it publishes `idle` at init.
@@ -286,6 +286,7 @@ export interface InteractiveModeContext {
 	planModeEnabled: boolean;
 	planModePaused: boolean;
 	vibeModeEnabled: boolean;
+	masterModeEnabled: boolean;
 	goalModeEnabled: boolean;
 	goalModePaused: boolean;
 	loopModeEnabled: boolean;
@@ -712,6 +713,7 @@ export interface InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean>;
+	handleMasterModeCommand(): void | Promise<void>;
 	handleGoalModeCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
 	handleGuidedGoalCommand(
 		rest?: string,

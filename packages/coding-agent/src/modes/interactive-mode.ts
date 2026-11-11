@@ -511,8 +511,10 @@ import {
 import { isWarpCliAgentProtocolActive } from "./warp-events";
 import { journalJudgmentUsage } from "../judgment";
 import { customMessageContentText } from "../session/checkpoint-entries";
+import { MASTER_MODE_ENTRY } from "../session/master-mode";
 import {
 	cfgAskEnabled,
+	cfgAsyncEnabled,
 	cfgSpawnConfirm,
 	cfgSpawnWorktree,
 	cfgTasksTodoClearDelay,
@@ -1558,6 +1560,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	interviewActive = false;
 	goalModePaused = false;
 	vibeModeEnabled = false;
+	masterModeEnabled = false;
 	planModePlanFilePath: string | undefined = undefined;
 	loopModeEnabled = false;
 	loopModePaused = false;
@@ -3736,6 +3739,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.disableLoopMode("Exit vibe mode before using reset loops. Loop mode disabled.");
 			return;
 		}
+		if (action === "reset" && this.masterModeEnabled) {
+			this.disableLoopMode("Exit master mode before using reset loops. Loop mode disabled.");
+			return;
+		}
 
 		// An exhausted budget ends the loop regardless of the condition, so check
 		// it first: the user's command must not run one last time for nothing.
@@ -3766,6 +3773,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// flight, but the reset must not run concurrently with the toolset switch.
 		if (action === "reset" && (this.vibeModeEnabled || this.#vibeModeEntry !== undefined)) {
 			this.disableLoopMode("Exit vibe mode before using reset loops. Loop mode disabled.");
+			return;
+		}
+		if (action === "reset" && this.masterModeEnabled) {
+			this.disableLoopMode("Exit master mode before using reset loops. Loop mode disabled.");
 			return;
 		}
 
@@ -3996,6 +4007,80 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 	}
 
+	#saveMasterModeState(): void {
+		this.sessionManager.appendCustomEntry(MASTER_MODE_ENTRY, { enabled: this.masterModeEnabled });
+	}
+
+	/** Restores the latest saved state on this branch; a missing or malformed entry means off. */
+	restoreMasterMode(): void {
+		const entry = this.sessionManager
+			.getBranch()
+			.findLast(candidate => candidate.type === "custom" && candidate.customType === MASTER_MODE_ENTRY);
+		const data = entry?.type === "custom" ? entry.data : undefined;
+		if (!(typeof data === "object" && data !== null && "enabled" in data && data.enabled === true)) return;
+		this.masterModeEnabled = true;
+		this.session.setMasterModeState({ enabled: true });
+		this.#updateMasterModeStatus();
+	}
+
+	handleMasterModeCommand(): void {
+		if (this.masterModeEnabled) {
+			this.#exitMasterMode();
+			return;
+		}
+		if (this.#masterEntryBlocked()) return;
+		this.#enterMasterMode();
+	}
+
+	/** Starts master mode before the first prompt of `omp --master`; a refusal leaves it off. */
+	async startMasterAtStartup(planYolo: boolean): Promise<void> {
+		if (this.masterModeEnabled) return;
+		if (planYolo) {
+			this.showWarning("Master mode stays off: --plan-yolo starts plan mode.");
+			return;
+		}
+		if (this.#masterEntryBlocked()) return;
+		this.#enterMasterMode();
+	}
+
+	/** Shows why master mode cannot start; true when it refused. Goal and loop mode do not block. */
+	#masterEntryBlocked(): boolean {
+		if (this.#warnSpeckitAutoBlocks()) return true;
+		if (this.planModeEnabled || this.planModePaused) {
+			this.#warnPlanModeBlocks();
+			return true;
+		}
+		if (this.vibeModeEnabled || this.#vibeModeEntry) {
+			this.showWarning("Exit vibe mode first.");
+			return true;
+		}
+		if (!cfgAsyncEnabled.get(this.session.settings) || !this.session.asyncJobManager) {
+			this.showWarning("Master mode needs background work. Enable async.enabled.");
+			return true;
+		}
+		return false;
+	}
+
+	// The active tool set stays as it is: the guard in AgentSession refuses, so nothing to restore on exit.
+	#enterMasterMode(): void {
+		this.masterModeEnabled = true;
+		this.session.setMasterModeState({ enabled: true });
+		this.#saveMasterModeState();
+		this.#updateMasterModeStatus();
+		this.showStatus(
+			"Master mode on: the main agent delegates work to subagents and background jobs, never waits on delegated work, and does not edit files itself.",
+		);
+	}
+
+	/** Does not abort a running turn: the guard stops from the next tool call. */
+	#exitMasterMode(): void {
+		this.masterModeEnabled = false;
+		this.session.setMasterModeState(undefined);
+		this.#saveMasterModeState();
+		this.#updateMasterModeStatus();
+		this.showStatus("Master mode off.");
+	}
+
 	#updateSpeckitAutoStatus(): void {
 		const run = this.#speckitRun;
 		const state = !run
@@ -4148,11 +4233,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** The mode that keeps speckit-auto mode off (research R10). */
-	#speckitAutoBlocker(): "loop" | "plan" | "goal" | "vibe" | undefined {
+	#speckitAutoBlocker(): "loop" | "plan" | "goal" | "vibe" | "master" | undefined {
 		if (this.loopModeEnabled || this.#guidedLoopInterviewActive) return "loop";
 		if (this.planModeEnabled || this.planModePaused) return "plan";
 		if (this.goalModeEnabled || this.goalModePaused || this.isGuidedGoalInterviewActive()) return "goal";
 		if (this.vibeModeEnabled || this.#vibeModeEntry) return "vibe";
+		if (this.masterModeEnabled) return "master";
 		return undefined;
 	}
 
@@ -4162,7 +4248,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * resumed session keeps its own state. A `/spawn` child that starts work counts as new
 	 * even when it forks A's conversation. Called at launch, after `/new`, and after `/delete`.
 	 */
-	#applySpeckitAutoDefault(startupBlocker?: "goal" | "plan", spawnStart = false): void {
+	#applySpeckitAutoDefault(startupBlocker?: "goal" | "plan" | "master", spawnStart = false): void {
 		if (this.speckitAutoEnabled) return;
 		const scope = cfgSpeckitAutoDefaultOnStartup.get(this.session.settings);
 		if (scope === "off") return;
@@ -4988,6 +5074,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const conflict = (mode: string) => ({ code: "conflict" as const, message: `Exit ${mode} mode first.` });
 		const planBlocks = this.planModeEnabled || this.planModePaused;
 		const goalBlocks = this.goalModeEnabled || this.goalModePaused;
+		const masterBlocks = this.masterModeEnabled;
 		// Speckit-auto mode keeps every other mode off, as the slash commands do.
 		if (this.speckitAutoEnabled && (request?.action === "enter" || request?.action === "resume")) {
 			return conflict("speckit-auto");
@@ -5011,6 +5098,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				}
 				if (goalBlocks) return conflict("goal");
 				if (this.vibeModeEnabled) return conflict("vibe");
+				if (masterBlocks) return conflict("master");
 				return () => this.#enterPlanMode();
 			case "vibe":
 				if (request.action === "exit") return this.vibeModeEnabled ? () => this.#exitVibeMode() : undefined;
@@ -5018,6 +5106,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (this.vibeModeEnabled) return undefined;
 				if (planBlocks) return conflict("plan");
 				if (goalBlocks) return conflict("goal");
+				if (masterBlocks) return conflict("master");
 				return () => this.#enterVibeMode();
 			case "goal":
 				switch (request.action) {
@@ -6634,6 +6723,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#notifyModeChanged();
 	}
 
+	#updateMasterModeStatus(): void {
+		this.statusLine.setMasterModeStatus(this.masterModeEnabled ? { enabled: true } : null);
+		this.ui.requestRender();
+		this.#notifyModeChanged();
+	}
+
 	/**
 	 * Anchored HUD of in-flight subagents, mirroring the Todos block above the
 	 * editor. Registry events update rows as agents start and stop. Token-rate
@@ -7014,6 +7109,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#updateVibeModeStatus();
 		}
 		this.#resetSpeckitAuto();
+		if (this.masterModeEnabled) {
+			this.session.setMasterModeState(undefined);
+			this.masterModeEnabled = false;
+			this.#updateMasterModeStatus();
+		}
 	}
 
 	/** Reconcile mode state from session entries on resume/switch. */
@@ -7052,6 +7152,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
 		this.restoreSpeckitAuto();
+		this.restoreMasterMode();
 		const goalEnabled = cfgGoalEnabled.get(this.session.settings);
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
 			this.session.goalRuntime.clearAccounting();
@@ -7193,6 +7294,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.vibeModeEnabled) {
 			this.showWarning("Exit vibe mode first.");
+			return;
+		}
+		if (this.masterModeEnabled) {
+			this.showWarning("Exit master mode first.");
 			return;
 		}
 
@@ -8271,6 +8376,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Exit vibe mode first.");
 			return false;
 		}
+		if (this.masterModeEnabled) {
+			this.showWarning("Exit master mode first.");
+			return false;
+		}
 		const activeWorkflow = this.session.getPlanModeState()?.workflow ?? "parallel";
 		if (this.planModeEnabled) {
 			if (activeWorkflow !== requestedWorkflow) {
@@ -8354,6 +8463,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
+			return false;
+		}
+		if (this.masterModeEnabled) {
+			this.showWarning("Exit master mode first.");
 			return false;
 		}
 		await this.#enterVibeMode();
@@ -8478,6 +8591,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
+			return;
+		}
+		if (this.masterModeEnabled) {
+			this.showWarning("Exit master mode first.");
 			return;
 		}
 

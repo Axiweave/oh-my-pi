@@ -242,6 +242,7 @@ import titleCardPrompt from "../prompts/system/title-card.md" with { type: "text
 import titleForkPrompt from "../prompts/system/title-fork.md" with { type: "text" };
 import skillfulNoticePrompt from "../prompts/system/skillful-notice.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
+import masterModeActivePrompt from "../prompts/system/master-mode-active.md" with { type: "text" };
 import {
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
@@ -422,6 +423,7 @@ import {
 	LAUNCH_COMPLETION_MESSAGE_TYPE,
 	type LaunchCompletionEntry,
 } from "./launch-completion";
+import { MASTER_MODE_CONTEXT_MESSAGE_TYPE, type MasterModeState, masterRefusal } from "./master-mode";
 import {
 	type BashExecutionMessage,
 	buildReplanTitleContext,
@@ -1083,6 +1085,7 @@ export class AgentSession implements SettingsScope {
 	readonly #implReviewGate: ImplReviewGate;
 	readonly #runImplReviewer?: ImplReviewer;
 	#vibeModeState: VibeModeState | undefined;
+	#masterModeState: MasterModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
 	readonly #advisors: SessionAdvisors;
@@ -4698,8 +4701,12 @@ export class AgentSession implements SettingsScope {
 		}
 		if (message.role === "hookMessage" || message.role === "custom") {
 			// One-run instructions must not return from persisted history: prewalk
-			// nudges are consumed once, and Vibe context is rebuilt only while active.
-			if (!isPrewalkPlanNudge(message) && message.customType !== VIBE_MODE_CONTEXT_MESSAGE_TYPE) {
+			// nudges are consumed once, and Vibe/Master context is rebuilt only while active.
+			if (
+				!isPrewalkPlanNudge(message) &&
+				message.customType !== VIBE_MODE_CONTEXT_MESSAGE_TYPE &&
+				message.customType !== MASTER_MODE_CONTEXT_MESSAGE_TYPE
+			) {
 				this.sessionManager.appendCustomMessageEntry(
 					message.customType,
 					message.content,
@@ -6066,6 +6073,10 @@ export class AgentSession implements SettingsScope {
 	 * execution still emit there).
 	 */
 	async #beforeToolCall(ctx: BeforeToolCallContext, signal?: AbortSignal): Promise<BeforeToolCallResult | undefined> {
+		if (this.#masterModeState?.enabled) {
+			const reason = masterRefusal(ctx.tool.name, ctx.args);
+			if (reason) return { block: true, reason };
+		}
 		const runner = this.#extensionRunner;
 		runner?.markLoopToolCall?.(ctx.toolCall.id, ctx.tool.name);
 		const ttsrResult = await this.#ttsr.beforeToolCall(ctx);
@@ -8109,6 +8120,36 @@ export class AgentSession implements SettingsScope {
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 	}
 
+	getMasterModeState(): MasterModeState | undefined {
+		return this.#masterModeState;
+	}
+
+	setMasterModeState(state: MasterModeState | undefined): void {
+		this.#masterModeState = state;
+		if (state?.enabled) return;
+
+		const isMasterContext = (message: AgentMessage): boolean =>
+			message.role === "custom" && message.customType === MASTER_MODE_CONTEXT_MESSAGE_TYPE;
+		const messages = this.agent.state.messages;
+		const filtered = messages.filter(message => !isMasterContext(message));
+		const historyChanged = filtered.length !== messages.length;
+		if (historyChanged) this.agent.replaceMessages(filtered);
+
+		const steering = this.agent.peekSteeringQueue();
+		const followUp = this.agent.peekFollowUpQueue();
+		const filteredSteering = steering.filter(message => !isMasterContext(message));
+		const filteredFollowUp = followUp.filter(message => !isMasterContext(message));
+		if (filteredSteering.length !== steering.length || filteredFollowUp.length !== followUp.length) {
+			this.agent.replaceQueues(filteredSteering, filteredFollowUp);
+			this.#reconcileQueuedMessageDrain();
+		}
+		this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(message => !isMasterContext(message));
+
+		if (!historyChanged) return;
+		this.#advisors.resetAllRuntimes("master-mode-exit");
+		this.#closeCodexProviderSessionsForHistoryRewrite();
+	}
+
 	#assertVibeSessionTransitionAllowed(action: string): void {
 		if (this.#vibeModeState?.enabled) {
 			throw new Error(`Cannot ${action} while vibe mode is active. Exit vibe mode first.`);
@@ -8436,6 +8477,20 @@ export class AgentSession implements SettingsScope {
 			role: "custom",
 			customType: VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 			content: prompt.render(vibeModeActivePrompt, {
+				todoAvailable: this.getActiveToolNames().includes("todo"),
+			}),
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+	}
+
+	#buildMasterModeMessage(): CustomMessage | null {
+		if (!this.#masterModeState?.enabled) return null;
+		return {
+			role: "custom",
+			customType: MASTER_MODE_CONTEXT_MESSAGE_TYPE,
+			content: prompt.render(masterModeActivePrompt, {
 				todoAvailable: this.getActiveToolNames().includes("todo"),
 			}),
 			display: false,
@@ -9403,6 +9458,10 @@ export class AgentSession implements SettingsScope {
 			const vibeModeMessage = this.#buildVibeModeMessage();
 			if (vibeModeMessage) {
 				messages.push(vibeModeMessage);
+			}
+			const masterModeMessage = this.#buildMasterModeMessage();
+			if (masterModeMessage) {
+				messages.push(masterModeMessage);
 			}
 			if (options?.prependMessages) {
 				messages.push(...options.prependMessages);

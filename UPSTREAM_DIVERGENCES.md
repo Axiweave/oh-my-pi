@@ -507,3 +507,14 @@ The full `bun run test` plan did not run for this merge.
 - **Key paths:** `crates/pi-walker/src/ignore.rs`.
 - **Check:** `bun run test:rs` (`linked_worktree_uses_main_repo_exclude` in `crates/pi-walker/src/walk/tests.rs`).
 - **Retire when:** Upstream's walker reads the common repository's `info/exclude` for linked worktrees.
+
+### Master mode
+
+- **Decision:** Keep `/master` and `--master`. The main agent is an orchestrator that never waits on delegated work. The mode does not change the active tool set.
+- **Decision:** A pure guard (`masterRefusal`) in `AgentSession.#beforeToolCall` refuses file-change tools, foreground `bash`, named `bash` services, `wait`, and every tool off the allowlist. `TaskTool` refuses a foreground `task` call.
+- **Decision:** Background `bash` stays allowed, so it can change files. "Give every change to a subagent" is a prompt rule only. Never describe the mode as forced delegation.
+- **Decision:** The mode excludes vibe, plan, and speckit-auto modes. It works with goal and loop. It persists as the `master-mode` session entry.
+- **Why:** The main session must stay free to talk to the user while subagents and jobs run.
+- **Key paths:** `packages/coding-agent/src/session/master-mode.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/task/index.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, `packages/coding-agent/src/prompts/system/master-mode-active.md`, `packages/coding-agent/src/cli/args.ts`, `packages/tui/src/status-line/segments.ts`, and `docs/master-mode.md`.
+- **Checks:** `packages/coding-agent/test/master-mode-guard.test.ts`, `packages/coding-agent/test/task/master-task-refusal.test.ts`, `packages/coding-agent/test/interactive-mode-master.test.ts`, `packages/coding-agent/test/cli-master-flag.test.ts`, and `packages/tui/test/status-line-master.test.ts`.
+- **Retire when:** Upstream provides an equal non-waiting orchestrator mode.

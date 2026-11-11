@@ -100,6 +100,10 @@ export const launchHelp = {
 			description:
 				"Print mode: before exiting, wait for this run's background jobs and wake the session with each result (async.printWake); no time limit unless --max-time is set",
 		}),
+		master: Flags.boolean({
+			description:
+				"Start in master mode: the main agent delegates work to subagents and background jobs and never waits on them (interactive only)",
+		}),
 		"external-thinking": Flags.boolean({
 			description:
 				"Use a private scratchpad while disabling supported GPT, Claude, and Gemini reasoning (at your own risk: providers have flagged this request shape as abuse)",

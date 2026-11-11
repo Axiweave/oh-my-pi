@@ -338,6 +338,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--hide-thinking",
 	"--advisor",
 	"--wait-async",
+	"--master",
 	"--external-thinking",
 	"--prewalk",
 	"--no-prewalk",

@@ -162,6 +162,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--plan-yolo` | Start in read-only plan mode, auto-approve the model's plan proposal, then switch to the execution target to implement it. |
 | `--plan-yolo-into <id-or-role>` | Target model for plan-yolo execution (default the `smol` role). Requires `--plan-yolo`. |
 | `--goal <objective>` | Start a fresh interactive session in goal mode and work on the objective. Requires `goal.enabled` and interactive mode. Bypasses `autoResume`. Rejects positional prompts, `@file` or stdin input, explicit session selection or imports, `--plan-yolo`, `--no-tools`, and startup plan mode (`plan.defaultOnStartup`). |
+| `--master` | Start the interactive session in master mode: the main agent delegates work to subagents and background jobs and never waits on them. Needs `async.enabled`. Exits with code 2 with `--print` or `--mode`. See [Master mode](./master-mode.md). |
 
 #### Tools, approvals, and runtime
 

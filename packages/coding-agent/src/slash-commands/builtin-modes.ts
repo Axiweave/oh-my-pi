@@ -479,6 +479,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		getTuiAutocompleteDescription: runtime => {
 			if (!cfgPlanEnabled.get(runtime.ctx.settings)) return "Debate: disabled in settings";
 			if (runtime.ctx.speckitAutoEnabled) return "Debate: blocked by speckit-auto mode";
+			if (runtime.ctx.masterModeEnabled) return "Debate: blocked by master mode";
 			if (runtime.ctx.planModeEnabled) {
 				const workflow = runtime.ctx.session.getPlanModeState()?.workflow;
 				const planFile = runtime.ctx.planModePlanFilePath;
@@ -504,6 +505,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		getTuiAutocompleteDescription: runtime => {
 			if (!cfgPlanEnabled.get(runtime.ctx.settings)) return "Plan: disabled in settings";
 			if (runtime.ctx.speckitAutoEnabled) return "Plan: blocked by speckit-auto mode";
+			if (runtime.ctx.masterModeEnabled) return "Plan: blocked by master mode";
 			if (runtime.ctx.planModeEnabled) {
 				const planFile = runtime.ctx.planModePlanFilePath;
 				return `Plan: on${planFile ? ` (${path.basename(planFile)})` : ""}`;
@@ -536,6 +538,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.vibeModeEnabled) return "Vibe: on";
+			if (runtime.ctx.masterModeEnabled) return "Vibe: blocked by master mode";
 			if (runtime.ctx.speckitAutoEnabled) return "Vibe: blocked by speckit-auto mode";
 			if (runtime.ctx.planModeEnabled) return "Vibe: blocked by plan mode";
 			if (runtime.ctx.goalModeEnabled) return "Vibe: blocked by goal mode";
@@ -545,6 +548,22 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			await runWithDetachedDraft(command, runtime, () =>
 				runtime.ctx.handleVibeModeCommand(command.args || undefined, runtime.input),
 			);
+		},
+	},
+	{
+		name: "master",
+		icon: "wave",
+		description: "Toggle master mode (the main agent delegates work and never waits on it)",
+		getTuiAutocompleteDescription: runtime => {
+			if (runtime.ctx.masterModeEnabled) return "Master: on";
+			if (runtime.ctx.speckitAutoEnabled) return "Master: blocked by speckit-auto mode";
+			if (runtime.ctx.planModeEnabled || runtime.ctx.planModePaused) return "Master: blocked by plan mode";
+			if (runtime.ctx.vibeModeEnabled) return "Master: blocked by vibe mode";
+			return "Master: off";
+		},
+		handleTui: async (_command, runtime) => {
+			await runtime.ctx.handleMasterModeCommand();
+			clearSubmittedText(runtime);
 		},
 	},
 	{

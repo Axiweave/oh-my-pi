@@ -58,6 +58,8 @@ export interface Args {
 	advisor?: boolean;
 	/** Print mode: wake the session with background-job results before exiting (`async.printWake`). */
 	waitAsync?: boolean;
+	/** Start the interactive session in master mode. */
+	master?: boolean;
 	externalThinking?: boolean;
 	continue?: boolean;
 	resume?: string | true;
@@ -141,6 +143,13 @@ export function validateGoalLaunch(args: Args, interactive: boolean): void {
 	}
 	if (args.continue || args.resume || args.fork || args.fromClaude || args.fromCodex) {
 		throw new CliUsageError("--goal requires a fresh session (no resume, continue, fork, or import).");
+	}
+}
+
+/** Reject `--master` outside the interactive TUI: master mode needs the live composer and background jobs. */
+export function validateMasterLaunch(args: Args, interactive: boolean): void {
+	if (args.master && !interactive) {
+		throw new CliUsageError("--master requires an interactive terminal (not --print or --mode).");
 	}
 }
 
@@ -369,6 +378,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.advisor = true;
 		} else if (arg === "--wait-async") {
 			result.waitAsync = true;
+		} else if (arg === "--master") {
+			result.master = true;
 		} else if (arg === "--external-thinking") {
 			result.externalThinking = true;
 		} else if (arg === "--prewalk") {

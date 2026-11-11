@@ -58,6 +58,7 @@ import { hasResolvableTranscript } from "../internal-urls/registry-helpers";
 import { sessionResolveContext } from "../internal-urls/context";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { AgentRegistry, isResumable } from "../registry/agent-registry";
+import { MASTER_TASK_REFUSAL } from "../session/master-mode";
 import { type DiscoveryResult, discoverAgents } from "./discovery";
 import { createEvalCustomTools, describeEvalTools, evalToolsEnabled } from "./eval-tools";
 import { generateTaskName } from "./name-generator";
@@ -1017,6 +1018,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 		const detached =
 			cfgAsyncEnabled.get(this.session.settings) && this.session.asyncJobManager !== undefined && !blocking;
+		if (!detached && this.session.getMasterModeState?.()?.enabled) return undefined;
 		const agentId = await this.#outputManager().allocate(spawn.name?.trim() || generateTaskName());
 		if (signal.aborted) return undefined;
 		return this.#launch({ toolCallId, params: spawn, index, agentId, detached });
@@ -1165,6 +1167,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// execution is available.
 		const asyncEnabled = cfgAsyncEnabled.get(this.session.settings);
 		const manager = asyncEnabled ? this.session.asyncJobManager : undefined;
+		if (this.session.getMasterModeState?.()?.enabled && (!manager || itemBlocking.some(Boolean))) {
+			return createTaskModeError(MASTER_TASK_REFUSAL);
+		}
 		const asyncItems = manager ? spawnItems.filter((_, index) => !itemBlocking[index]) : [];
 		// Runs started while the call streamed. An item runs detached iff it
 		// becomes a background job here; a run launched under the other mode

@@ -32,6 +32,7 @@ import {
 	reportUnrecognizedFlags,
 	validateGoalLaunch,
 	validateGoalStartup,
+	validateMasterLaunch,
 	validateRestoreLaunch,
 	validateRestorePrompt,
 	validateToolNames,
@@ -705,6 +706,7 @@ async function runInteractiveMode(
 	refreshScopedModelsAfterLogin?: () => Promise<void>,
 	startsPlanYolo = false,
 	spawnStartText?: string,
+	startupMaster = false,
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
@@ -759,7 +761,8 @@ async function runInteractiveMode(
 				suppressWelcomeIntro: resuming || setupScenes.length > 0 || playStartupSplash,
 				clearInitialTerminalHistory: true,
 				autoStartCollab: joinLink === undefined,
-				startupBlocker: startupGoal !== undefined ? "goal" : startsPlanYolo ? "plan" : undefined,
+				startupBlocker:
+					startupGoal !== undefined ? "goal" : startsPlanYolo ? "plan" : startupMaster ? "master" : undefined,
 				spawnStart: spawnStartText !== undefined,
 			}),
 		);
@@ -841,6 +844,9 @@ async function runInteractiveMode(
 		}
 		throw error;
 	}
+
+	// Master mode starts first so the goal start prompt, restore, spawn text, and initial messages run under it.
+	if (startupMaster) await mode.startMasterAtStartup(startsPlanYolo);
 
 	if (startupGoal !== undefined) {
 		try {
@@ -1988,6 +1994,7 @@ export async function runRootCommand(
 		// startup-parse flags, so rejecting later would leave forked or imported
 		// transcripts (or an opened picker) behind a usage error.
 		validateGoalLaunch(parsedArgs, isInteractive);
+		validateMasterLaunch(parsedArgs, isInteractive);
 		validateRestoreLaunch(parsedArgs, isInteractive);
 		// Without piped text the prompt must come from argv, which only the
 		// post-extension reparse can settle: an extension string flag's value
@@ -2941,6 +2948,7 @@ export async function runRootCommand(
 						refreshScopedModelsAfterLogin,
 						parsedArgs.planYolo === true,
 						spawnStartText,
+						parsedArgs.master === true,
 					);
 				} finally {
 					startupLease?.dispose();
