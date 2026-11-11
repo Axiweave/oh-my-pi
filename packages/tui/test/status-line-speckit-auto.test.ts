@@ -22,6 +22,7 @@ function createContext(
 		loopMode,
 		speckitAuto,
 		prewalk,
+		masterMode: null,
 		goalMode: null,
 		vibeMode: null,
 		vim: null,

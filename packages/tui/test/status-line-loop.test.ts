@@ -20,6 +20,7 @@ function createContext(loopMode: SegmentContext["loopMode"]): SegmentContext {
 		planMode: null,
 		loopMode,
 		prewalk: null,
+		masterMode: null,
 		goalMode: null,
 		vibeMode: null,
 		speckitAuto: null,

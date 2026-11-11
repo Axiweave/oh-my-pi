@@ -753,6 +753,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#speckitAutoStatus: SegmentContext["speckitAuto"] = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#vibeModeStatus: { enabled: boolean } | null = null;
+	#masterModeStatus: { enabled: boolean } | null = null;
 	#vimStatus: SegmentContext["vim"] = null;
 	/**
 	 * Injected aggregator that returns the aggregate tok/s of this session's
@@ -1206,6 +1207,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const next = status ?? null;
 		if (this.#vibeModeStatus === next || this.#vibeModeStatus?.enabled === next?.enabled) return;
 		this.#vibeModeStatus = next;
+		this.#invalidateStatusLineRenderCache();
+	}
+
+	setMasterModeStatus(status: { enabled: boolean } | null): void {
+		if (this.#masterModeStatus === status || this.#masterModeStatus?.enabled === status?.enabled) return;
+		this.#masterModeStatus = status;
 		this.#invalidateStatusLineRenderCache();
 	}
 
@@ -2644,6 +2651,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			goalMode: this.#goalModeStatus,
 			goalStatusInFooter: this.#goalModeStatus ? this.host.goalStatusInFooter(this.session) : false,
 			vibeMode: this.#vibeModeStatus,
+			masterMode: this.#masterModeStatus,
 			vim: this.#vimStatus,
 			collab: this.#collabStatus,
 			stream: this.#streamStatus,

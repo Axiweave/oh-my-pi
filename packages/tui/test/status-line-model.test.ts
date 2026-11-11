@@ -27,6 +27,7 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 		planMode: null,
 		loopMode: null,
 		prewalk: null,
+		masterMode: null,
 		goalMode: null,
 		vibeMode: null,
 		speckitAuto: null,

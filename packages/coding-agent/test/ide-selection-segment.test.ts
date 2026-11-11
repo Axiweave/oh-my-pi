@@ -24,6 +24,7 @@ function createContext(
 		planMode: null,
 		loopMode: null,
 		prewalk: null,
+		masterMode: null,
 		goalMode: null,
 		vibeMode: null,
 		speckitAuto: null,

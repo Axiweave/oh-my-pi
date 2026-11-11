@@ -701,21 +701,27 @@ function describeMainMode(ctx: SegmentContext): SegmentView | null {
 	return null;
 }
 
-// Prewalk is a model handoff arm, not an exclusive mode: it rides beside
+// Prewalk and Master are arms, not exclusive modes: they ride beside
 // whichever mode is on instead of hiding it.
 const modeSegment: StatusLineSegment = {
 	id: "mode",
 	render(ctx) {
 		const main = renderMainMode(ctx);
-		if (!ctx.prewalk?.enabled) return main;
-		const prewalk = accentFg(ctx, "accent", withIcon(theme.icon.prewalk, "Prewalk"));
-		return { content: main.visible ? `${main.content} ${prewalk}` : prewalk, visible: true };
+		const arms: string[] = [];
+		if (ctx.prewalk?.enabled) arms.push(accentFg(ctx, "accent", withIcon(theme.icon.prewalk, "Prewalk")));
+		if (ctx.masterMode?.enabled) arms.push(accentFg(ctx, "accent", withIcon(theme.icon.agents, "Master")));
+		if (arms.length === 0) return main;
+		return { content: [...(main.visible ? [main.content] : []), ...arms].join(" "), visible: true };
 	},
 	describe(ctx) {
 		const main = describeMainMode(ctx);
-		if (!ctx.prewalk?.enabled) return main;
-		if (!main) return segView([span("Prewalk", accentToken(ctx, "accent"))], "prewalk");
-		return { ...main, spans: [...main.spans, span(" Prewalk", accentToken(ctx, "accent"))] };
+		const arms: { label: string; icon: string }[] = [];
+		if (ctx.prewalk?.enabled) arms.push({ label: "Prewalk", icon: "prewalk" });
+		if (ctx.masterMode?.enabled) arms.push({ label: "Master", icon: "agents" });
+		if (arms.length === 0) return main;
+		const spans = arms.map((a, i) => span(main || i > 0 ? ` ${a.label}` : a.label, accentToken(ctx, "accent")));
+		if (!main) return segView(spans, arms[0].icon);
+		return { ...main, spans: [...main.spans, ...spans] };
 	},
 };
 

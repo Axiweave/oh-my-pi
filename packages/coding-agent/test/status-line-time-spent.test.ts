@@ -46,6 +46,7 @@ function createCtx(activeMs: number): SegmentContext {
 		planMode: null,
 		loopMode: null,
 		prewalk: null,
+		masterMode: null,
 		goalMode: null,
 		vibeMode: null,
 		speckitAuto: null,

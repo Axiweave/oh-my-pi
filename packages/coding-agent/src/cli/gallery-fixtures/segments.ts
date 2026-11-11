@@ -43,6 +43,7 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 		compactThinkingLevel: false,
 		planMode: { enabled: true, paused: false },
 		prewalk: null,
+		masterMode: null,
 		loopMode: null,
 		speckitAuto: null,
 		goalMode: null,
@@ -117,6 +118,7 @@ function variantsFor(id: StatusLineSegmentId): readonly SegmentVariantSpec[] {
 				{ label: "warning / paused", context: { planMode: { enabled: true, paused: true } } },
 				{ label: "prewalk active", context: { planMode: null, prewalk: { enabled: true } } },
 				{ label: "vibe active", context: { planMode: null, vibeMode: { enabled: true } } },
+				{ label: "master active", context: { planMode: null, masterMode: { enabled: true } } },
 				{
 					label: "loop active",
 					context: {

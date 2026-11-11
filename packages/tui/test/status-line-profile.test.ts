@@ -21,6 +21,7 @@ function createContext(overrides: Partial<SegmentContext> = {}): SegmentContext 
 		planMode: null,
 		loopMode: null,
 		prewalk: null,
+		masterMode: null,
 		speckitAuto: null,
 		ideSelection: null,
 		ideFile: null,

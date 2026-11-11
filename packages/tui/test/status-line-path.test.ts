@@ -47,6 +47,7 @@ function createPathContext(): SegmentContext {
 		planMode: null,
 		loopMode: null,
 		prewalk: null,
+		masterMode: null,
 		goalMode: null,
 		vibeMode: null,
 		speckitAuto: null,
