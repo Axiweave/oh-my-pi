@@ -68,6 +68,8 @@ Inside zmx (`ZMX_SESSION` is set), `spawn_session` stays active while the mode i
 
 You talk to the spawned session directly. Its result does not come back to the master session. `spawn.confirm` asks yes/no before each spawn, as it does for `/spawn`. Outside zmx, the tool is not active, and `/spawn` fails with `spawn needs a zmx session`.
 
+A spawned session is a normal session, not a second master. omp does not pass `--master` to it, and this also applies to `/spawn` and `/fork pane|window` from `omp --master`. Every session spawned while master mode is on gets the zmx label `cci-origin=master`. claude-code-ide attaches it, but does not move the focus to it, so your chat with the master session continues.
+
 ## Refusal behavior
 
 Every refusal starts with `Master mode is on.` and ends with `Do not retry or route around this block.` The text names the allowed way: a `task` call, or a background `bash` call with `async: true`. A repeated call gets the same text.

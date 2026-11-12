@@ -511,6 +511,7 @@ The full `bun run test` plan did not run for this merge.
 ### Master mode
 
 - **Decision:** Keep `/master` and `--master`. The main agent is an orchestrator that never waits on delegated work. The mode changes the active tool set in one way only: inside zmx, it adds `spawn_session` while it is on, so the model can start a new feature that needs the user's steering as a spawned session with a new worktree. Bounded work still goes to `task`.
+- **Decision:** A child from `/spawn`, `/fork pane|window`, or the master's `spawn_session` never gets `--master` (`FORK_LAUNCH_OVERRIDES` in `cli/fork-child.ts`). A session spawned while master mode is on gets the zmx label `cci-origin=master`, which claude-code-ide reads as "attach, but do not move the focus".
 - **Decision:** A pure guard (`masterRefusal`) in `AgentSession.#beforeToolCall` refuses file-change tools, foreground `bash`, named `bash` services, `wait`, and every tool off the allowlist. `TaskTool` refuses a foreground `task` call.
 - **Decision:** Background `bash` stays allowed, so it can change files. "Give every change to a subagent" is a prompt rule only. Never describe the mode as forced delegation.
 - **Decision:** The mode excludes vibe, plan, and speckit-auto modes. It works with goal and loop. It persists as the `master-mode` session entry.
