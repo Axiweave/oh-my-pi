@@ -524,7 +524,7 @@ The replay ran every test file that this document names and every fork test that
 
 ### Master mode
 
-- **Decision:** Keep `/master` and `--master`. The main agent is an orchestrator that never waits on delegated work. The mode does not change the active tool set.
+- **Decision:** Keep `/master` and `--master`. The main agent is an orchestrator that never waits on delegated work. The mode changes the active tool set in one way only: inside zmx, it adds `spawn_session` while it is on, so the model can start a new feature that needs the user's steering as a spawned session with a new worktree. Bounded work still goes to `task`.
 - **Decision:** A pure guard (`masterRefusal`) in `AgentSession.#beforeToolCall` refuses file-change tools, foreground `bash`, named `bash` services, `wait`, and every tool off the allowlist. `TaskTool` refuses a foreground `task` call.
 - **Decision:** Background `bash` stays allowed, so it can change files. "Give every change to a subagent" is a prompt rule only. Never describe the mode as forced delegation.
 - **Decision:** The mode excludes vibe, plan, and speckit-auto modes. It works with goal and loop. It persists as the `master-mode` session entry.

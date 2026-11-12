@@ -4134,7 +4134,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** Restores the latest saved state on this branch; a missing or malformed entry means off. */
-	restoreMasterMode(): void {
+	async restoreMasterMode(): Promise<void> {
 		const entry = this.sessionManager
 			.getBranch()
 			.findLast(candidate => candidate.type === "custom" && candidate.customType === MASTER_MODE_ENTRY);
@@ -4142,16 +4142,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!(typeof data === "object" && data !== null && "enabled" in data && data.enabled === true)) return;
 		this.masterModeEnabled = true;
 		this.session.setMasterModeState({ enabled: true });
+		await this.#syncMasterSpawnTool();
 		this.#updateMasterModeStatus();
 	}
 
-	handleMasterModeCommand(): void {
+	async handleMasterModeCommand(): Promise<void> {
 		if (this.masterModeEnabled) {
-			this.#exitMasterMode();
+			await this.#exitMasterMode();
 			return;
 		}
 		if (this.#masterEntryBlocked()) return;
-		this.#enterMasterMode();
+		await this.#enterMasterMode();
 	}
 
 	/** Starts master mode before the first prompt of `omp --master`; a refusal leaves it off. */
@@ -4162,7 +4163,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#masterEntryBlocked()) return;
-		this.#enterMasterMode();
+		await this.#enterMasterMode();
 	}
 
 	/** Shows why master mode cannot start; true when it refused. Goal and loop mode do not block. */
@@ -4183,10 +4184,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		return false;
 	}
 
-	// The active tool set stays as it is: the guard in AgentSession refuses, so nothing to restore on exit.
-	#enterMasterMode(): void {
+	/**
+	 * In zmx, master mode lets the model start a sibling session by itself, so `spawn_session`
+	 * is active while the mode is on. An open `/spawn` window owns the tool until it ends.
+	 */
+	async #syncMasterSpawnTool(): Promise<void> {
+		if (this.#spawnPreviousTools) return;
+		const enabled = this.session.getEnabledToolNames();
+		const want = this.masterModeEnabled && Boolean(process.env.ZMX_SESSION);
+		if (want === enabled.includes("spawn_session")) return;
+		await this.session.setActiveToolsByName(
+			want ? [...enabled, "spawn_session"] : enabled.filter(name => name !== "spawn_session"),
+		);
+	}
+
+	// The guard in AgentSession refuses calls; the only tool change is `spawn_session` (see #syncMasterSpawnTool).
+	async #enterMasterMode(): Promise<void> {
 		this.masterModeEnabled = true;
 		this.session.setMasterModeState({ enabled: true });
+		await this.#syncMasterSpawnTool();
 		this.#saveMasterModeState();
 		this.#updateMasterModeStatus();
 		this.showStatus(
@@ -4195,9 +4211,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** Does not abort a running turn: the guard stops from the next tool call. */
-	#exitMasterMode(): void {
+	async #exitMasterMode(): Promise<void> {
 		this.masterModeEnabled = false;
 		this.session.setMasterModeState(undefined);
+		await this.#syncMasterSpawnTool();
 		this.#saveMasterModeState();
 		this.#updateMasterModeStatus();
 		this.showStatus("Master mode off.");
@@ -7445,6 +7462,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.masterModeEnabled) {
 			this.session.setMasterModeState(undefined);
 			this.masterModeEnabled = false;
+			await this.#syncMasterSpawnTool();
 			this.#updateMasterModeStatus();
 		}
 	}
@@ -7485,7 +7503,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
 		this.restoreSpeckitAuto();
-		this.restoreMasterMode();
+		await this.restoreMasterMode();
 		const goalEnabled = cfgGoalEnabled.get(this.session.settings);
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
 			this.session.goalRuntime.clearAccounting();
@@ -9343,13 +9361,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (added.length > 0) await this.session.setActiveToolsByName([...enabledTools, ...added]);
 	}
 
-	/** Close the `/spawn` window and restore the tool set from before it opened. */
+	/** Close the `/spawn` window and restore the tool set from before it opened, plus master mode's spawn tool. */
 	async #endSpawnWindow(): Promise<void> {
 		const previousTools = this.#spawnPreviousTools;
 		if (!previousTools) return;
 		this.#spawnPreviousTools = undefined;
 		this.session.setSpawnWindowOpen(false);
 		await this.session.setActiveToolsByName(previousTools);
+		await this.#syncMasterSpawnTool();
 	}
 
 	/**

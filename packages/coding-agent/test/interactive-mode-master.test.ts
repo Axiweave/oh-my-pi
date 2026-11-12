@@ -1,11 +1,13 @@
 /**
  * Contracts: /master toggle and `startMasterAtStartup` on InteractiveMode.
- * - Enter and exit never change the active tool set; the hidden message goes away on exit.
+ * - Enter and exit change only `spawn_session`: on in zmx while the mode is on, back to the old set on exit. The hidden message goes away on exit.
  * - The saved `master-mode` entry decides on resume, before the first turn.
  * - Master mode and vibe, plan (on and paused), and speckit-auto exclude each other. Goal and loop do not block it.
  * - Entry needs `async.enabled` and an async job manager.
  * - `--master` startup shows a reason and stays off when an entry check refuses.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool, type StreamFn } from "@oh-my-pi/pi-agent-core";
@@ -82,7 +84,11 @@ describe("InteractiveMode master mode", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
+	const savedZmx = process.env.ZMX_SESSION;
+
 	beforeEach(async () => {
+		// Each test sets zmx itself: outside zmx master mode leaves the tool set alone.
+		delete process.env.ZMX_SESSION;
 		resetSettingsForTest();
 		VibeSessionRegistry.resetGlobalForTests();
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -105,6 +111,8 @@ describe("InteractiveMode master mode", () => {
 		VibeSessionRegistry.resetGlobalForTests();
 		vi.restoreAllMocks();
 		resetSettingsForTest();
+		if (savedZmx === undefined) delete process.env.ZMX_SESSION;
+		else process.env.ZMX_SESSION = savedZmx;
 	});
 
 	afterAll(() => {
@@ -113,7 +121,7 @@ describe("InteractiveMode master mode", () => {
 	});
 
 	/** A session with `read`, `todo`, and `bash` and (unless `jobs: false`) an async job manager. */
-	function open(options: { settings?: Record<string, unknown>; jobs?: boolean } = {}) {
+	function open(options: { settings?: Record<string, unknown>; jobs?: boolean; cwd?: string } = {}) {
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 		const names = ["read", "todo", "bash"];
@@ -124,10 +132,11 @@ describe("InteractiveMode master mode", () => {
 				convertToLlm,
 				streamFn: (...args) => streamFn(...args),
 			}),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			sessionManager: SessionManager.create(options.cwd ?? tempDir.path(), tempDir.path()),
 			settings: Settings.isolated(options.settings ?? {}),
 			modelRegistry,
-			toolRegistry: new Map(names.map(name => [name, stubTool(name)])),
+			// `spawn_session` is registered but inactive, as the SDK does.
+			toolRegistry: new Map([...names, "spawn_session"].map(name => [name, stubTool(name)])),
 			builtInToolNames: names,
 			createVibeTools: () => VIBE_TOOL_NAMES.map(stubTool),
 			asyncJobManager: jobs,
@@ -169,26 +178,62 @@ describe("InteractiveMode master mode", () => {
 		expect(savedFlags(session)).toEqual([true, false]);
 	});
 
-	it("leaves the active tool names unchanged across enter and exit, and removes the hidden message", async () => {
-		const { session, mode } = open();
-		await mode.init({ suppressWelcomeIntro: true });
-		await session.setActiveToolsByName(["read", "todo", "bash"]);
-		const active = session.getActiveToolNames();
-		const all = session.getAllToolNames();
+	for (const zmx of [false, true]) {
+		it(`${zmx ? "in" : "outside"} zmx, enter ${zmx ? "adds only spawn_session" : "keeps the tool set"}, exit restores it, and the hidden message goes away`, async () => {
+			if (zmx) process.env.ZMX_SESSION = "parent";
+			const { session, mode } = open();
+			await mode.init({ suppressWelcomeIntro: true });
+			await session.setActiveToolsByName(["read", "todo", "bash"]);
+			const active = session.getActiveToolNames();
+			const all = session.getAllToolNames();
 
-		await mode.handleMasterModeCommand();
-		expect(session.getActiveToolNames()).toEqual(active);
-		expect(session.getAllToolNames()).toEqual(all);
-		await session.prompt("one");
-		expect(hiddenMasterMessages(session)).toBe(1);
+			await mode.handleMasterModeCommand();
+			expect(session.getActiveToolNames()).toEqual(zmx ? [...active, "spawn_session"] : active);
+			expect(session.getAllToolNames()).toEqual(all);
+			await session.prompt("one");
+			expect(hiddenMasterMessages(session)).toBe(1);
+			const context = session.agent.state.messages.find(
+				message => message.role === "custom" && message.customType === MASTER_MODE_CONTEXT_MESSAGE_TYPE,
+			);
+			expect(JSON.stringify(context)).toContain(zmx ? "`spawn_session`:" : "Toolset:");
+			expect(JSON.stringify(context).includes("spawn_session")).toBe(zmx);
 
-		await mode.handleMasterModeCommand();
-		expect(session.getActiveToolNames()).toEqual(active);
-		expect(session.getAllToolNames()).toEqual(all);
-		expect(hiddenMasterMessages(session)).toBe(0);
-		await session.prompt("two");
-		expect(hiddenMasterMessages(session)).toBe(0);
-	});
+			await mode.handleMasterModeCommand();
+			expect(session.getActiveToolNames()).toEqual(active);
+			expect(session.getAllToolNames()).toEqual(all);
+			expect(hiddenMasterMessages(session)).toBe(0);
+			await session.prompt("two");
+			expect(hiddenMasterMessages(session)).toBe(0);
+		});
+	}
+
+	// Spec-kit for a spawned feature: always on request; on its own only in a project that has `.specify/`.
+	// Rows: case, whether the project has `.specify/`, the session cwd below the project root.
+	const speckitRows: [string, boolean, string][] = [
+		["no spec-kit project", false, ""],
+		["cwd at a spec-kit project root", true, ""],
+		["cwd in a subdirectory of a spec-kit project", true, "packages/app"],
+	];
+	for (const [label, project, sub] of speckitRows) {
+		it(`in zmx with ${label}, the spawn rule ${project ? "also offers" : "does not offer"} spec-kit for a non-trivial feature`, async () => {
+			process.env.ZMX_SESSION = "parent";
+			const root = path.join(tempDir.path(), label.replaceAll(" ", "-"));
+			if (project) fs.mkdirSync(path.join(root, ".specify"), { recursive: true });
+			const cwd = path.join(root, sub);
+			fs.mkdirSync(cwd, { recursive: true });
+			const { session, mode } = open({ cwd });
+			await mode.init({ suppressWelcomeIntro: true });
+			await mode.handleMasterModeCommand();
+			await session.prompt("one");
+			const context = JSON.stringify(
+				session.agent.state.messages.find(
+					message => message.role === "custom" && message.customType === MASTER_MODE_CONTEXT_MESSAGE_TYPE,
+				),
+			);
+			expect(context).toContain("ONLY when the user asks for spec-kit");
+			expect(context.includes("this project uses spec-kit")).toBe(project);
+		});
+	}
 
 	describe("resume", () => {
 		// Each row: how often /master was typed in the saved session, and the mode after resume.
@@ -200,6 +245,7 @@ describe("InteractiveMode master mode", () => {
 		];
 		for (const [toggles, on] of rows) {
 			it(`after ${toggles} toggle(s) in the saved session the mode is ${on ? "on" : "off"} before the first turn`, async () => {
+				process.env.ZMX_SESSION = "parent";
 				const file = await saveAfterToggles(toggles);
 				const { session, mode } = open();
 				await mode.init({ suppressWelcomeIntro: true });
@@ -207,20 +253,24 @@ describe("InteractiveMode master mode", () => {
 
 				expect(mode.masterModeEnabled).toBe(on);
 				expect(session.getMasterModeState()).toEqual(on ? { enabled: true } : undefined);
+				expect(session.getActiveToolNames().includes("spawn_session")).toBe(on);
 				expect(streamCalls).toBe(0);
 			});
 		}
 
-		it("turns the mode off on /new", async () => {
+		it("turns the mode and its spawn tool off on /new", async () => {
+			process.env.ZMX_SESSION = "parent";
 			const { session, mode } = open();
 			await mode.init({ suppressWelcomeIntro: true });
 			await mode.handleMasterModeCommand();
 			expect(mode.masterModeEnabled).toBe(true);
+			expect(session.getActiveToolNames()).toContain("spawn_session");
 
 			await session.newSession();
 
 			expect(mode.masterModeEnabled).toBe(false);
 			expect(session.getMasterModeState()).toBeUndefined();
+			expect(session.getActiveToolNames()).not.toContain("spawn_session");
 		});
 	});
 

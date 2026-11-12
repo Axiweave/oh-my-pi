@@ -1,4 +1,4 @@
-Create one new top-level omp session in its own zmx session, from a `/spawn` request. Exists only while that request runs. The user talks to each new session directly; nothing comes back here.
+Create one new top-level omp session in its own zmx session, from a `/spawn` request or, in master mode, by your own choice. Outside master mode it exists only while that request runs. The user talks to each new session directly; nothing comes back here.
 
 `mode` (required), chosen from the request:
 - `fresh`: new conversation. `text` (required): self-contained opening prompt written from the request. The new session starts work on it at once.
