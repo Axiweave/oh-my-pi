@@ -17,10 +17,12 @@ import { flagConsumesValue, restartArgv } from "./flag-tables";
  * (`--profile`, `--model`, `--thinking`, `--prompt-cache-key`) or that would
  * re-point it at a stale scope (`--config`/`--cwd`/`--provider`; the child
  * gets the effective overlays via `PI_CONFIG_FILES` and the session cwd).
+ * `--master` is dropped: a child is a session the user steers, not a second master.
  */
 const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
 	"--config": true,
 	"--cwd": true,
+	"--master": true,
 	"--model": true,
 	"--profile": true,
 	"--prompt-cache-key": true,

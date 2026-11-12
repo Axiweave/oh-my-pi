@@ -9536,7 +9536,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			text: start,
 			argv: forkFile ? [...launch.argv, "--fork", forkFile] : launch.argv,
 			env: launch.env,
-			labels: { "cci-parent": parent },
+			// Emacs (claude-code-ide) never moves the focus to a `cci-origin=master` session,
+			// so the user's chat with the master session is not interrupted.
+			labels: this.masterModeEnabled ? { "cci-parent": parent, "cci-origin": "master" } : { "cci-parent": parent },
 			publishState: false,
 			settings: this.settings,
 		});

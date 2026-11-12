@@ -327,7 +327,7 @@ an explicit error; use bare `/fork` there instead.
 
 For a placement command, the controller rebuilds the child CLI command from the
 current CLI entry point and restart-safe launch flags (one-shot selectors such
-as `--goal` and positional prompts are dropped). It replaces stale startup
+as `--goal` and positional prompts are dropped, and so is `--master`: a child is never a master session). It replaces stale startup
 model, thinking, profile, prompt-cache-key, and working-directory flags with the
 active session values; the child is pinned to the parent's prompt-cache key so
 it reads the cache the parent populated. The child also receives the effective

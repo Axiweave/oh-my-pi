@@ -415,6 +415,24 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		expect(create).not.toHaveBeenCalled();
 	});
 
+	// The child of a master session is a plain session the user steers, and Emacs must not move the focus to it.
+	for (const master of [false, true]) {
+		it(`a spawn from a parent ${master ? "in" : "not in"} master mode drops --master and ${master ? "adds" : "omits"} cci-origin=master`, async () => {
+			const { h, create, handler } = await spawnHarness();
+			process.argv = [...argv.slice(0, 2), "--master"];
+			h.mode.masterModeEnabled = master;
+			await startRun(h);
+			await handler({ mode: "fresh", text: "work" });
+			const { argv: childArgv, labels } = create.mock.calls[0]![0];
+			expect(childArgv).not.toContain("--master");
+			expect(labels).toEqual(
+				master
+					? { "cci-parent": "cci-omp-spawncmd-abc123", "cci-origin": "master" }
+					: { "cci-parent": "cci-omp-spawncmd-abc123" },
+			);
+		});
+	}
+
 	describe("/fork spawn", () => {
 		/** A spawn harness whose A has a saved session file, so fork mode has something to copy. */
 		async function forkHarness(composer?: Composer) {
