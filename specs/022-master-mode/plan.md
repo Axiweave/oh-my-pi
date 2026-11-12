@@ -17,7 +17,7 @@ The design has four parts:
 3. **Instructions.** A hidden per-turn message, built from `orchestrate-notice.md`, tells the agent the rules. It is never saved in the transcript (R5).
 4. **Entry points.** `/master` toggles the mode in the TUI. `--master` starts an interactive session in the mode. The flag is an error in print, RPC, and ACP mode (R8).
 
-The design does not change the active tool set. The guard alone enforces the rule, so goal mode and loop mode keep adding and removing their own tools without a conflict (R4).
+The design changes the active tool set in one way only: inside zmx, master mode adds `spawn_session` and exit removes it (FR-019). The guard alone enforces the rules, so goal mode and loop mode keep adding and removing their own tools without a conflict (R4).
 
 ## Technical Context
 

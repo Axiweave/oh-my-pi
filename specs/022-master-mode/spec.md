@@ -125,6 +125,7 @@ A user or a program starts omp with a start option, so that the session is in ma
 - **FR-016**: The toggle MUST refuse to turn master mode on when background work is turned off in the settings, and MUST name the setting.
 - **FR-017**: Master mode MUST NOT run together with vibe mode, plan mode, or speckit-auto mode. omp MUST refuse to turn on the second mode and name the mode that is on.
 - **FR-018**: Master mode MUST run together with goal mode and loop mode.
+- **FR-019**: Inside zmx, master mode MUST let the main agent start a new top-level session by itself (`spawn_session`) while the mode is on. The per-turn instructions MUST send bounded work to subagents and a new feature that needs the user's steering to a spawned session with a new worktree. The spawned session MUST start with spec-kit only when the user asks for it, or for a non-trivial feature in a project that already uses spec-kit (a `.specify/` directory in the session directory or a parent). A global spec-kit command alone MUST NOT count, and fixes, investigations, and small work MUST NOT get it.
 
 ### Key Entities
 
