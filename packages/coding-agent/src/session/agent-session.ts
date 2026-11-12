@@ -7660,10 +7660,12 @@ export class AgentSession implements SettingsScope {
 		);
 	}
 
-	/** A tool snapshot taken during a `/guided-loop` interview or `/spawn` window must not revive its tool after it ends. */
+	/** A tool snapshot taken during a `/guided-loop` interview or `/spawn` window must not revive its tool after it ends. Master mode keeps `spawn_session`. */
 	#withoutIdleLoopTool(toolNames: string[]): string[] {
 		return toolNames.filter(
-			name => (name !== "loop" || this.#loopStartHandler) && (name !== "spawn_session" || this.#spawnWindowOpen),
+			name =>
+				(name !== "loop" || this.#loopStartHandler) &&
+				(name !== "spawn_session" || this.#spawnWindowOpen || this.#masterModeState?.enabled === true),
 		);
 	}
 
@@ -8492,11 +8494,21 @@ export class AgentSession implements SettingsScope {
 			customType: MASTER_MODE_CONTEXT_MESSAGE_TYPE,
 			content: prompt.render(masterModeActivePrompt, {
 				todoAvailable: this.getActiveToolNames().includes("todo"),
+				spawnAvailable: this.getActiveToolNames().includes("spawn_session"),
+				speckitProject: this.#inSpeckitProject(),
 			}),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	/** True when cwd or a parent has `.specify/`: the project already uses spec-kit. A global `/speckit.specify` alone does not count. */
+	#inSpeckitProject(): boolean {
+		for (let dir = this.sessionManager.getCwd(); ; dir = path.dirname(dir)) {
+			if (fs.statSync(path.join(dir, ".specify"), { throwIfNoEntry: false })?.isDirectory()) return true;
+			if (dir === path.dirname(dir)) return false;
+		}
 	}
 
 	#sanitizeGoalTodoText(text: string): string {

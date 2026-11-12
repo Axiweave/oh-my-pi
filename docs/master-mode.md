@@ -2,7 +2,7 @@
 
 Master mode makes the top-level interactive session a central orchestrator. The main agent never waits on delegated work. It starts subagents and background jobs, ends its turn, and reacts to each result when it arrives. The only tool that can wait is `ask`, which waits for the user.
 
-The mode does not change the active tool set. A guard refuses calls at run time. The guard is not a security boundary (see [The limit](#the-limit)).
+A guard refuses calls at run time. The guard is not a security boundary (see [The limit](#the-limit)). The mode changes the active tool set in one way only: inside zmx, it adds `spawn_session` (see [Spawned sessions](#spawned-sessions)). Exit removes it again.
 
 ## Enabling and disabling
 
@@ -43,7 +43,7 @@ While the mode is on, the guard runs before every main-agent tool call. A refuse
 | `bash` with `async: true` and no `name` | Allowed. |
 | `bash` without `async: true` | Refused (`foreground-bash`). |
 | `bash` with a non-blank `name` | Refused (`service-bash`). |
-| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, `spawn_session` (`/spawn` turn only) | Allowed. |
+| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, `spawn_session` | Allowed. |
 | `write` to `agent://`, `out://`, `local://`, or `proc://<id>/kill` | Allowed. |
 | `write` to any other target | Refused (`file-change`). |
 | `edit`, `ast_edit` | Refused (`file-change`). |
@@ -57,6 +57,16 @@ While the mode is on, the guard runs before every main-agent tool call. A refuse
 - An agent type of the call has `blocking: true`.
 
 A subagent that master mode starts keeps its normal tools. Its own `task`, `bash`, and edit calls are not refused.
+
+## Spawned sessions
+
+Inside zmx (`ZMX_SESSION` is set), `spawn_session` stays active while the mode is on, so the model can start a new top-level session by itself, without `/spawn`. The per-turn message tells it when:
+
+- Bounded work, such as a fix, a check, or a slice with clear acceptance, goes to `task`.
+- A new feature that needs its own branch and your steering along the way goes to `spawn_session`, with `mode: "fresh"`, `new_worktree: true`, and a `branch`.
+- `speckit: true` (the spawned session starts with `/speckit.specify`) only when you ask for spec-kit, or for a non-trivial feature in a project that already uses spec-kit (the session directory or a parent has `.specify/`). A global `/speckit.specify` command alone does not count. Fixes, investigations, and small work never get it.
+
+You talk to the spawned session directly. Its result does not come back to the master session. `spawn.confirm` asks yes/no before each spawn, as it does for `/spawn`. Outside zmx, the tool is not active, and `/spawn` fails with `spawn needs a zmx session`.
 
 ## Refusal behavior
 
@@ -72,7 +82,7 @@ While the mode is on, each prompt turn gets a hidden `master-mode-context` messa
 
 1. Coordinate, never wait for workers, and not change files.
 2. Use only the allowed tools.
-3. Plan the work and give independent parts to subagents in one `task` call.
+3. Plan the work and give independent parts to subagents in one `task` call. Inside zmx, start a new feature that needs your steering as a spawned session.
 4. End the turn after it starts work, then react to each result.
 5. Use background `bash` for checks only, and give every change to a subagent.
 6. Report to the user.
