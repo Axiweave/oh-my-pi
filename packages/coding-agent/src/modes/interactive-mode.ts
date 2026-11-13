@@ -4012,16 +4012,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.sessionManager.appendCustomEntry(MASTER_MODE_ENTRY, { enabled: this.masterModeEnabled });
 	}
 
-	/** Restores the latest saved state on this branch; a missing or malformed entry means off. */
-	async restoreMasterMode(): Promise<void> {
+	/**
+	 * Restores the latest saved state on this branch; a malformed entry means off. A session with no
+	 * entry (`/new`, `/clear`, a resumed session that never used the mode) takes `carry`, the state
+	 * the previous session had, so the mode stays on across session changes.
+	 */
+	async restoreMasterMode(carry = false): Promise<void> {
 		const entry = this.sessionManager
 			.getBranch()
 			.findLast(candidate => candidate.type === "custom" && candidate.customType === MASTER_MODE_ENTRY);
-		const data = entry?.type === "custom" ? entry.data : undefined;
-		if (!(typeof data === "object" && data !== null && "enabled" in data && data.enabled === true)) return;
+		if (entry) {
+			const data = entry.type === "custom" ? entry.data : undefined;
+			if (!(typeof data === "object" && data !== null && "enabled" in data && data.enabled === true)) return;
+		} else if (!carry) {
+			return;
+		}
 		this.masterModeEnabled = true;
 		this.session.setMasterModeState({ enabled: true });
 		await this.#syncMasterSpawnTool();
+		if (!entry) this.#saveMasterModeState();
 		this.#updateMasterModeStatus();
 	}
 
@@ -7162,6 +7171,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		// flags and settings, and that set — not a historical one — is what exiting
 		// vibe must restore.
 		const vibeToolsetLostToTeardown = this.vibeModeEnabled && !preserveVibe;
+		// Master mode follows the user into a session that records no master state, unless that
+		// session restores a mode master mode cannot run with. An implementation review needs
+		// `write` (`xd://propose` and the edits), which the master guard refuses.
+		const carryMaster =
+			this.masterModeEnabled &&
+			sessionContext.mode !== "vibe" &&
+			sessionContext.mode !== "plan" &&
+			sessionContext.mode !== "plan_paused" &&
+			sessionContext.mode !== "impl_review";
 		// A session that records no model (a `/new` boundary) keeps the live model,
 		// which during plan mode is the transient plan-role model; hand it the
 		// pre-plan model instead. A recorded model was already restored by switchSession.
@@ -7172,7 +7190,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
 		this.restoreSpeckitAuto();
-		await this.restoreMasterMode();
+		await this.restoreMasterMode(carryMaster && !this.speckitAutoEnabled);
 		const goalEnabled = cfgGoalEnabled.get(this.session.settings);
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
 			this.session.goalRuntime.clearAccounting();

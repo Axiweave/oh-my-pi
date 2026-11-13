@@ -36,7 +36,7 @@ The `mode` segment adds `Master` after the main mode (`Plan`, `Goal`, `Loop`, an
 
 ### Resume
 
-The saved entry decides. After `--continue`, `--resume`, or `/resume`, the mode is on if the latest `master-mode` entry on the branch has `enabled: true`. After `/new`, the mode is off. This holds before the first turn, so the first turn already refuses a direct edit.
+The saved entry decides. After `--continue`, `--resume`, or `/resume`, the mode is on if the latest `master-mode` entry on the branch has `enabled: true`. A target with no entry keeps the current state: after `/new`, `/clear`, or `/delete`, the mode stays on and the new session saves an entry. A target that restores plan (on or paused), vibe, implementation review (`impl_review`), or speckit-auto mode leaves master mode off. An implementation review needs `write`, which the guard refuses. This holds before the first turn, so the first turn already refuses a direct edit.
 
 ## `--master`
 

@@ -1,7 +1,8 @@
 /**
  * Contracts: /master toggle and `startMasterAtStartup` on InteractiveMode.
  * - Enter and exit change only `spawn_session`: on in zmx while the mode is on, back to the old set on exit. The hidden message goes away on exit.
- * - The saved `master-mode` entry decides on resume, before the first turn.
+ * - The saved `master-mode` entry decides on resume, before the first turn. With no entry, the live mode carries over
+ *   (`/new`, `/clear`, `/delete`, switch) unless the target restores plan, vibe, impl_review, or speckit-auto.
  * - Master mode and vibe, plan (on and paused), and speckit-auto exclude each other. Goal and loop do not block it.
  * - Entry needs `async.enabled` and an async job manager.
  * - `--master` startup shows a reason and stays off when an entry check refuses.
@@ -17,7 +18,8 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { cfgLoopMode, cfgSpeckitAutoDefaultOnStartup } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { SPECKIT_PHASE_COMMANDS } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
+import { SPECKIT_AUTO_ENTRY, SPECKIT_PHASE_COMMANDS } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
+import { serializeImplReviewState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { MASTER_MODE_CONTEXT_MESSAGE_TYPE, MASTER_MODE_ENTRY } from "@oh-my-pi/pi-coding-agent/session/master-mode";
@@ -258,20 +260,99 @@ describe("InteractiveMode master mode", () => {
 			});
 		}
 
-		it("turns the mode and its spawn tool off on /new", async () => {
-			process.env.ZMX_SESSION = "parent";
-			const { session, mode } = open();
-			await mode.init({ suppressWelcomeIntro: true });
-			await mode.handleMasterModeCommand();
-			expect(mode.masterModeEnabled).toBe(true);
-			expect(session.getActiveToolNames()).toContain("spawn_session");
+		// The user commands that start a new session keep the mode, its spawn tool, and save it there.
+		const commands: [string, (mode: InteractiveMode) => Promise<void>][] = [
+			["/new", mode => mode.handleNewCommand()],
+			["/clear", mode => mode.handleClearCommand()],
+			["/delete", mode => mode.handleDeleteCommand()],
+		];
+		for (const [name, run] of commands) {
+			it(`keeps the mode on across ${name} and saves it in the new session`, async () => {
+				process.env.ZMX_SESSION = "parent";
+				const { session, mode } = open();
+				await mode.init({ suppressWelcomeIntro: true });
+				await mode.handleMasterModeCommand();
+				const previousId = session.sessionManager.getSessionId();
 
-			await session.newSession();
+				await run(mode);
 
-			expect(mode.masterModeEnabled).toBe(false);
-			expect(session.getMasterModeState()).toBeUndefined();
-			expect(session.getActiveToolNames()).not.toContain("spawn_session");
-		});
+				expect(session.sessionManager.getSessionId()).not.toBe(previousId);
+				expect(mode.masterModeEnabled).toBe(true);
+				expect(session.getMasterModeState()).toEqual({ enabled: true });
+				expect(session.getActiveToolNames()).toContain("spawn_session");
+				expect(savedFlags(session)).toEqual([true]);
+			});
+		}
+
+		// Switch from a live master session to a target. A saved master entry wins; with none, the
+		// live mode carries over unless the target restores a mode master mode cannot run with.
+		// `restored` proves the target's own mode came back, so "off" is not a failed restore.
+		type Target = [
+			label: string,
+			setup: (manager: SessionManager) => void,
+			on: boolean,
+			restored?: (mode: InteractiveMode, session: AgentSession) => boolean,
+		];
+		const targets: Target[] = [
+			["no entries", () => {}, true],
+			["master saved on", m => m.appendCustomEntry(MASTER_MODE_ENTRY, { enabled: true }), true],
+			["master saved off", m => m.appendCustomEntry(MASTER_MODE_ENTRY, { enabled: false }), false],
+			[
+				"plan mode",
+				m => m.appendModeChange("plan", { planFilePath: "local://PLAN.md" }),
+				false,
+				mode => mode.planModeEnabled,
+			],
+			[
+				"paused plan mode",
+				m => m.appendModeChange("plan_paused", { planFilePath: "local://PLAN.md" }),
+				false,
+				mode => mode.planModePaused,
+			],
+			["vibe mode", m => m.appendModeChange("vibe"), false, mode => mode.vibeModeEnabled],
+			[
+				"an implementation review",
+				m =>
+					m.appendModeChange(
+						"impl_review",
+						serializeImplReviewState({
+							planFilePath: "local://auth-plan.md",
+							planHash: "plan-hash",
+							planTitle: "auth",
+							phase: "implementing",
+							round: 0,
+						}),
+					),
+				false,
+				(_mode, session) => session.getImplReviewState()?.phase === "implementing",
+			],
+			[
+				"speckit-auto on",
+				m => m.appendCustomEntry(SPECKIT_AUTO_ENTRY, { enabled: true, scope: "full" }),
+				false,
+				mode => mode.speckitAutoEnabled,
+			],
+		];
+		for (const [label, setup, on, restored] of targets) {
+			it(`from a master session, a target with ${label} ends ${on ? "on" : "off"}`, async () => {
+				process.env.ZMX_SESSION = "parent";
+				const target = SessionManager.create(tempDir.path(), tempDir.path());
+				setup(target);
+				await target.ensureOnDisk();
+				const file = target.getSessionFile();
+				if (!file) throw new Error("Expected target session file");
+				const { session, mode } = open();
+				await mode.init({ suppressWelcomeIntro: true });
+				await mode.handleMasterModeCommand();
+
+				expect(await session.switchSession(file)).toBe(true);
+
+				expect(mode.masterModeEnabled).toBe(on);
+				expect(session.getMasterModeState()).toEqual(on ? { enabled: true } : undefined);
+				expect(session.getActiveToolNames().includes("spawn_session")).toBe(on);
+				if (restored) expect(restored(mode, session)).toBe(true);
+			});
+		}
 	});
 
 	describe("exclusion", () => {

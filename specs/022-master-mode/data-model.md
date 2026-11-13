@@ -82,7 +82,8 @@ Each text says that master mode is on, names the allowed way, and ends with `Do 
 off ──/master or --master (checks pass)──▶ on
 on  ──/master──▶ off
 on  ──resume of a branch whose latest entry is enabled──▶ on
-any ──/new, or a session switch to a branch with no entry──▶ off (no entry written)
+on  ──/new, or a session switch to a branch with no entry──▶ on (entry written), unless the target restores plan, vibe, impl_review, or speckit-auto
+any ──session switch to a branch whose latest entry is disabled──▶ off
 ```
 
 Entry checks (research R7): speckit-auto on, plan on or paused, vibe on, `async.enabled` off, no async job manager. Any failing check keeps the state `off` and shows a message. Goal mode and loop mode do not block entry. The status line, the guard, and the per-turn message all follow the one flag, so they change together.

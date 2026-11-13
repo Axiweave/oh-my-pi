@@ -16,7 +16,7 @@ omp --master          # start in master mode (interactive only)
 
 - Entering shows `Master mode on: …` and a `Master` indicator in the status line.
 - Exiting shows `Master mode off.` The guard stops from the next tool call. A running turn continues. The per-turn message is removed from the context.
-- `/new` turns the mode off.
+- `/new`, `/clear`, and `/delete` keep the mode on. The new session saves it. With `plan.defaultOnStartup` on, plan mode stays off and shows `Exit master mode first.` In a spec-kit project with `speckitAuto.defaultOnStartup` on, speckit-auto stays off and shows `Speckit-auto mode stays off: master mode is on.`
 - Entering needs `async.enabled`. If it is off, `/master` shows `Master mode needs background work. Enable async.enabled.`
 
 ## Exclusion with other modes
@@ -104,4 +104,4 @@ omp does not save this message in the transcript.
 
 ## Resume
 
-omp saves each change as a `master-mode` session entry with `{ enabled }`. After `--continue`, `--resume`, or `/resume`, the mode is on when the latest `master-mode` entry on the branch has `enabled: true`. The mode is on before the first turn, so the first turn already refuses a direct edit.
+omp saves each change as a `master-mode` session entry with `{ enabled }`. After `--continue`, `--resume`, or `/resume`, the mode is on when the latest `master-mode` entry on the branch has `enabled: true`. A session with no `master-mode` entry keeps the current state, so master mode stays on when you switch to it. omp then saves the entry in that session. The mode stays off in a session that restores plan mode (active or paused), vibe mode, an implementation review, or speckit-auto mode. The mode is on before the first turn, so the first turn already refuses a direct edit.
