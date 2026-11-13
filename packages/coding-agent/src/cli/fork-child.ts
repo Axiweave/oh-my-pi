@@ -17,7 +17,8 @@ import { flagConsumesValue, restartArgv } from "./flag-tables";
  * (`--profile`, `--model-profile`, `--model`, `--thinking`, `--prompt-cache-key`) or that would
  * re-point it at a stale scope (`--config`/`--cwd`/`--provider`; the child
  * gets the effective overlays via `PI_CONFIG_FILES` and the session cwd).
- * `--master` is dropped: a child is a session the user steers, not a second master.
+ * `--master` is dropped: a child is a session the user steers, not a second master. `--speckit-auto`
+ * is dropped: only a spec-kit `/spawn` child gets it, from the spawn request.
  */
 const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
 	"--config": true,
@@ -28,6 +29,7 @@ const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
 	"--profile": true,
 	"--prompt-cache-key": true,
 	"--provider": true,
+	"--speckit-auto": true,
 	"--thinking": true,
 };
 

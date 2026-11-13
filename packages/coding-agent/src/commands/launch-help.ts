@@ -104,6 +104,10 @@ export const launchHelp = {
 			description:
 				"Start in master mode: the main agent delegates work to subagents and background jobs and never waits on them (interactive only)",
 		}),
+		"speckit-auto": Flags.string({
+			description:
+				"Turn speckit-auto mode on in a brand-new session at this scope (full or tasks), over speckitAuto.defaultOnStartup (interactive only)",
+		}),
 		"external-thinking": Flags.boolean({
 			description:
 				"Use a private scratchpad while disabling supported GPT, Claude, and Gemini reasoning (at your own risk: providers have flagged this request shape as abuse)",

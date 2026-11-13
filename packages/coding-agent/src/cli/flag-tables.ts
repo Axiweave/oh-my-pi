@@ -167,6 +167,12 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--model-profile": (result, value) => {
 		result.modelProfile = value;
 	},
+	"--speckit-auto": (result, value) => {
+		if (value !== "full" && value !== "tasks") {
+			throw new CliUsageError(`Invalid --speckit-auto value: ${JSON.stringify(value)}. Expected one of: full, tasks.`);
+		}
+		result.speckitAuto = value;
+	},
 	"--prewalk-into": (result, value) => {
 		result.prewalkInto = value;
 	},

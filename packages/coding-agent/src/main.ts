@@ -707,6 +707,7 @@ async function runInteractiveMode(
 	startsPlanYolo = false,
 	spawnStartText?: string,
 	startupMaster = false,
+	startupSpeckitScope?: "full" | "tasks",
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
@@ -764,6 +765,7 @@ async function runInteractiveMode(
 				startupBlocker:
 					startupGoal !== undefined ? "goal" : startsPlanYolo ? "plan" : startupMaster ? "master" : undefined,
 				spawnStart: spawnStartText !== undefined,
+				speckitScope: startupSpeckitScope,
 			}),
 		);
 		startDeferredStartupWork?.();
@@ -2951,6 +2953,7 @@ export async function runRootCommand(
 						parsedArgs.planYolo === true,
 						spawnStartText,
 						parsedArgs.master === true,
+						parsedArgs.speckitAuto,
 					);
 				} finally {
 					startupLease?.dispose();

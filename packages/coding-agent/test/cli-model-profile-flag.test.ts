@@ -12,6 +12,12 @@ describe("parseArgs — --model-profile flag", () => {
 		expect(parseArgs(["--model-profile=", "hello"])).toMatchObject({ modelProfile: "", messages: ["hello"] });
 	});
 
+	it("takes --speckit-auto full|tasks and refuses any other scope", () => {
+		expect(parseArgs(["--speckit-auto=tasks"]).speckitAuto).toBe("tasks");
+		expect(parseArgs(["--speckit-auto", "full", "hello"])).toMatchObject({ speckitAuto: "full", messages: ["hello"] });
+		for (const bad of ["off", "", "Full"]) expect(() => parseArgs([`--speckit-auto=${bad}`])).toThrow("--speckit-auto");
+	});
+
 	it("stays distinct from the isolated-profile --profile flag", () => {
 		const result = parseArgs(["--profile", "work", "--model-profile", "fable", "hello"]);
 		expect(result.profile).toBe("work");

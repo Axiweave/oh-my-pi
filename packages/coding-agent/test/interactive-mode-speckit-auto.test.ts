@@ -1651,6 +1651,14 @@ describe("InteractiveMode speckit-auto mode", () => {
 
 				expect(mode.getSpeckitAutoDescription()).toBe(description(scope));
 			});
+
+			it(`--speckit-auto ${scope} turns a /spawn child on at that scope over the configured default`, async () => {
+				configure(scope === "full" ? "tasks" : "off");
+				await start({ spawnStart: true, speckitScope: scope });
+
+				expect(mode.getSpeckitAutoDescription()).toBe(description(scope));
+				expect(saved()).toMatchObject({ enabled: true, scope });
+			});
 		}
 
 		it("leaves the mode off when the default is off", async () => {

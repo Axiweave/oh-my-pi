@@ -60,6 +60,8 @@ export interface Args {
 	waitAsync?: boolean;
 	/** Start the interactive session in master mode. */
 	master?: boolean;
+	/** `--speckit-auto`: speckit-auto scope for a brand-new session, over `speckitAuto.defaultOnStartup`. */
+	speckitAuto?: "full" | "tasks";
 	externalThinking?: boolean;
 	continue?: boolean;
 	resume?: string | true;

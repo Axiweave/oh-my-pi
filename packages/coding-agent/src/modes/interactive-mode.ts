@@ -3074,7 +3074,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// default through handleNewCommand instead. `speckitAuto.defaultOnStartup`
 		// follows the same rule, after plan mode so an active plan mode blocks it.
 		await this.#applyPlanModeDefault();
-		this.#applySpeckitAutoDefault(options.startupBlocker, options.spawnStart);
+		this.#applySpeckitAutoDefault(options.startupBlocker, options.spawnStart, options.speckitScope);
 
 		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
 		// One-shot: consumeDraft removes the sidecar after read so the next
@@ -4276,9 +4276,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * resumed session keeps its own state. A `/spawn` child that starts work counts as new
 	 * even when it forks A's conversation. Called at launch, after `/new`, and after `/delete`.
 	 */
-	#applySpeckitAutoDefault(startupBlocker?: "goal" | "plan" | "master", spawnStart = false): void {
+	#applySpeckitAutoDefault(
+		startupBlocker?: "goal" | "plan" | "master",
+		spawnStart = false,
+		scopeOverride?: "full" | "tasks",
+	): void {
 		if (this.speckitAutoEnabled) return;
-		const scope = cfgSpeckitAutoDefaultOnStartup.get(this.session.settings);
+		const scope = scopeOverride ?? cfgSpeckitAutoDefaultOnStartup.get(this.session.settings);
 		if (scope === "off") return;
 		if (!spawnStart) {
 			if (this.sessionManager.buildSessionContext().messages.length > 0) return;
@@ -9197,11 +9201,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			});
 			if (!confirmed) return "Spawn declined";
 		}
+		const speckitScope = cfgSpeckitAutoDefaultOnStartup.get(this.settings);
 		const { name, dir } = await spawnSession({
 			dir: branch ? sourceCwd : (request.cwd ?? sourceCwd),
 			branch,
 			text: start,
-			argv: forkFile ? [...launch.argv, "--fork", forkFile] : launch.argv,
+			argv: [
+				...launch.argv,
+				...(forkFile ? ["--fork", forkFile] : []),
+				// Speckit-auto runs the phases after `/speckit.specify`; the start text alone only specifies.
+				// The configured scope wins; with the default off, the child runs every phase.
+				...(speckit ? [`--speckit-auto=${speckitScope === "off" ? "full" : speckitScope}`] : []),
+			],
 			env: launch.env,
 			// Emacs (claude-code-ide) never moves the focus to a `cci-origin=master` session,
 			// so the user's chat with the master session is not interrupted.

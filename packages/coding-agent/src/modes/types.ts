@@ -115,6 +115,8 @@ export interface InteractiveModeInitOptions {
 	 * A child that publishes `cci-state` without it publishes `idle` at init.
 	 */
 	spawnStart?: boolean;
+	/** `--speckit-auto`: the speckit-auto startup default for this launch only, over the config field. */
+	speckitScope?: "full" | "tasks";
 }
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &

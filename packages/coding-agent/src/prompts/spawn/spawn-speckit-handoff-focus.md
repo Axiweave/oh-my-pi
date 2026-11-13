@@ -1,6 +1,6 @@
-The new session gets this document as the feature description of `/speckit.specify` and MUST follow the spec-kit workflow: specify, clarify, plan, tasks, analyze, implement.
+The new session gets this document as the feature description of `/speckit.specify`, and speckit-auto runs the later spec-kit phases. Write a description that a spec can come from:
 - Goal: the feature to build and why, with the requirements, constraints, and acceptance criteria from this conversation.
-- Next Steps: the spec-kit phases, starting with the spec for this work. NEVER tell the new session to edit code, run the implementation, or skip a phase before `/speckit.tasks` has made the task list.
+- Next Steps: the outcomes still to reach and the open questions. NEVER code edits, implementation steps, or spec-kit commands.
 {{#if focus}}
 - Focus: {{focus}}
 {{/if}}

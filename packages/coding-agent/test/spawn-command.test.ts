@@ -8,6 +8,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { FORK_API_KEY_REFUSAL } from "@oh-my-pi/pi-coding-agent/cli/fork-child";
 import { cfgSpawnConfirm } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { cfgSpeckitAutoDefaultOnStartup } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -206,25 +207,36 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		const spawn = async (cwd?: string) => {
 			await startRun(h);
 			const result = await handler({ mode: "fresh", text: "billing retry", speckit: true, cwd });
-			return { result, start: fs.readFileSync(create.mock.calls.at(-1)![0].startFile!, "utf8") };
+			const call = create.mock.calls.at(-1)![0];
+			const scope = call.argv.filter(arg => arg.startsWith("--speckit-auto"));
+			return { result, start: fs.readFileSync(call.startFile!, "utf8"), scope };
 		};
 		const skipped = (dir: string) => `; spec-kit skipped: no /speckit.specify in ${dir}`;
+		// A stale launch flag of A never reaches B; only the spawn's own scope does.
+		process.argv = [...argv.slice(0, 2), "--speckit-auto", "tasks"];
 
-		// A without the command, B in A's directory.
+		// A without the command, B in A's directory: plain start, no speckit-auto.
 		const plain = await spawn();
-		expect(plain.start).toBe("billing retry");
+		expect(plain).toMatchObject({ start: "billing retry", scope: [] });
 		expect(plain.result).toEndWith(skipped(h.session.sessionManager.getCwd()));
 
-		// The check reads B's directory, not A's, both ways.
-		expect(await spawn(kit.path())).toMatchObject({ start: "/speckit.specify billing retry" });
+		// The check reads B's directory, not A's, both ways. With the default off, B runs every phase.
+		expect(await spawn(kit.path())).toMatchObject({
+			start: "/speckit.specify billing retry",
+			scope: ["--speckit-auto=full"],
+		});
 		h.mode.fileSlashCommands.add("speckit.specify");
 		const bareRun = await spawn(bare.path());
-		expect(bareRun.start).toBe("billing retry");
+		expect(bareRun).toMatchObject({ start: "billing retry", scope: [] });
 		expect(bareRun.result).toEndWith(skipped(bare.path()));
-		expect(await spawn()).toMatchObject({ start: "/speckit.specify billing retry" });
+		expect(await spawn()).toMatchObject({ start: "/speckit.specify billing retry", scope: ["--speckit-auto=full"] });
+
+		// A configured scope carries over.
+		cfgSpeckitAutoDefaultOnStartup.override(h.session.settings, "tasks");
+		expect(await spawn()).toMatchObject({ scope: ["--speckit-auto=tasks"] });
 	});
 
-	it("a spec-kit handoff_summary asks the summary for the spec-kit workflow; a plain one keeps the bare focus", async () => {
+	it("a spec-kit handoff_summary gets the feature-description focus; a plain one keeps the bare focus", async () => {
 		const { h, create, handler } = await spawnHarness();
 		h.mode.fileSlashCommands.add("speckit.specify");
 		const generate = vi
@@ -238,7 +250,7 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 
 		expect(await spawn(true)).toBe("/speckit.specify ## Goal\nretry billing");
 		const focus = generate.mock.calls[0]![0]!;
-		expect(focus).toContain("spec-kit workflow");
+		expect(focus).not.toBe("billing retry");
 		expect(focus).toContain("billing retry");
 
 		expect(await spawn()).toBe("## Goal\nretry billing");
