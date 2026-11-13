@@ -94,8 +94,9 @@ export function buildForkChildLaunch(options: ForkChildLaunchOptions): ForkChild
 	const activeProfile = (options.getActiveProfile ?? getActiveProfile)();
 	if (activeProfile) childArgs.push("--profile", activeProfile);
 	// Without it a fresh child installs the config's startup `modelProfile`, so its role layer
-	// (and status line) names a different bundle than the model `--model` forwards.
-	if (session.activeModelProfile) childArgs.push("--model-profile", session.activeModelProfile);
+	// (and status line) names a different bundle than the model `--model` forwards. An empty
+	// value (one token, so it survives multiplexer command joins) means the parent has none.
+	childArgs.push(`--model-profile=${session.activeModelProfile ?? ""}`);
 	const activeModel = session.model;
 	const model = options.model ?? (activeModel ? `${activeModel.provider}/${activeModel.id}` : undefined);
 	if (model) childArgs.push("--model", model);

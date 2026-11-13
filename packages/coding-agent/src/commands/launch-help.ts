@@ -22,7 +22,7 @@ export const launchHelp = {
 		slow: Flags.string({ description: "Slow/reasoning model for thorough analysis (or PI_SLOW_MODEL env)" }),
 		plan: Flags.string({ description: "Plan model for architectural planning (or PI_PLAN_MODEL env)" }),
 		"model-profile": Flags.string({
-			description: "Start on a modelProfiles bundle, overriding the modelProfile config field",
+			description: "Start on a modelProfiles bundle, overriding the modelProfile config field (empty value: no profile)",
 		}),
 		goal: Flags.string({
 			description:

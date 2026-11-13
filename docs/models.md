@@ -887,7 +887,10 @@ own bundle in `.omp/config.yml` over your global choice, and
 `modelProfiles` bundle — `--profile` is the isolated-profile flag). Precedence:
 a CLI role override (`--smol`, `--slow`, `--plan`) beats the startup profile on
 the role it names, and the startup profile beats plain `modelRoles`. Naming a
-bundle that does not exist is reported as a startup warning.
+bundle that does not exist is reported as a startup warning. An empty value
+(`--model-profile=`) starts on no profile, overriding the config field. A
+`/spawn` or `/fork pane|window` child uses it to start on the parent's live
+profile, or on none when the parent has none.
 
 A resumed session keeps its own state. Its persisted model is restored as
 always, and it reports no active profile unless it was explicitly switched into

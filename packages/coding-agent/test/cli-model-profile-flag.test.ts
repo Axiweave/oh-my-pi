@@ -8,6 +8,10 @@ describe("parseArgs — --model-profile flag", () => {
 		expect(parseArgs(["--model-profile=fable"]).modelProfile).toBe("fable");
 	});
 
+	it("keeps an empty value, which a fork child reads as 'no model profile'", () => {
+		expect(parseArgs(["--model-profile=", "hello"])).toMatchObject({ modelProfile: "", messages: ["hello"] });
+	});
+
 	it("stays distinct from the isolated-profile --profile flag", () => {
 		const result = parseArgs(["--profile", "work", "--model-profile", "fable", "hello"]);
 		expect(result.profile).toBe("work");

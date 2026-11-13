@@ -48,6 +48,7 @@ function createContext(
 		thinkingLevel?: ConfiguredThinkingLevel;
 		argv?: string[];
 		promptCacheKey?: string;
+		modelProfile?: string;
 		launchWarning?: string;
 	} = {},
 ) {
@@ -61,6 +62,7 @@ function createContext(
 		agent: { promptCacheKey: options.promptCacheKey },
 		model: options.activeModel ?? { provider: "provider", id: "model" },
 		configuredThinkingLevel: () => options.thinkingLevel,
+		activeModelProfile: options.modelProfile,
 	};
 	const flush = vi.fn(async () => undefined);
 	const sessionManager = {
@@ -180,6 +182,7 @@ describe("/fork terminal placement", () => {
 		expect(command.slice(command.indexOf("omp-entry") + 1)).toEqual([
 			"--profile",
 			"active-profile",
+			"--model-profile=",
 			"--model",
 			"provider/model",
 			"--prompt-cache-key",
@@ -214,6 +217,22 @@ describe("/fork terminal placement", () => {
 		expect(appArgs.filter(arg => arg === "--prompt-cache-key")).toHaveLength(1);
 		expect(appArgs[appArgs.indexOf("--prompt-cache-key") + 1]).toBe("pinned-parent-key");
 	});
+
+	// The pane child starts on the parent's live model profile; an empty value tells it "none" so the
+	// config's startup profile cannot take over. A launch-time --model-profile never reaches it.
+	for (const live of [undefined, "fable"]) {
+		it(`passes the parent's live model profile (${live ?? "none"}) over a startup --model-profile`, async () => {
+			const { controller, launchTerminal } = createContext({
+				modelProfile: live,
+				argv: ["--model-profile", "opus", "--model-profile=opus"],
+			});
+			await controller.handleForkCommand("pane");
+			const command = launchTerminal.mock.calls[0]?.[0].command ?? [];
+			const appArgs = command.slice(command.indexOf("omp-entry") + 1);
+			expect(appArgs.filter(arg => arg.startsWith("--model-profile"))).toEqual([`--model-profile=${live ?? ""}`]);
+			expect(appArgs).not.toContain("opus");
+		});
+	}
 
 	it("unsets scope variables the parent lacks instead of exporting them empty", async () => {
 		const sessionsDir = path.join(tempDirectory, "env sessions");

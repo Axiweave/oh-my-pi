@@ -2106,8 +2106,10 @@ export async function runRootCommand(
 		}
 		// `--model-profile` selects the startup bundle; `createAgentSession`
 		// installs it beneath the role overrides above, so a `--smol` on the same
-		// command line still wins on the role it names.
-		if (parsedArgs.modelProfile) {
+		// command line still wins on the role it names. An empty value starts on
+		// no profile, overriding the config field (a fork child of a session
+		// without a live profile).
+		if (parsedArgs.modelProfile !== undefined) {
 			cfgModelProfile.override(settingsInstance, parsedArgs.modelProfile);
 		}
 
