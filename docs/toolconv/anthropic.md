@@ -61,7 +61,7 @@ The retired prompt-based format used these tags. They are nested-element tags (n
 
 ## Roles / channels / turn structure
 
-The Messages API uses primarily two conversational roles, `user` and `assistant`, alternating. There is **no** dedicated `tool`/`function` role, and the standard system prompt is a separate top-level `system` parameter (string or text-block array) — not a message role. (Claude Opus 4.8+ and the Fable/Mythos 5 generation additionally accept an opt-in mid-conversation `system` **message** role, gated behind the `mid-conversation-system-2026-04-07` beta; otherwise only `user`/`assistant` are valid.) Tool data rides inside the normal roles:
+The Messages API uses primarily two conversational roles, `user` and `assistant`, alternating. There is **no** dedicated `tool`/`function` role, and the standard system prompt is a separate top-level `system` parameter (string or text-block array) — not a message role. (Claude Opus 4.8+ and the Fable/Mythos 5 generation additionally accept a mid-conversation `system` **message** role, now generally available (the former `mid-conversation-system-2026-04-07` beta is no longer sent); otherwise only `user`/`assistant` are valid.) Tool data rides inside the normal roles:
 
 - `assistant` messages contain AI-generated `text`, `thinking`, and `tool_use` (and `server_tool_use`) blocks.
 - `user` messages contain your `text`/`image`/`document` content and `tool_result` blocks.
