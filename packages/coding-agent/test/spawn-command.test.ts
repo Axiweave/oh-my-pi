@@ -433,6 +433,20 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		});
 	}
 
+	// The child starts on the parent's live model profile, not the config's startup one or a stale launch flag.
+	for (const live of [undefined, "fable"]) {
+		it(`a spawn from a parent on ${live ?? "no"} model profile passes ${live ? `--model-profile ${live}` : "no --model-profile"}`, async () => {
+			const { h, create, handler } = await spawnHarness();
+			process.argv = [...argv.slice(0, 2), "--model-profile", "opus"];
+			Object.defineProperty(h.session, "activeModelProfile", { get: () => live, configurable: true });
+			await startRun(h);
+			await handler({ mode: "fresh", text: "work" });
+			const { argv: childArgv } = create.mock.calls[0]![0];
+			const flags = childArgv.flatMap((arg, i) => (arg === "--model-profile" ? [childArgv[i + 1]] : []));
+			expect(flags).toEqual(live ? [live] : []);
+		});
+	}
+
 	describe("/fork spawn", () => {
 		/** A spawn harness whose A has a saved session file, so fork mode has something to copy. */
 		async function forkHarness(composer?: Composer) {

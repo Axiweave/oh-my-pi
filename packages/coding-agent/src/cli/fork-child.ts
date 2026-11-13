@@ -1,8 +1,8 @@
 /**
  * Child `omp` launch shared by `/fork pane|window` and `/spawn`: the parent's
- * configuration flags plus its live profile, model, thinking level, and
- * prompt-cache key, and the non-secret scope env that pins the child to the
- * parent's config.
+ * configuration flags plus its live profile, model profile, model, thinking
+ * level, and prompt-cache key, and the non-secret scope env that pins the
+ * child to the parent's config.
  */
 import * as path from "node:path";
 import { getActiveProfile, getConfigDirName } from "@oh-my-pi/pi-utils/dirs";
@@ -14,7 +14,7 @@ import { flagConsumesValue, restartArgv } from "./flag-tables";
 
 /**
  * Startup flags the fork child re-supplies from the parent's live state
- * (`--profile`, `--model`, `--thinking`, `--prompt-cache-key`) or that would
+ * (`--profile`, `--model-profile`, `--model`, `--thinking`, `--prompt-cache-key`) or that would
  * re-point it at a stale scope (`--config`/`--cwd`/`--provider`; the child
  * gets the effective overlays via `PI_CONFIG_FILES` and the session cwd).
  * `--master` is dropped: a child is a session the user steers, not a second master.
@@ -24,6 +24,7 @@ const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
 	"--cwd": true,
 	"--master": true,
 	"--model": true,
+	"--model-profile": true,
 	"--profile": true,
 	"--prompt-cache-key": true,
 	"--provider": true,
@@ -57,7 +58,7 @@ export function forkScopeEnvCommand(scope: Readonly<Record<string, string | unde
 }
 
 export interface ForkChildLaunchOptions {
-	session: Pick<AgentSession, "model" | "agent" | "sessionId" | "configuredThinkingLevel">;
+	session: Pick<AgentSession, "model" | "agent" | "sessionId" | "configuredThinkingLevel" | "activeModelProfile">;
 	sessionManager: Pick<SessionManager, "getHeader">;
 	settings: Pick<Settings, "getAgentDir" | "getConfigFiles">;
 	/** Session file the child forks; appended last as `--fork <file>`. */
@@ -92,6 +93,9 @@ export function buildForkChildLaunch(options: ForkChildLaunchOptions): ForkChild
 	const apiKeyOverride = hasForkApiKeyOverride(childArgs);
 	const activeProfile = (options.getActiveProfile ?? getActiveProfile)();
 	if (activeProfile) childArgs.push("--profile", activeProfile);
+	// Without it a fresh child installs the config's startup `modelProfile`, so its role layer
+	// (and status line) names a different bundle than the model `--model` forwards.
+	if (session.activeModelProfile) childArgs.push("--model-profile", session.activeModelProfile);
 	const activeModel = session.model;
 	const model = options.model ?? (activeModel ? `${activeModel.provider}/${activeModel.id}` : undefined);
 	if (model) childArgs.push("--model", model);
