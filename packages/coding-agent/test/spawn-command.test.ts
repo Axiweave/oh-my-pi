@@ -224,6 +224,27 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		expect(await spawn()).toMatchObject({ start: "/speckit.specify billing retry" });
 	});
 
+	it("a spec-kit handoff_summary asks the summary for the spec-kit workflow; a plain one keeps the bare focus", async () => {
+		const { h, create, handler } = await spawnHarness();
+		h.mode.fileSlashCommands.add("speckit.specify");
+		const generate = vi
+			.spyOn(h.session, "generateHandoffDocument")
+			.mockResolvedValue({ document: "## Goal\nretry billing" } as never);
+		const spawn = async (speckit?: boolean) => {
+			await startRun(h);
+			await handler({ mode: "handoff_summary", text: "billing retry", speckit });
+			return fs.readFileSync(create.mock.calls.at(-1)![0].startFile!, "utf8");
+		};
+
+		expect(await spawn(true)).toBe("/speckit.specify ## Goal\nretry billing");
+		const focus = generate.mock.calls[0]![0]!;
+		expect(focus).toContain("spec-kit workflow");
+		expect(focus).toContain("billing retry");
+
+		expect(await spawn()).toBe("## Goal\nretry billing");
+		expect(generate.mock.calls[1]![0]).toBe("billing retry");
+	});
+
 	it("a /spawn window stays open for its whole run and frees the next /spawn at agent_end (SC-006)", async () => {
 		const { h, create, handler } = await spawnHarness();
 		vi.spyOn(h.session, "prompt").mockResolvedValue(true);

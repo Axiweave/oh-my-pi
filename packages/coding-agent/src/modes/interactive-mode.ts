@@ -145,6 +145,7 @@ import {
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import guidedLoopInterviewPrompt from "../prompts/loop/guided-loop-interview.md" with { type: "text" };
 import spawnKickoffPrompt from "../prompts/spawn/spawn-kickoff.md" with { type: "text" };
+import spawnSpeckitHandoffFocusPrompt from "../prompts/spawn/spawn-speckit-handoff-focus.md" with { type: "text" };
 import planDebateConsensusInvalidatedPrompt from "../prompts/system/plan-debate-consensus-invalidated.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
@@ -9134,33 +9135,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				throw new Error(`spawn cannot ${mode}: this session has no saved conversation yet`);
 			forkFile = path.resolve(sessionFile);
 		}
-		let start = mode === "fork" ? undefined : (request.text ?? "");
-		if (mode === "handoff_summary") {
-			const loader = new Loader(
-				this.ui,
-				spinner => theme.fg("accent", spinner),
-				message => theme.fg("muted", message),
-				"Writing the handoff summary for the new session…",
-				theme.getSpinnerFrames(),
-			);
-			this.statusContainer.addChild(loader);
-			this.ui.requestRender();
-			try {
-				const result = await this.session.generateHandoffDocument(request.text || undefined, {
-					signal: request.signal,
-				});
-				if (!result) throw new Error("Handoff summary produced no content");
-				start = result.document;
-			} finally {
-				loader.stop();
-				this.statusContainer.removeChild(loader);
-				this.ui.requestRender();
-			}
-		}
 		// B expands it as a file command, so spec-kit and speckit-auto see a typed `/speckit.specify`.
 		// B's commands come from its own directory; a new worktree has the source's. Without the
 		// command B still starts, plain, and A reports the skip instead of dropping the task.
-		let speckitSkipped = false;
+		let speckit = false;
 		if (request.speckit) {
 			const commands =
 				request.cwd === undefined || path.resolve(request.cwd) === path.resolve(sourceCwd)
@@ -9173,9 +9151,36 @@ export class InteractiveMode implements InteractiveModeContext {
 								})
 							).map(cmd => cmd.name),
 						);
-			if (commands.has("speckit.specify")) start = `/speckit.specify ${start}`;
-			else speckitSkipped = true;
+			speckit = commands.has("speckit.specify");
 		}
+		let start = mode === "fork" ? undefined : (request.text ?? "");
+		if (mode === "handoff_summary") {
+			const loader = new Loader(
+				this.ui,
+				spinner => theme.fg("accent", spinner),
+				message => theme.fg("muted", message),
+				"Writing the handoff summary for the new session…",
+				theme.getSpinnerFrames(),
+			);
+			this.statusContainer.addChild(loader);
+			this.ui.requestRender();
+			try {
+				// A spec-kit child reads the summary as its feature description: its Next Steps must be
+				// the spec-kit phases, not the direct edits a plain handoff would list.
+				const focus = speckit
+					? prompt.render(spawnSpeckitHandoffFocusPrompt, { focus: request.text })
+					: request.text || undefined;
+				const result = await this.session.generateHandoffDocument(focus, { signal: request.signal });
+				if (!result) throw new Error("Handoff summary produced no content");
+				start = result.document;
+			} finally {
+				loader.stop();
+				this.statusContainer.removeChild(loader);
+				this.ui.requestRender();
+			}
+		}
+		if (speckit) start = `/speckit.specify ${start}`;
+		const speckitSkipped = request.speckit && !speckit;
 		// A repeat spawn for the same work reuses the model's name: take the next free `-N`.
 		const branch =
 			request.new_worktree && request.branch ? await freeBranchName(sourceCwd, request.branch.trim()) : undefined;
