@@ -287,6 +287,7 @@ import {
 	reportTernSession,
 	setSessionTerminalTitle,
 	setTerminalSessionSource,
+	setTerminalTitleMaster,
 	setTerminalTitlePullRequest,
 	setTerminalTitleSpinnerStyle,
 	setTerminalTitleStateEnabled,
@@ -6742,6 +6743,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#updateMasterModeStatus(): void {
 		this.statusLine.setMasterModeStatus(this.masterModeEnabled ? { enabled: true } : null);
+		setTerminalTitleMaster(this.masterModeEnabled);
 		this.ui.requestRender();
 		this.#notifyModeChanged();
 	}

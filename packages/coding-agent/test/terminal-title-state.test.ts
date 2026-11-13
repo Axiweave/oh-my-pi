@@ -11,6 +11,7 @@ import {
 	setTerminalTitleSpinnerStyle,
 	setTerminalTitleIdeState,
 	setTerminalTitleState,
+	setTerminalTitleMaster,
 } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
 import { mockWindowsConsoleTitle, type WindowsConsoleTitleMock } from "./terminal-title-test-utils";
@@ -168,6 +169,7 @@ describe("disposeTerminalTitleState", () => {
 		setSessionTerminalTitle("my-project");
 		setTerminalTitleState("idle");
 		setTerminalTitleIdeState("idle");
+		setTerminalTitleMaster(false);
 		resetObserved(writes, windowsTitleMock);
 	});
 
@@ -447,6 +449,42 @@ describe("disposeTerminalTitleState", () => {
 			expect(native.titles.at(-1)).toBe("original-shell-title");
 		} finally {
 			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+		}
+	});
+
+	it("setTerminalTitleMaster writes one title on a change and none on a repeat", () => {
+		try {
+			setTerminalTitleMaster(true);
+			const titles = observedTitles(writes, windowsTitleMock);
+			expect(titles).toHaveLength(1);
+			expect(titles[0]).toStartWith(`${BRAND}◆ `);
+
+			resetObserved(writes, windowsTitleMock);
+			setTerminalTitleMaster(true);
+			expect(observedTitles(writes, windowsTitleMock)).toEqual([]);
+		} finally {
+			setTerminalTitleMaster(false);
+		}
+	});
+});
+
+describe("master brand", () => {
+	it("swaps only the leading brand for π◆ in every title form", () => {
+		const states = ["idle", "working", "attention", "done", "failed"] as const;
+		for (const state of states) {
+			for (const enabled of [true, false]) {
+				for (const label of [LABEL, undefined]) {
+					for (let frame = 0; frame < 4; frame++) {
+						const args = [label, state, frame, enabled, "linux", "braille", {}] as const;
+						const plain = buildTerminalTitleWithState(...args);
+						expect(plain).toStartWith(BRAND);
+						expect(plain).not.toContain("◆");
+						expect(buildTerminalTitleWithState(...args, false, true)).toBe(
+							`${BRAND}◆${plain.slice(BRAND.length)}`,
+						);
+					}
+				}
+			}
 		}
 	});
 });

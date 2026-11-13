@@ -659,6 +659,7 @@ function writeTerminalTitle(title: string, recomposeStaticOnFailure = false): vo
 						terminalTitleRuntime.style,
 						$env as NodeJS.ProcessEnv,
 						true,
+						terminalTitleRuntime.master,
 					);
 				if (latched === lastTerminalTitle) return;
 				writeTerminalSequence(`\x1b]0;${latched}\x07`);
@@ -872,6 +873,8 @@ const terminalTitleRuntime: {
 	 *  turns OSC 0 into a console-title set, so `popTerminalTitle()` must then
 	 *  skip its clear or it blanks the title just restored. */
 	nativeTitleRestored: boolean;
+	/** Master mode is on: the brand reads `π◆` so claude-code-ide.el can show it. */
+	master: boolean;
 } = {
 	label: undefined,
 	sessionName: undefined,
@@ -888,6 +891,7 @@ const terminalTitleRuntime: {
 	nativeTitleFailed: false,
 	initialWindowsConsoleTitle: undefined,
 	nativeTitleRestored: false,
+	master: false,
 };
 
 /**
@@ -898,6 +902,7 @@ const terminalTitleRuntime: {
  *   - `attention`:           `π ! label`;
  *   - disabled:              `π: label`.
  * Without a label the separator trails the brand (`π >`) so the state stays visible.
+ * In master mode the brand is `π◆` in every form.
  * The `working` separator cycles `TERMINAL_TITLE_SPINNER_STYLES[style]`; `style`
  * defaults to `braille` so existing 5-arg callers keep the historical frames.
  */
@@ -910,8 +915,10 @@ export function buildTerminalTitleWithState(
 	style: TerminalTitleSpinnerStyle = "braille",
 	env: NodeJS.ProcessEnv = $env as NodeJS.ProcessEnv,
 	nativeTitleFailed = false,
+	master = false,
 ): string {
-	if (!enabled) return label ? `${DEFAULT_TERMINAL_TITLE}: ${label}` : DEFAULT_TERMINAL_TITLE;
+	const brand = master ? `${DEFAULT_TERMINAL_TITLE}◆` : DEFAULT_TERMINAL_TITLE;
+	if (!enabled) return label ? `${brand}: ${label}` : brand;
 	const frames = TERMINAL_TITLE_SPINNER_STYLES[style] ?? TERMINAL_TITLE_SPINNER_STYLES.braille;
 	const staticHost = isStaticTitleHost(platform, env) || (platform === "win32" && nativeTitleFailed);
 	const separator =
@@ -926,7 +933,7 @@ export function buildTerminalTitleWithState(
 					: state === "failed"
 						? TITLE_FAILED_SEPARATOR
 						: TITLE_IDLE_SEPARATOR;
-	return label ? `${DEFAULT_TERMINAL_TITLE} ${separator} ${label}` : `${DEFAULT_TERMINAL_TITLE} ${separator}`;
+	return label ? `${brand} ${separator} ${label}` : `${brand} ${separator}`;
 }
 
 /**
@@ -974,6 +981,7 @@ function emitTerminalTitle(): void {
 					terminalTitleRuntime.style,
 					$env as NodeJS.ProcessEnv,
 					terminalTitleRuntime.nativeTitleFailed,
+					terminalTitleRuntime.master,
 				));
 	// The composed working title is the only write that can fail into an
 	// animated OSC frame: on native failure it re-pins static (`:`), while a
@@ -1032,6 +1040,13 @@ export function setTerminalTitleState(state: TerminalTitleState): void {
 export function setTerminalTitleIdeState(state: IdeSessionState): void {
 	if (terminalTitleRuntime.ideState === state) return;
 	terminalTitleRuntime.ideState = state;
+	emitTerminalTitle();
+}
+
+/** Show master mode in the title brand (`π◆`); see {@link buildTerminalTitleWithState}. */
+export function setTerminalTitleMaster(enabled: boolean): void {
+	if (terminalTitleRuntime.master === enabled) return;
+	terminalTitleRuntime.master = enabled;
 	emitTerminalTitle();
 }
 
