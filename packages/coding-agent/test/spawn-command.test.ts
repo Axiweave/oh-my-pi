@@ -9,6 +9,7 @@ import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mod
 import { FORK_API_KEY_REFUSAL } from "@oh-my-pi/pi-coding-agent/cli/fork-child";
 import { cfgSpawnConfirm } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { cfgSpeckitAutoDefaultOnStartup } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { SPECKIT_PHASE_COMMANDS } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -198,12 +199,23 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		expect(create).toHaveBeenCalledTimes(2);
 	});
 
-	it("speckit follows the commands of B's directory and starts B plain where they lack /speckit.specify", async () => {
+	it("speckit follows the commands of B's directory: plain without /speckit.specify, no speckit-auto without every phase", async () => {
 		const { h, create, handler } = await spawnHarness();
 		using bare = TempDir.createSync("@pi-spawn-bare-");
 		using kit = TempDir.createSync("@pi-spawn-kit-");
-		fs.mkdirSync(path.join(kit.path(), ".omp", "commands"), { recursive: true });
-		fs.writeFileSync(path.join(kit.path(), ".omp", "commands", "speckit.specify.md"), "Spec: $ARGUMENTS\n");
+		using partial = TempDir.createSync("@pi-spawn-partial-");
+		const install = (dir: string, phases: readonly string[]) => {
+			fs.mkdirSync(path.join(dir, ".omp", "commands"), { recursive: true });
+			for (const phase of phases) {
+				fs.writeFileSync(path.join(dir, ".omp", "commands", `speckit.${phase}.md`), "Run: $ARGUMENTS\n");
+			}
+		};
+		install(kit.path(), SPECKIT_PHASE_COMMANDS);
+		// spec-kit without converge: B still specifies, but speckit-auto cannot run, and A says so.
+		install(
+			partial.path(),
+			SPECKIT_PHASE_COMMANDS.filter(phase => phase !== "converge"),
+		);
 		const spawn = async (cwd?: string) => {
 			await startRun(h);
 			const result = await handler({ mode: "fresh", text: "billing retry", speckit: true, cwd });
@@ -225,11 +237,14 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 			start: "/speckit.specify billing retry",
 			scope: ["--speckit-auto=full"],
 		});
-		h.mode.fileSlashCommands.add("speckit.specify");
+		for (const phase of SPECKIT_PHASE_COMMANDS) h.mode.fileSlashCommands.add(`speckit.${phase}`);
 		const bareRun = await spawn(bare.path());
 		expect(bareRun).toMatchObject({ start: "billing retry", scope: [] });
 		expect(bareRun.result).toEndWith(skipped(bare.path()));
 		expect(await spawn()).toMatchObject({ start: "/speckit.specify billing retry", scope: ["--speckit-auto=full"] });
+		const partialRun = await spawn(partial.path());
+		expect(partialRun).toMatchObject({ start: "/speckit.specify billing retry", scope: [] });
+		expect(partialRun.result).toEndWith(`; speckit-auto skipped: no /speckit.converge in ${partial.path()}`);
 
 		// A configured scope carries over.
 		cfgSpeckitAutoDefaultOnStartup.override(h.session.settings, "tasks");

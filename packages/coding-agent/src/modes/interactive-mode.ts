@@ -9143,6 +9143,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// B's commands come from its own directory; a new worktree has the source's. Without the
 		// command B still starts, plain, and A reports the skip instead of dropping the task.
 		let speckit = false;
+		// Speckit-auto needs every phase command; B's own start check would skip it silently.
+		let missingPhases: string[] = [];
 		if (request.speckit) {
 			const commands =
 				request.cwd === undefined || path.resolve(request.cwd) === path.resolve(sourceCwd)
@@ -9156,6 +9158,7 @@ export class InteractiveMode implements InteractiveModeContext {
 							).map(cmd => cmd.name),
 						);
 			speckit = commands.has("speckit.specify");
+			missingPhases = SPECKIT_PHASE_COMMANDS.filter(phase => !commands.has(`speckit.${phase}`));
 		}
 		let start = mode === "fork" ? undefined : (request.text ?? "");
 		if (mode === "handoff_summary") {
@@ -9211,7 +9214,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				...(forkFile ? ["--fork", forkFile] : []),
 				// Speckit-auto runs the phases after `/speckit.specify`; the start text alone only specifies.
 				// The configured scope wins; with the default off, the child runs every phase.
-				...(speckit ? [`--speckit-auto=${speckitScope === "off" ? "full" : speckitScope}`] : []),
+				...(speckit && missingPhases.length === 0
+					? [`--speckit-auto=${speckitScope === "off" ? "full" : speckitScope}`]
+					: []),
 			],
 			env: launch.env,
 			// Emacs (claude-code-ide) never moves the focus to a `cci-origin=master` session,
@@ -9223,7 +9228,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		writeSpawnAnnouncement(name);
 		this.showStatus(`Spawned ${name}`);
 		const result = `Spawned ${name} in ${dir} (${mode})`;
-		return speckitSkipped ? `${result}; spec-kit skipped: no /speckit.specify in ${dir}` : result;
+		if (speckitSkipped) return `${result}; spec-kit skipped: no /speckit.specify in ${dir}`;
+		if (speckit && missingPhases.length > 0) {
+			return `${result}; speckit-auto skipped: no ${missingPhases.map(phase => `/speckit.${phase}`).join(", ")} in ${dir}`;
+		}
+		return result;
 	}
 
 	/** Spawned child side: publish `cci-state`/`cci-work` on this zmx session for the parent's `/despawn`. */

@@ -17,7 +17,7 @@ Optional fields:
 Call it once per task of the request, one call at a time. NEVER do the requested work yourself.
 
 Results:
-- Spawned → note the name; go on with the next task. `spec-kit skipped: …` at the end → name that in the task's line.
+- Spawned → note the name; go on with the next task. `spec-kit skipped: …` or `speckit-auto skipped: …` at the end → name that in the task's line.
 - Error → note the reason; go on with the next task. If you made a worktree first, the line also names its path; it stays.
 - Spawn declined → the user said no to this task. Note it, plus any worktree path; go on with the next task.
 - `Approved: spawn the <N> tasks.` → spawn each task; their own dialogs do not show.
