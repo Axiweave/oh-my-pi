@@ -556,7 +556,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Toggle master mode (the main agent delegates work and never waits on it)",
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.masterModeEnabled) return "Master: on";
-			if (runtime.ctx.speckitAutoEnabled) return "Master: blocked by speckit-auto mode";
 			if (runtime.ctx.planModeEnabled || runtime.ctx.planModePaused) return "Master: blocked by plan mode";
 			if (runtime.ctx.vibeModeEnabled) return "Master: blocked by vibe mode";
 			return "Master: off";

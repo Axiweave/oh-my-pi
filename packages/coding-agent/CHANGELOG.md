@@ -70,6 +70,7 @@
 
 ### Changed
 
+- Master mode now takes precedence over speckit-auto mode. `/master` and `--master` turn speckit-auto mode off and show `Speckit-auto mode off: master mode takes precedence.` instead of a refusal. While master mode is on, a saved speckit-auto state or `speckitAuto.defaultOnStartup` does not turn speckit-auto mode on, after `/new`, `/clear`, `/delete`, or a session switch. Master mode now also carries into a session with a saved speckit-auto state.
 - `omp launch-session` now accepts a `--cwd` that is not a Git checkout when no `--branch` is given. The session starts in `--cwd`. With `--branch`, it still refuses with `--cwd is not a Git checkout`.
 - A session that publishes `cci-state` now also sets the `cci-turn` label at each `agent_end`, in the same `zmx set` call as `cci-state=idle`. The value is the count of `agent_end` events in this omp process, starting at `1`.
 - `/spawn` now works while speckit-auto mode is on. Before, it refused with "Turn off speckit-auto mode first". The spawn turn does not change the run. The judge still checks the phase reply, also when the `/spawn` was sent during a phase turn or while the judge was still deciding. A held question stays held, a paused run stays paused, and the run's next step waits until `/spawn` has sent its prompt.

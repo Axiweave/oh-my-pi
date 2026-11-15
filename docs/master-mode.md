@@ -21,11 +21,11 @@ omp --master          # start in master mode (interactive only)
 
 ## Exclusion with other modes
 
-Master mode is mutually exclusive with vibe mode, plan mode (active or paused), and speckit-auto mode. Each command refuses with a short message:
+Master mode is mutually exclusive with vibe mode and plan mode (active or paused). Each command refuses with a short message. Master mode takes precedence over speckit-auto mode:
 
-| Command | Refusal |
+| Command | Result |
 | --- | --- |
-| `/master` while speckit-auto is on | `Turn off speckit-auto mode first (/speckit-auto-mode).` |
+| `/master` while speckit-auto is on | Speckit-auto turns off: `Speckit-auto mode off: master mode takes precedence.` |
 | `/master` while plan mode is on | `Exit plan mode first.` |
 | `/master` while plan mode is paused | `Plan mode is paused — run /plan again to fully exit.` |
 | `/master` while vibe mode is on | `Exit vibe mode first.` |
@@ -104,4 +104,4 @@ omp does not save this message in the transcript.
 
 ## Resume
 
-omp saves each change as a `master-mode` session entry with `{ enabled }`. After `--continue`, `--resume`, or `/resume`, the mode is on when the latest `master-mode` entry on the branch has `enabled: true`. A session with no `master-mode` entry keeps the current state, so master mode stays on when you switch to it. omp then saves the entry in that session. The mode stays off in a session that restores plan mode (active or paused), vibe mode, an implementation review, or speckit-auto mode. The mode is on before the first turn, so the first turn already refuses a direct edit.
+omp saves each change as a `master-mode` session entry with `{ enabled }`. After `--continue`, `--resume`, or `/resume`, the mode is on when the latest `master-mode` entry on the branch has `enabled: true`. A session with no `master-mode` entry keeps the current state, so master mode stays on when you switch to it. omp then saves the entry in that session. The mode stays off in a session that restores plan mode (active or paused), vibe mode, or an implementation review. A saved speckit-auto state does not stop master mode: speckit-auto stays off and shows `Speckit-auto mode stays off: master mode takes precedence.` The mode is on before the first turn, so the first turn already refuses a direct edit.

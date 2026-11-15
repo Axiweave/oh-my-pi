@@ -4055,9 +4055,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#enterMasterMode();
 	}
 
-	/** Shows why master mode cannot start; true when it refused. Goal and loop mode do not block. */
+	/** Shows why master mode cannot start; true when it refused. Goal and loop mode do not block; speckit-auto mode yields. */
 	#masterEntryBlocked(): boolean {
-		if (this.#warnSpeckitAutoBlocks()) return true;
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return true;
@@ -4088,7 +4087,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	// The guard in AgentSession refuses calls; the only tool change is `spawn_session` (see #syncMasterSpawnTool).
+	// Master mode takes precedence over speckit-auto mode: entry turns it off and saves that.
 	async #enterMasterMode(): Promise<void> {
+		if (this.speckitAutoEnabled) {
+			this.setSpeckitAutoMode("off");
+			this.showWarning("Speckit-auto mode off: master mode takes precedence.");
+		}
 		this.masterModeEnabled = true;
 		this.session.setMasterModeState({ enabled: true });
 		await this.#syncMasterSpawnTool();
@@ -4180,6 +4184,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			.findLast(candidate => candidate.type === "custom" && candidate.customType === SPECKIT_AUTO_ENTRY);
 		const state = parseSpeckitAutoState(entry?.type === "custom" ? entry.data : undefined);
 		if (!state?.enabled) return;
+		// Master mode takes precedence; the saved entry stays, so the mode comes back once master mode is off.
+		if (this.masterModeEnabled) {
+			this.showWarning("Speckit-auto mode stays off: master mode takes precedence.");
+			return;
+		}
 		this.speckitAutoEnabled = true;
 		this.#speckitScope = state.scope;
 		const run = state.run && { ...state.run, paused: true };
@@ -7178,7 +7187,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		const vibeToolsetLostToTeardown = this.vibeModeEnabled && !preserveVibe;
 		// Master mode follows the user into a session that records no master state, unless that
 		// session restores a mode master mode cannot run with. An implementation review needs
-		// `write` (`xd://propose` and the edits), which the master guard refuses.
+		// `write` (`xd://propose` and the edits), which the master guard refuses. A saved
+		// speckit-auto state does not stop it: master mode takes precedence (restoreSpeckitAuto).
 		const carryMaster =
 			this.masterModeEnabled &&
 			sessionContext.mode !== "vibe" &&
@@ -7194,8 +7204,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			restorePlanModel: Object.keys(sessionContext.models).length === 0,
 		});
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
+		await this.restoreMasterMode(carryMaster);
 		this.restoreSpeckitAuto();
-		await this.restoreMasterMode(carryMaster && !this.speckitAutoEnabled);
 		const goalEnabled = cfgGoalEnabled.get(this.session.settings);
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
 			this.session.goalRuntime.clearAccounting();

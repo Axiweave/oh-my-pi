@@ -2,8 +2,9 @@
  * Contracts: /master toggle and `startMasterAtStartup` on InteractiveMode.
  * - Enter and exit change only `spawn_session`: on in zmx while the mode is on, back to the old set on exit. The hidden message goes away on exit.
  * - The saved `master-mode` entry decides on resume, before the first turn. With no entry, the live mode carries over
- *   (`/new`, `/clear`, `/delete`, switch) unless the target restores plan, vibe, impl_review, or speckit-auto.
- * - Master mode and vibe, plan (on and paused), and speckit-auto exclude each other. Goal and loop do not block it.
+ *   (`/new`, `/clear`, `/delete`, switch) unless the target restores plan, vibe, or impl_review.
+ * - Master mode and vibe and plan (on and paused) exclude each other. Master mode takes precedence over speckit-auto:
+ *   entry turns it off, and a saved state or startup default keeps it off. Goal and loop do not block it.
  * - Entry needs `async.enabled` and an async job manager.
  * - `--master` startup shows a reason and stays off when an entry check refuses.
  */
@@ -261,16 +262,21 @@ describe("InteractiveMode master mode", () => {
 		}
 
 		// The user commands that start a new session keep the mode, its spawn tool, and save it there.
+		// A speckit-auto startup default stays off: master mode takes precedence.
 		const commands: [string, (mode: InteractiveMode) => Promise<void>][] = [
 			["/new", mode => mode.handleNewCommand()],
 			["/clear", mode => mode.handleClearCommand()],
 			["/delete", mode => mode.handleDeleteCommand()],
 		];
 		for (const [name, run] of commands) {
-			it(`keeps the mode on across ${name} and saves it in the new session`, async () => {
+			it(`keeps the mode on across ${name}, over a speckit-auto default, and saves it in the new session`, async () => {
 				process.env.ZMX_SESSION = "parent";
 				const { session, mode } = open();
-				await mode.init({ suppressWelcomeIntro: true });
+				cfgSpeckitAutoDefaultOnStartup.override(session.settings, "full");
+				session.setSlashCommands(
+					PHASE_COMMANDS.map(name => ({ name, description: name, content: "", source: "test" })),
+				);
+				await mode.init({ suppressWelcomeIntro: true, startupBlocker: "master" });
 				await mode.handleMasterModeCommand();
 				const previousId = session.sessionManager.getSessionId();
 
@@ -278,6 +284,7 @@ describe("InteractiveMode master mode", () => {
 
 				expect(session.sessionManager.getSessionId()).not.toBe(previousId);
 				expect(mode.masterModeEnabled).toBe(true);
+				expect(mode.speckitAutoEnabled).toBe(false);
 				expect(session.getMasterModeState()).toEqual({ enabled: true });
 				expect(session.getActiveToolNames()).toContain("spawn_session");
 				expect(savedFlags(session)).toEqual([true]);
@@ -327,10 +334,19 @@ describe("InteractiveMode master mode", () => {
 				(_mode, session) => session.getImplReviewState()?.phase === "implementing",
 			],
 			[
-				"speckit-auto on",
+				"speckit-auto saved on",
 				m => m.appendCustomEntry(SPECKIT_AUTO_ENTRY, { enabled: true, scope: "full" }),
-				false,
-				mode => mode.speckitAutoEnabled,
+				true,
+				mode => !mode.speckitAutoEnabled,
+			],
+			[
+				"master and speckit-auto both saved on",
+				m => {
+					m.appendCustomEntry(SPECKIT_AUTO_ENTRY, { enabled: true, scope: "full" });
+					m.appendCustomEntry(MASTER_MODE_ENTRY, { enabled: true });
+				},
+				true,
+				mode => !mode.speckitAutoEnabled,
 			],
 		];
 		for (const [label, setup, on, restored] of targets) {
@@ -357,11 +373,6 @@ describe("InteractiveMode master mode", () => {
 
 	describe("exclusion", () => {
 		const blockers: [string, (mode: InteractiveMode) => Promise<void> | void, string][] = [
-			[
-				"speckit-auto",
-				mode => void (mode.speckitAutoEnabled = true),
-				"Turn off speckit-auto mode first (/speckit-auto-mode).",
-			],
 			["plan", mode => void (mode.planModeEnabled = true), "Exit plan mode first."],
 			[
 				"paused plan",
@@ -385,6 +396,24 @@ describe("InteractiveMode master mode", () => {
 				expect(savedFlags(session)).toEqual([]);
 			});
 		}
+
+		it("entry turns speckit-auto mode off with a warning and saves it off", async () => {
+			const { session, mode } = open();
+			await mode.init({ suppressWelcomeIntro: true });
+			mode.fileSlashCommands = new Set(PHASE_COMMANDS);
+			expect(mode.setSpeckitAutoMode("tasks")).toBe(true);
+			const warn = vi.spyOn(mode, "showWarning");
+
+			await mode.handleMasterModeCommand();
+
+			expect(warn).toHaveBeenCalledWith("Speckit-auto mode off: master mode takes precedence.");
+			expect(mode.masterModeEnabled).toBe(true);
+			expect(mode.speckitAutoEnabled).toBe(false);
+			const saved = session.sessionManager
+				.getEntries()
+				.findLast(entry => entry.type === "custom" && entry.customType === SPECKIT_AUTO_ENTRY);
+			expect(saved?.type === "custom" ? saved.data : undefined).toMatchObject({ enabled: false });
+		});
 
 		it("master blocks vibe, plan, debate, and speckit-auto", async () => {
 			const { session, mode } = open();
