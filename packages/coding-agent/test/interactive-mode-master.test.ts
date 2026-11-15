@@ -72,6 +72,17 @@ function savedFlags(session: AgentSession): unknown[] {
 	return flags;
 }
 
+/** The saved `enabled` flags, in order, of every `speckit-auto` entry on the session. */
+function savedSpeckitFlags(manager: SessionManager): unknown[] {
+	return manager
+		.getEntries()
+		.flatMap(entry =>
+			entry.type === "custom" && entry.customType === SPECKIT_AUTO_ENTRY
+				? [(entry.data as { enabled?: unknown } | undefined)?.enabled]
+				: [],
+		);
+}
+
 describe("InteractiveMode master mode", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -357,11 +368,15 @@ describe("InteractiveMode master mode", () => {
 				await target.ensureOnDisk();
 				const file = target.getSessionFile();
 				if (!file) throw new Error("Expected target session file");
+				const targetSpeckit = savedSpeckitFlags(target);
 				const { session, mode } = open();
 				await mode.init({ suppressWelcomeIntro: true });
 				await mode.handleMasterModeCommand();
 
 				expect(await session.switchSession(file)).toBe(true);
+
+				// The switch saves no speckit-auto change: a kept-off state stays on disk for later.
+				expect(savedSpeckitFlags(session.sessionManager)).toEqual(targetSpeckit);
 
 				expect(mode.masterModeEnabled).toBe(on);
 				expect(session.getMasterModeState()).toEqual(on ? { enabled: true } : undefined);
@@ -409,10 +424,7 @@ describe("InteractiveMode master mode", () => {
 			expect(warn).toHaveBeenCalledWith("Speckit-auto mode off: master mode takes precedence.");
 			expect(mode.masterModeEnabled).toBe(true);
 			expect(mode.speckitAutoEnabled).toBe(false);
-			const saved = session.sessionManager
-				.getEntries()
-				.findLast(entry => entry.type === "custom" && entry.customType === SPECKIT_AUTO_ENTRY);
-			expect(saved?.type === "custom" ? saved.data : undefined).toMatchObject({ enabled: false });
+			expect(savedSpeckitFlags(session.sessionManager)).toEqual([true, false]);
 		});
 
 		it("master blocks vibe, plan, debate, and speckit-auto", async () => {
@@ -563,6 +575,27 @@ describe("InteractiveMode master mode", () => {
 
 			expect(mode.masterModeEnabled).toBe(true);
 			expect(mode.speckitAutoEnabled).toBe(false);
+		});
+
+		it("on a resumed session with speckit-auto saved on, turns speckit-auto off with a warning and saves it", async () => {
+			const target = SessionManager.create(tempDir.path(), tempDir.path());
+			target.appendCustomEntry(SPECKIT_AUTO_ENTRY, { enabled: true, scope: "full" });
+			await target.ensureOnDisk();
+			const file = target.getSessionFile();
+			if (!file) throw new Error("Expected target session file");
+			const { session, mode } = open();
+			await mode.init({ suppressWelcomeIntro: true });
+			expect(await session.switchSession(file)).toBe(true);
+			expect(mode.speckitAutoEnabled).toBe(true);
+			const warn = vi.spyOn(mode, "showWarning");
+
+			await mode.startMasterAtStartup(false);
+
+			expect(warn).toHaveBeenCalledWith("Speckit-auto mode off: master mode takes precedence.");
+			expect(mode.masterModeEnabled).toBe(true);
+			expect(mode.speckitAutoEnabled).toBe(false);
+			expect(savedSpeckitFlags(session.sessionManager)).toEqual([true, false]);
+			expect(savedFlags(session)).toEqual([true]);
 		});
 	});
 });

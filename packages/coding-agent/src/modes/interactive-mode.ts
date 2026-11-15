@@ -11265,7 +11265,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// A cancelled or failed switch leaves the old session: bring its saved state back.
 				if (this.sessionManager.getSessionId() === sessionId) {
 					this.restoreSpeckitAuto();
-				} else {
+				} else if (!this.masterModeEnabled) {
 					this.speckitAutoEnabled = true;
 					this.#speckitScope = scope;
 					this.#saveSpeckitAutoState();
