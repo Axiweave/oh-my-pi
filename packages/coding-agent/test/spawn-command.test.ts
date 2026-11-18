@@ -1,7 +1,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { type } from "@oh-my-pi/omptype";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -358,41 +359,61 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		expect(await h.mode.handleSpawnCommand("again")).toBe(true);
 	});
 
-	it("an interrupt before the queued kickoff starts puts /spawn back in the editor; the next prompt does not spawn", async () => {
-		const { h } = await spawnHarness();
-		const started = Promise.withResolvers<void>();
-		const mock = createMockModel({
-			responses: [
-				async (_context, options) => {
-					started.resolve();
-					const aborted = Promise.withResolvers<void>();
-					options?.signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
-					await aborted.promise;
-					return { content: ["stopped"] };
+	for (const during of ["model call", "tool"] as const) {
+		it(`an interrupt during a ${during} before the queued kickoff starts puts /spawn back in the editor; the next prompt does not spawn`, async () => {
+			const { h } = await spawnHarness();
+			const started = Promise.withResolvers<void>();
+			const waitForAbort = async (signal?: AbortSignal) => {
+				started.resolve();
+				const aborted = Promise.withResolvers<void>();
+				signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+				await aborted.promise;
+			};
+			const schema = type({});
+			const pause: AgentTool<typeof schema> = {
+				name: "pause",
+				label: "Pause",
+				description: "Wait for an abort",
+				parameters: schema,
+				async execute(_id, _params, signal) {
+					await waitForAbort(signal);
+					return { content: [{ type: "text", text: "stopped" }], details: {} };
 				},
-				{ content: ["hi"] },
-			],
+			};
+			const mock = createMockModel({
+				responses: [
+					during === "tool"
+						? { content: [{ type: "toolCall", id: "pause-1", name: "pause", arguments: {} }] }
+						: async (_context, options) => {
+								await waitForAbort(options?.signal);
+								return { content: ["stopped"] };
+							},
+					{ content: ["hi"] },
+					{ content: ["hi"] },
+				],
+			});
+			h.session.agent.streamFn = mock.stream;
+			h.session.agent.setTools([...h.session.agent.state.tools, pause]);
+			h.session.modelRegistry.authStorage.keys.setRuntime("anthropic", "test-key");
+			const run = h.session.prompt("long work");
+			await started.promise;
+			expect(await h.mode.handleSpawnCommand("late request")).toBe(true);
+			expect(h.session.agent.peekFollowUpQueue().some(isSpawnKickoff)).toBe(true);
+
+			// Esc in loop mode aborts and keeps the queue.
+			await h.session.abort({ reason: USER_INTERRUPT_LABEL });
+			await run;
+			await h.session.waitForIdle();
+			expect(h.session.isSpawnWindowOpen()).toBe(false);
+			expect(h.session.agent.peekFollowUpQueue().some(isSpawnKickoff)).toBe(false);
+			expect(h.mode.editor.getText()).toBe("/spawn late request");
+
+			await h.session.prompt("hello");
+			await h.session.waitForIdle();
+			expect(h.session.messages.some(isSpawnKickoff)).toBe(false);
+			expect(h.session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "hi" }]);
 		});
-		h.session.agent.streamFn = mock.stream;
-		h.session.modelRegistry.authStorage.keys.setRuntime("anthropic", "test-key");
-		const run = h.session.prompt("long work");
-		await started.promise;
-		expect(await h.mode.handleSpawnCommand("late request")).toBe(true);
-		expect(h.session.agent.peekFollowUpQueue().some(isSpawnKickoff)).toBe(true);
-
-		// Esc in loop mode aborts and keeps the queue.
-		await h.session.abort({ reason: USER_INTERRUPT_LABEL });
-		await run;
-		await h.session.waitForIdle();
-		expect(h.session.isSpawnWindowOpen()).toBe(false);
-		expect(h.session.agent.peekFollowUpQueue().some(isSpawnKickoff)).toBe(false);
-		expect(h.mode.editor.getText()).toBe("/spawn late request");
-
-		await h.session.prompt("hello");
-		await h.session.waitForIdle();
-		expect(h.session.messages.some(isSpawnKickoff)).toBe(false);
-		expect(mock.calls.length).toBe(2);
-	});
+	}
 
 	it("a kickoff queued after its run ended frees the next /spawn and goes back to the editor", async () => {
 		const { h } = await spawnHarness();
