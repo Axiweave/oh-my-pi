@@ -1,12 +1,11 @@
-import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
+import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { slashCommandCapability } from "../capability/slash-command";
 import { slashCommandFrontmatterDisplay } from "@oh-my-pi/pi-tui/overlays/extensions/inspector-model";
 import type { EffectiveExtensionRoots } from "../capability/types";
-import { appendInlineArgsFallback, templateUsesInlineArgPlaceholders } from "../config/prompt-templates";
+import { renderTemplateWithArgs } from "../config/prompt-templates";
 import type { SlashCommand } from "../discovery";
 import { loadCapability } from "../discovery";
 import { EMBEDDED_COMMAND_TEMPLATES } from "../task/commands";
-import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 
 export type SlashCommandSource = "extension" | "prompt" | "skill";
 
@@ -137,12 +136,7 @@ export function parseFileSlashInvocation(text: string): { name: string; args: st
 
 /** Render a file command's template with `argsString`. Throws on a malformed template. */
 export function renderFileSlashCommand(command: FileSlashCommand, argsString: string): string {
-	const args = parseCommandArgs(argsString);
-	const argsText = args.join(" ");
-	const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(command.content);
-	const substituted = substituteArgs(command.content, args);
-	const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
-	return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
+	return renderTemplateWithArgs(command.content, argsString);
 }
 
 /**

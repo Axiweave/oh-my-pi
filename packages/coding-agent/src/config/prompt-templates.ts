@@ -50,25 +50,42 @@ prompt.registerHelper("renderYieldSchema", (schema: unknown): string => {
 });
 
 const INLINE_ARG_SHELL_PATTERN = /\$(?:ARGUMENTS|@(?:\[\d+(?::\d*)?\])?|\d+)/;
+const INLINE_ARG_SHELL_PATTERN_GLOBAL = new RegExp(INLINE_ARG_SHELL_PATTERN.source, "g");
 const INLINE_ARG_TEMPLATE_PATTERN = /\{\{[\s\S]*?(?:\b(?:arguments|ARGUMENTS|args)\b|\barg\s+[^}]+)[\s\S]*?\}\}/;
+const ARG_SENTINEL_PATTERN = /\uE000(\d+)\uE001/g;
 
 /**
  * Keep the check source-level and cheap: if the template text contains any explicit
  * inline-arg placeholder syntax, do not append the fallback text again.
  */
-export function templateUsesInlineArgPlaceholders(templateSource: string): boolean {
+function templateUsesInlineArgPlaceholders(templateSource: string): boolean {
 	return INLINE_ARG_SHELL_PATTERN.test(templateSource) || INLINE_ARG_TEMPLATE_PATTERN.test(templateSource);
 }
 
-export function appendInlineArgsFallback(
-	rendered: string,
-	argsText: string,
-	usesInlineArgPlaceholders: boolean,
-): string {
+function appendInlineArgsFallback(rendered: string, argsText: string, usesInlineArgPlaceholders: boolean): string {
 	if (argsText.length === 0 || usesInlineArgPlaceholders) return rendered;
 	if (rendered.length === 0) return argsText;
 
 	return `${rendered}\n\n${argsText}`;
+}
+
+/**
+ * Render a command or template body with `argsString`. `$1`, `$@`, and `$ARGUMENTS` values
+ * go in after the Handlebars pass, so `{{` in user text stays literal. Throws on a malformed template.
+ */
+export function renderTemplateWithArgs(content: string, argsString: string): string {
+	const args = parseCommandArgs(argsString);
+	const argsText = args.join(" ");
+	const values: string[] = [];
+	// Private-use sentinels carry each `$` placeholder through the render.
+	const marked = content.replace(INLINE_ARG_SHELL_PATTERN_GLOBAL, match => {
+		values.push(substituteArgs(match, args));
+		return `\uE000${values.length - 1}\uE001`;
+	});
+	const rendered = prompt
+		.render(marked, { args, ARGUMENTS: argsText, arguments: argsText })
+		.replace(ARG_SENTINEL_PATTERN, (_, index: string) => values[Number(index)]);
+	return appendInlineArgsFallback(rendered, argsText, templateUsesInlineArgPlaceholders(content));
 }
 
 /**
@@ -201,11 +218,5 @@ export function expandPromptTemplate(text: string, templates: PromptTemplate[]):
 	if (!template) return text;
 
 	const spaceIndex = text.indexOf(" ");
-	const argsString = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
-	const args = parseCommandArgs(argsString);
-	const argsText = args.join(" ");
-	const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(template.content);
-	const substituted = substituteArgs(template.content, args);
-	const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
-	return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
+	return renderTemplateWithArgs(template.content, spaceIndex === -1 ? "" : text.slice(spaceIndex + 1));
 }

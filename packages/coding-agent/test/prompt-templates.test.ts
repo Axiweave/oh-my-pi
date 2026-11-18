@@ -260,6 +260,18 @@ describe("template expansion fallback", () => {
 			const result = expand(invocation, "");
 			expect(result).toBe("none");
 		});
+
+		test(`keeps Handlebars syntax in argument values literal for ${name}`, () => {
+			// The `/spawn` speckit start text that broke: "Missing helper: \"`,\"".
+			const prefix = invocation.slice(0, invocation.indexOf(" "));
+			for (const arg of ["{{`,", "{{#if x}}", "}}{{", "{{> partial}}", "\\{{a}}", "$1{{arguments}}"]) {
+				for (const placeholder of ["$ARGUMENTS", "$@", "$1", "$@[1:]", "{{arguments}}"]) {
+					expect(expand(`${prefix} '${arg}'`, `Do: ${placeholder}.`), `${arg} via ${placeholder}`).toBe(
+						`Do: ${arg}.`,
+					);
+				}
+			}
+		});
 	}
 
 	test("should keep output unchanged when slash command has no trailing args", () => {
