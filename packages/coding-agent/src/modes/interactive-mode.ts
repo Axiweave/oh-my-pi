@@ -168,7 +168,8 @@ import type { ForeignSessionSource } from "../session/foreign-session-store";
 import { HistoryStorage } from "../session/history-storage";
 import { syncTextPrediction, textPredictionBackend } from "../predict/client";
 import { setWordPredictionHost } from "@oh-my-pi/pi-tui/prompt/word-completion";
-import { isUserTurnInitiator, USER_INTERRUPT_LABEL } from "../session/messages";
+import { isUserTurnInitiator, syntheticPromptDisplayText, USER_INTERRUPT_LABEL } from "../session/messages";
+import { restoreDetachedDraft } from "../slash-commands/helpers/draft";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import { LAUNCH_COMPLETION_MESSAGE_TYPE } from "../session/launch-completion";
 import { resolveMarkdownLinkHrefs } from "../internal-urls/hyperlink-targets";
@@ -6955,7 +6956,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			void this.#endGuidedLoopInterview();
 		}
-		if (this.#spawnPreviousTools && this.#spawnWindowEnds(event.messages)) void this.#endSpawnWindow();
+		if (this.#spawnPreviousTools) {
+			// An aborted run leaves its queued follow-ups for the next prompt, which would start this /spawn late.
+			const aborted = event.messages.findLast(message => message.role === "assistant")?.stopReason === "aborted";
+			if ((aborted && this.#takeQueuedSpawnKickoff()) || this.#spawnWindowEnds(event.messages)) {
+				void this.#endSpawnWindow();
+			}
+		}
 		if (this.#pendingGoalContinuationTurns > 0) {
 			this.#pendingGoalContinuationTurns--;
 			const activity = goalContinuationActivity(event.messages);
@@ -8985,8 +8992,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		// One window at a time: it stays open until its spawn run ends (FR-014).
 		if (this.session.isSpawnWindowOpen()) {
-			this.showWarning("A /spawn is already running. Wait for it to finish.");
-			return false;
+			if (this.session.isStreaming || !this.#takeQueuedSpawnKickoff()) {
+				this.showWarning("A /spawn is already running. Wait for it to finish.");
+				return false;
+			}
+			await this.#endSpawnWindow();
 		}
 		// A speckit start before the kickoff would run first and close the spawn window.
 		this.speckitSubmitInFlight++;
@@ -9046,6 +9056,30 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setSpawnWindowOpen(false);
 		await this.session.setActiveToolsByName(previousTools);
 		await this.#syncMasterSpawnTool();
+	}
+
+	/**
+	 * Take a /spawn kickoff that never started out of the queue and put its `/spawn <request>` back in
+	 * the editor. Queued follow-ups do not resume after an interrupt; the next prompt would flush it.
+	 * The caller closes the window.
+	 */
+	#takeQueuedSpawnKickoff(): boolean {
+		if (this.#spawnKickoffSeen || this.#spawnKickoffSending) return false;
+		const { agent } = this.session;
+		const steering = agent.peekSteeringQueue();
+		const followUp = agent.peekFollowUpQueue();
+		const kickoff = [...steering, ...followUp].find(isSpawnKickoff);
+		if (!kickoff) return false;
+		const keep = (message: AgentMessage) => message !== kickoff;
+		agent.replaceQueues(steering.filter(keep), followUp.filter(keep));
+		const images: ImageContent[] = [];
+		if ("content" in kickoff && Array.isArray(kickoff.content)) {
+			for (const part of kickoff.content) if (part.type === "image") images.push(part);
+		}
+		restoreDetachedDraft(this.editor, syntheticPromptDisplayText(kickoff as Message) ?? "/spawn", images);
+		this.showStatus("The queued /spawn did not start: it is back in the editor.");
+		this.ui.requestRender();
+		return true;
 	}
 
 	/**

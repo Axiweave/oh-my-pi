@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -11,6 +12,7 @@ import { cfgSpawnConfirm } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { cfgSpeckitAutoDefaultOnStartup } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { SPECKIT_PHASE_COMMANDS } from "@oh-my-pi/pi-coding-agent/modes/speckit-auto";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as sessionWorktree from "@oh-my-pi/pi-coding-agent/session/session-worktree";
@@ -354,6 +356,60 @@ describe("spawn: sessions per /spawn (FR-001) and the --api-key refusal (FR-020)
 		Reflect.deleteProperty(h.session, "isStreaming");
 		vi.spyOn(h.session, "prompt").mockResolvedValue(true);
 		expect(await h.mode.handleSpawnCommand("again")).toBe(true);
+	});
+
+	it("an interrupt before the queued kickoff starts puts /spawn back in the editor; the next prompt does not spawn", async () => {
+		const { h } = await spawnHarness();
+		const started = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			responses: [
+				async (_context, options) => {
+					started.resolve();
+					const aborted = Promise.withResolvers<void>();
+					options?.signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+					await aborted.promise;
+					return { content: ["stopped"] };
+				},
+				{ content: ["hi"] },
+			],
+		});
+		h.session.agent.streamFn = mock.stream;
+		h.session.modelRegistry.authStorage.keys.setRuntime("anthropic", "test-key");
+		const run = h.session.prompt("long work");
+		await started.promise;
+		expect(await h.mode.handleSpawnCommand("late request")).toBe(true);
+		expect(h.session.agent.peekFollowUpQueue().some(isSpawnKickoff)).toBe(true);
+
+		// Esc in loop mode aborts and keeps the queue.
+		await h.session.abort({ reason: USER_INTERRUPT_LABEL });
+		await run;
+		await h.session.waitForIdle();
+		expect(h.session.isSpawnWindowOpen()).toBe(false);
+		expect(h.session.agent.peekFollowUpQueue().some(isSpawnKickoff)).toBe(false);
+		expect(h.mode.editor.getText()).toBe("/spawn late request");
+
+		await h.session.prompt("hello");
+		await h.session.waitForIdle();
+		expect(h.session.messages.some(isSpawnKickoff)).toBe(false);
+		expect(mock.calls.length).toBe(2);
+	});
+
+	it("a kickoff queued after its run ended frees the next /spawn and goes back to the editor", async () => {
+		const { h } = await spawnHarness();
+		Object.defineProperty(h.session, "isStreaming", { configurable: true, get: () => true });
+		const warning = vi.spyOn(h.mode, "showWarning");
+		expect(await h.mode.handleSpawnCommand("first")).toBe(true);
+		// While a run is live, the queued kickoff still runs: a second /spawn waits.
+		expect(await h.mode.handleSpawnCommand("too early")).toBe(false);
+		expect(warning).toHaveBeenCalledTimes(1);
+		Reflect.deleteProperty(h.session, "isStreaming");
+
+		const promptSpy = vi.spyOn(h.session, "prompt").mockResolvedValue(true);
+		expect(await h.mode.handleSpawnCommand("second")).toBe(true);
+		expect(warning).toHaveBeenCalledTimes(1);
+		expect(promptSpy.mock.calls[0]![1]).toMatchObject({ displayText: "/spawn second" });
+		expect(h.session.agent.peekFollowUpQueue().some(isSpawnKickoff)).toBe(false);
+		expect(h.mode.editor.getText()).toBe("/spawn first");
 	});
 
 	it("an agent_end while the kickoff is still being sent keeps the window open", async () => {
