@@ -15,6 +15,7 @@ import { stripRawHttpRequestDiagnostics } from "@oh-my-pi/pi-ai/utils/http-inspe
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { CostCapRefusal } from "../../session/cost-gate";
 import { isSessionSettled, type SessionSettleState } from "../../session/session-settle";
+import { extractVisibleAssistantText } from "./rpc-live";
 import type { RpcScheduledTurnProbe } from "./rpc-session-settle";
 import type { RpcPromptError, RpcPromptResultFrame, RpcPromptStatus } from "./rpc-types";
 
@@ -26,6 +27,8 @@ export interface RpcPromptTicket {
 interface RunOutcome {
 	status: RpcPromptStatus;
 	error?: RpcPromptError;
+	/** Visible text of the run's final assistant message; host-side only, never on the frame. */
+	text?: string;
 }
 
 interface OpenPrompt {
@@ -57,7 +60,7 @@ export class RpcPromptResults {
 	#agentStarts = 0;
 	#open = new Map<RpcPromptTicket, OpenPrompt>();
 	readonly #session: SessionSettleState;
-	readonly #output: (frame: RpcPromptResultFrame) => void;
+	readonly #output: (frame: RpcPromptResultFrame, text?: string) => void;
 	readonly #scheduledTurn: RpcScheduledTurnProbe | undefined;
 	readonly #costCapRefusal: (() => CostCapRefusal | undefined) | undefined;
 	readonly #settledWithoutRun: (() => void) | undefined;
@@ -72,7 +75,7 @@ export class RpcPromptResults {
 	 */
 	constructor(
 		session: SessionSettleState,
-		output: (frame: RpcPromptResultFrame) => void,
+		output: (frame: RpcPromptResultFrame, text?: string) => void,
 		scheduledTurn?: RpcScheduledTurnProbe,
 		hooks?: { costCapRefusal?: () => CostCapRefusal | undefined; settledWithoutRun?: () => void },
 	) {
@@ -189,7 +192,7 @@ export class RpcPromptResults {
 				sessionSettled: isSessionSettled(this.#session, this.#scheduledTurn),
 			};
 			if (outcome.error) frame.error = outcome.error;
-			this.#output(frame);
+			this.#output(frame, outcome.text);
 		});
 	}
 }
@@ -199,9 +202,10 @@ function runOutcome(messages: readonly AgentMessage[]): RunOutcome {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const message = messages[index];
 		if (message.role !== "assistant") continue;
-		if (message.stopReason === "error") return { status: "error", error: promptError(message) };
-		if (message.stopReason === "aborted") return { status: "aborted" };
-		return { status: "completed" };
+		const text = extractVisibleAssistantText(message);
+		if (message.stopReason === "error") return { status: "error", error: promptError(message), text };
+		if (message.stopReason === "aborted") return { status: "aborted", text };
+		return { status: "completed", text };
 	}
 	return { status: "completed" };
 }

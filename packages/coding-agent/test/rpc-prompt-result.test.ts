@@ -324,6 +324,49 @@ describe("RpcPromptResults", () => {
 			{ type: "session_settled" },
 		]);
 	});
+
+	test("property: hands the host the final assistant message's visible text, never on the frame", async () => {
+		const seed = 0x7e47;
+		console.log(`rpc prompt text property seed: ${seed}`);
+		let state = seed >>> 0;
+		// mulberry32: a failing case replays from the printed seed.
+		const random = () => {
+			state = (state + 0x6d2b79f5) >>> 0;
+			let t = state;
+			t = Math.imul(t ^ (t >>> 15), t | 1);
+			t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+		};
+		const words = ["", " ", "\n", "done", "é", "<b>", "result: 42", "  pad  "];
+		const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
+		const stopReasons = ["stop", "aborted", "error"] as const;
+		for (let run = 0; run < 200; run++) {
+			const reported: Array<{ frame: object; text: string | undefined }> = [];
+			const { session } = createHarness();
+			const results = new RpcPromptResults(session, (frame, text) => reported.push({ frame, text }));
+			const content: Array<Record<string, unknown>> = [];
+			let expected = "";
+			for (let block = Math.floor(random() * 6); block > 0; block--) {
+				const kind = pick(["text", "thinking", "toolCall"] as const);
+				const word = pick(words);
+				if (kind === "text") {
+					content.push({ type: "text", text: word });
+					expected += word;
+				} else if (kind === "thinking") content.push({ type: "thinking", thinking: `${word}hidden` });
+				else content.push({ type: "toolCall", id: `call_${block}`, name: "read", arguments: { path: word } });
+			}
+			const ticket = results.begin(`req_${run}`);
+			results.observe(agentStart);
+			// An earlier assistant message in the same run must not leak into the reported text.
+			const earlier = assistant({ content: [{ type: "text", text: "earlier turn" }], stopReason: "toolUse" });
+			results.observe(agentEnd([earlier, assistant({ content, stopReason: pick(stopReasons) })]));
+			results.settle(ticket);
+			await flushFrames();
+			expect(reported).toHaveLength(1);
+			expect(reported[0].text).toBe(expected.trim());
+			expect(Object.hasOwn(reported[0].frame, "text")).toBe(false);
+		}
+	});
 });
 
 describe("reportPromptResult", () => {
