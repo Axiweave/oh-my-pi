@@ -32,7 +32,19 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
-const ALLOWED_NAMES = ["task", "read", "grep", "glob", "find", "todo", "ask", "goal", "loop", "spawn_session"];
+const ALLOWED_NAMES = [
+	"task",
+	"read",
+	"grep",
+	"glob",
+	"find",
+	"todo",
+	"ask",
+	"goal",
+	"loop",
+	"spawn_session",
+	"session_inbox",
+];
 const SUFFIX = "Do not retry or route around this block.";
 
 const ALLOW = "allow";

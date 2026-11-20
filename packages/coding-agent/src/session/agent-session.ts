@@ -8518,6 +8518,7 @@ export class AgentSession implements SettingsScope {
 			content: prompt.render(masterModeActivePrompt, {
 				todoAvailable: this.getActiveToolNames().includes("todo"),
 				spawnAvailable: this.getActiveToolNames().includes("spawn_session"),
+				inboxAvailable: this.getActiveToolNames().includes("session_inbox"),
 				speckitProject: this.#inSpeckitProject(),
 			}),
 			display: false,

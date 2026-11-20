@@ -43,7 +43,7 @@ While the mode is on, the guard runs before every main-agent tool call. A refuse
 | `bash` with `async: true` and no `name` | Allowed. |
 | `bash` without `async: true` | Refused (`foreground-bash`). |
 | `bash` with a non-blank `name` | Refused (`service-bash`). |
-| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, `spawn_session` | Allowed. |
+| `read`, `grep`, `glob`, `find`, `todo`, `ask`, `goal`, `loop`, `spawn_session`, `session_inbox` | Allowed. |
 | `write` to `agent://`, `out://`, `local://`, or `proc://<id>/kill` | Allowed. |
 | `write` to any other target | Refused (`file-change`). |
 | `edit`, `ast_edit` | Refused (`file-change`). |
@@ -66,7 +66,7 @@ Inside zmx (`ZMX_SESSION` is set), `spawn_session` stays active while the mode i
 - A new feature that needs its own branch and your steering along the way goes to `spawn_session`, with `mode: "fresh"`, `new_worktree: true`, and a `branch`.
 - `speckit: true` (the spawned session starts with `/speckit.specify`) only when you ask for spec-kit, or for a non-trivial feature in a project that already uses spec-kit (the session directory or a parent has `.specify/`). A global `/speckit.specify` command alone does not count. Fixes, investigations, and small work never get it.
 
-You talk to the spawned session directly. Its result does not come back to the master session. `spawn.confirm` asks yes/no before each spawn, as it does for `/spawn`. Outside zmx, the tool is not active, and `/spawn` fails with `spawn needs a zmx session`.
+You talk to the spawned session directly. The master can also steer a child that it spawned: it sends a request with `session_inbox`, and the reply of the child arrives in the master session by itself (see [Session inbox](./session-inbox.md)). `spawn.confirm` asks yes/no before each spawn, as it does for `/spawn`. Outside zmx, the tool is not active, and `/spawn` fails with `spawn needs a zmx session`.
 
 A spawned session is a normal session, not a second master. omp does not pass `--master` to it, and this also applies to `/spawn` and `/fork pane|window` from `omp --master`. Every session spawned while master mode is on gets the zmx label `cci-origin=master`. claude-code-ide attaches it, but does not move the focus to it, so your chat with the master session continues.
 
