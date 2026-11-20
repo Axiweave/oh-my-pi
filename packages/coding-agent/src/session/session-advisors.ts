@@ -56,6 +56,7 @@ import {
 	type AdvisorMessageDetails,
 	type AdvisorNote,
 	AdvisorOutputQuarantinedError,
+	type AdvisorDeliveryChannel,
 	AdvisorRuntime,
 	type AdvisorRuntimeStatus,
 	type AdvisorSeverity,
@@ -1749,28 +1750,34 @@ export class SessionAdvisors {
 			this.#advisors.push(advisorRef);
 		}
 
-		// One shared non-blocking aside channel for all advisors; the build callback
-		// aggregates every advisor's queued nits into one card (each entry already
-		// carries its own `advisor` name).
-		if (this.#advisors.length > 0 && !this.#advisorYieldQueueUnsubscribe) {
-			this.#advisorYieldQueueUnsubscribe = this.#host.yieldQueue.register<AdvisorNote>("advisor", {
-				build: entries =>
-					entries.length === 0
-						? null
-						: ({
-								role: "custom",
-								customType: "advisor",
-								display: true,
-								attribution: "agent",
-								timestamp: Date.now(),
-								content: formatAdvisorBatchContent(entries),
-								details: { notes: entries } satisfies AdvisorMessageDetails,
-							} satisfies CustomMessage),
-				skipIdleFlush: true,
-			});
-		}
+		if (this.#advisors.length > 0) this.#ensureAdvisorYieldKind();
 
 		return this.#advisors.length > 0;
+	}
+
+	/**
+	 * Register the one shared non-blocking aside channel. The build callback
+	 * aggregates every queued nit into one card (each entry already carries its
+	 * own `advisor` name). External notes (session inbox) need it too, so it is
+	 * registered on demand even when zero advisors are configured.
+	 */
+	#ensureAdvisorYieldKind(): void {
+		if (this.#advisorYieldQueueUnsubscribe) return;
+		this.#advisorYieldQueueUnsubscribe = this.#host.yieldQueue.register<AdvisorNote>("advisor", {
+			build: entries =>
+				entries.length === 0
+					? null
+					: ({
+							role: "custom",
+							customType: "advisor",
+							display: true,
+							attribution: "agent",
+							timestamp: Date.now(),
+							content: formatAdvisorBatchContent(entries),
+							details: { notes: entries } satisfies AdvisorMessageDetails,
+						} satisfies CustomMessage),
+			skipIdleFlush: true,
+		});
 	}
 
 	/** Whether the primary's tail (past advisor cards) is a terminal text answer with nothing queued behind it. */
@@ -1797,7 +1804,30 @@ export class SessionAdvisors {
 	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity, turn?: number): void {
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
-		const source = advisor.slug ? advisor.name : undefined;
+		this.#routeNote(advisor.slug ? advisor.name : undefined, note, severity, turn);
+	}
+
+	/**
+	 * Route a note from a non-advisor source (the session inbox) through the
+	 * advisor delivery policy. An idle primary never drains the aside queue (the
+	 * advisor kind skips idle flushes), so an aside there is preserved instead.
+	 */
+	routeExternalNote(source: string, note: string, severity: AdvisorSeverity): AdvisorDeliveryChannel {
+		return this.#routeNote(source, note, severity, undefined, true);
+	}
+
+	/**
+	 * Shared routing after source resolution; see {@link #routeAdvice}. Returns
+	 * the channel used: "aside" for a note buffered at a terminal boundary
+	 * (delivered once the window closes).
+	 */
+	#routeNote(
+		source: string | undefined,
+		note: string,
+		severity: AdvisorSeverity | undefined,
+		turn?: number,
+		idleAsidePreserves = false,
+	): AdvisorDeliveryChannel {
 		// Inside a terminal-boundary callback (deferred flush + catch-up wait) the
 		// loop still reports streaming, so a delivered note would steer a fresh turn
 		// — waking the primary to act on advice produced against work that already
@@ -1814,7 +1844,7 @@ export class SessionAdvisors {
 				advisor: source,
 				turn: turn ?? this.#advisorPrimaryTurnsCompleted,
 			});
-			return;
+			return "aside";
 		}
 		const notes: AdvisorNote[] = [{ note, severity, advisor: source }];
 		const terminalAnswerNoQueuedWork = this.#hasTerminalTextAnswerWithoutQueuedWork();
@@ -1823,10 +1853,10 @@ export class SessionAdvisors {
 		// would have granted it. The loop may still report streaming here, and an
 		// aside would be drained into an extra turn that skips the continuation latch.
 		if (this.#terminalUnwindActive && terminalAnswerNoQueuedWork) {
-			this.#deliverAdvisorBatch(notes, formatAdvisorBatchContent(notes), this.#continuesFinishedRun(severity));
-			return;
+			const steer = this.#continuesFinishedRun(severity);
+			return this.#deliverAdvisorBatch(notes, formatAdvisorBatchContent(notes), steer) ? "steer" : "preserve";
 		}
-		const channel = resolveAdvisorDeliveryChannel({
+		let channel = resolveAdvisorDeliveryChannel({
 			severity,
 			continueSeverity: cfgAdvisorContinueSeverity.get(this.#host.settings),
 			autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
@@ -1839,11 +1869,15 @@ export class SessionAdvisors {
 			terminalAnswerNoQueuedWork,
 			interruptImmuneTurnActive: this.#isAdvisorInterruptImmuneTurnActive(),
 		});
+		if (channel === "aside" && idleAsidePreserves && !this.#host.agent.state.isStreaming) channel = "preserve";
 		if (channel === "aside") {
+			this.#ensureAdvisorYieldKind();
 			this.#host.yieldQueue.enqueue("advisor", { note, severity, advisor: source });
-			return;
+			return "aside";
 		}
-		this.#deliverAdvisorBatch(notes, formatAdvisorBatchContent(notes), channel === "steer");
+		return this.#deliverAdvisorBatch(notes, formatAdvisorBatchContent(notes), channel === "steer")
+			? "steer"
+			: "preserve";
 	}
 
 	/**
@@ -1917,8 +1951,9 @@ export class SessionAdvisors {
 	 * strictly worse than the visible preserved card. Preserve instead:
 	 *  - ACP bridges with `deferAgentInitiatedTurns`: the client cannot show an
 	 *    agent-initiated turn as busy, so idle triggers are refused (#5628 review).
+	 * Returns true when the batch steers, false when it is kept as a card.
 	 */
-	#deliverAdvisorBatch(notes: AdvisorNote[], content: string, steer: boolean): void {
+	#deliverAdvisorBatch(notes: AdvisorNote[], content: string, steer: boolean): boolean {
 		const details = { notes } satisfies AdvisorMessageDetails;
 		if (steer) {
 			// Plan mode preserves would-be-steering advice as a visible card:
@@ -1946,7 +1981,7 @@ export class SessionAdvisors {
 						{ deliverAs: "steer", triggerTurn: true },
 					)
 					.catch(err => logger.debug("advisor delivery failed", { err: String(err) }));
-				return;
+				return true;
 			}
 		}
 		this.#host.preserveAdvisorCard({
@@ -1958,6 +1993,7 @@ export class SessionAdvisors {
 			details,
 			timestamp: Date.now(),
 		});
+		return false;
 	}
 
 	/** Re-prime every advisor's transcript view after an in-conversation history rewrite. */
