@@ -24,10 +24,16 @@
  * this registry is host-only.
  */
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as path from "node:path";
-import { IpcConnection, IpcServer, ipcEndpoint } from "@oh-my-pi/pi-natives";
-import { getBaseConfigRoot, isEnoent, isFsError } from "@oh-my-pi/pi-utils";
+import type { IpcConnection } from "@oh-my-pi/pi-natives";
+import { getBaseConfigRoot } from "@oh-my-pi/pi-utils";
+import {
+	type QueryResult,
+	publishPrivateEndpoint,
+	queryEndpoint,
+	scanPrivateRegistry,
+	tokenMatches,
+} from "../ipc/private-registry";
 
 /** Discovery metadata / IPC protocol version. Mixed omp versions fail safely. */
 export const COLLAB_REGISTRY_VERSION = 1;
@@ -46,8 +52,6 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 const MAX_SNAPSHOT_FIELD_CHARS = 1024;
 /** Per-entry connect+response deadline during listing. */
 const DEFAULT_QUERY_TIMEOUT_MS = 1_500;
-/** Concurrency bound for querying discovery entries. */
-const LIST_CONCURRENCY = 8;
 
 /** Access a link grants: `view` (bare room key) or `control` (room key + write token). */
 export type CollabAccess = "view" | "control";
@@ -199,14 +203,6 @@ function parseDiscoveryMetadata(text: string): DiscoveryMetadata | null {
 	};
 }
 
-function tokenMatches(expected: string, presented: unknown): boolean {
-	if (typeof presented !== "string") return false;
-	const a = Buffer.from(expected, "utf8");
-	const b = Buffer.from(presented, "utf8");
-	if (a.length !== b.length) return false;
-	return crypto.timingSafeEqual(a, b);
-}
-
 function isAccess(value: unknown): value is CollabAccess {
 	return value === "view" || value === "control";
 }
@@ -354,56 +350,8 @@ function handleConnection(
 	}, onClose);
 }
 
-/**
- * The registry must be a real directory; POSIX also verifies its owner.
- * Both publication and listing check this: listing prunes malformed
- * entries, so following a symlink into an unrelated directory would let a
- * planted link turn `omp collab list` into a deletion tool.
- */
-async function assertPrivateDir(dir: string): Promise<fs.Stats | null> {
-	const stat = await fs.promises.lstat(dir);
-	if (stat.isSymbolicLink()) throw new Error(`collab registry directory is a symlink: ${dir}`);
-	if (!stat.isDirectory()) throw new Error(`collab registry path is not a directory: ${dir}`);
-	if (process.platform === "win32") return null;
-	const uid = process.getuid?.();
-	if (uid !== undefined && stat.uid !== uid) {
-		throw new Error(`collab registry directory is not owned by the current user: ${dir}`);
-	}
-	return stat;
-}
-
-/**
- * Create the directory with owner-only POSIX permissions. Windows retains
- * the config root's ACL. `mkdir` with a mode leaves an
- * existing directory's permissions alone, so an already-present directory is
- * tightened explicitly; a symlink or a directory owned by another user is
- * refused rather than published into.
- */
-async function ensurePrivateDir(dir: string): Promise<void> {
-	await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-	const stat = await assertPrivateDir(dir);
-	if (stat && (stat.mode & 0o077) !== 0) await fs.promises.chmod(dir, 0o700);
-}
-
-/**
- * Unix files an endpoint leaves on disk: the socket and the native listener's
- * `<socket>.bind.lock`. Endpoint names are unique per publication, so no other
- * binder can contend for that lock and unlinking it is race-free.
- */
-function endpointFiles(endpoint: string): string[] {
-	return process.platform === "win32" ? [] : [endpoint, `${endpoint}.bind.lock`];
-}
-
-/** Best-effort synchronous unlink; a survivor is pruned by the next list. */
-function removeFilesSync(files: string[]): void {
-	for (const file of files) {
-		try {
-			fs.rmSync(file, { force: true });
-		} catch {
-			// Best-effort.
-		}
-	}
-}
+/** Collab's label in shared registry error texts. */
+const LABEL = "collab registry";
 
 /**
  * Publish a live Collab host to the local registry.
@@ -418,182 +366,36 @@ export async function publishCollabHost(
 	source: CollabHostRegistrySource,
 	options?: CollabPublishOptions,
 ): Promise<CollabHostPublication> {
-	const dir = options?.dir ?? collabHostsRuntimeDir();
-	await ensurePrivateDir(dir);
-
 	const instanceId = options?.instanceId ?? crypto.randomBytes(8).toString("hex");
 	if (!INSTANCE_ID_PATTERN.test(instanceId)) throw new Error("invalid collab registry instance id");
-	// Unpredictable per-publication entry ID names the endpoint and the metadata
-	// file: PID reuse cannot attach stale metadata to an unrelated process, and a
-	// room that rotates never shares artifact names with its predecessor, so a
-	// lister pruning the stale entry can never remove the live successor's.
-	const entryId = crypto.randomBytes(8).toString("hex");
-	const token = crypto.randomBytes(32).toString("hex");
-	// `<dir>/<entryId>.sock` on Unix (natively relocated when it would overflow
-	// `sun_path`); listers never guess it, the metadata records the endpoint.
-	const endpoint = ipcEndpoint(dir, entryId);
-	const metaPath = path.join(dir, `${entryId}.json`);
-
-	const liveConnections = new Set<IpcConnection>();
-	const server = await IpcServer.listen(
-		endpoint,
-		{ framing: "lines", maxFrameBytes: MAX_REQUEST_BYTES },
-		connection => {
-			liveConnections.add(connection);
-			handleConnection(connection, token, source, () => liveConnections.delete(connection));
-		},
-	);
-	try {
-		const meta: DiscoveryMetadata = {
+	const publication = await publishPrivateEndpoint({
+		dir: options?.dir ?? collabHostsRuntimeDir(),
+		label: LABEL,
+		maxFrameBytes: MAX_REQUEST_BYTES,
+		metadata: ({ endpoint, token }): DiscoveryMetadata => ({
 			version: COLLAB_REGISTRY_VERSION,
 			instanceId,
 			pid: process.pid,
 			endpoint,
 			createdAt: Date.now(),
 			token,
-		};
-		// Write-then-rename so a concurrent list never observes a partial file
-		// (it would classify the entry as malformed and prune it, leaving this
-		// host published but undiscoverable). The temp suffix keeps it outside
-		// the `*.json` listing filter; the entry ID makes the name unique. Any
-		// failure after the exclusive create removes the temp file again.
-		const tmpPath = `${metaPath}.tmp`;
-		const handle = await fs.promises.open(tmpPath, "wx", 0o600);
-		try {
-			try {
-				await handle.writeFile(JSON.stringify(meta), "utf8");
-			} finally {
-				await handle.close();
-			}
-			await fs.promises.rename(tmpPath, metaPath);
-		} catch (err) {
-			fs.rmSync(tmpPath, { force: true });
-			throw err;
-		}
-	} catch (err) {
-		await server.close();
-		removeFilesSync(endpointFiles(endpoint));
-		throw err;
-	}
-
-	// Normal process shutdown without an explicit stop still withdraws the host.
-	// The exit hook is synchronous, so it unlinks the socket itself instead of
-	// awaiting `server.close()`.
-	const removeArtifactsOnExit = (): void => removeFilesSync([metaPath, ...endpointFiles(endpoint)]);
-	process.once("exit", removeArtifactsOnExit);
-
-	let closed = false;
-	return {
-		endpoint,
-		async close(): Promise<void> {
-			if (closed) return;
-			closed = true;
-			process.off("exit", removeArtifactsOnExit);
-			// Sever any lingering clients so no request is answered after withdrawal.
-			for (const connection of liveConnections) connection.destroy();
-			removeFilesSync([metaPath]);
-			// Stops accepting and unlinks the socket file; the bind lock is ours to remove.
-			await server.close();
-			removeFilesSync(endpointFiles(endpoint));
-		},
-	};
+		}),
+		onConnection: (connection, token, onClose) => handleConnection(connection, token, source, onClose),
+	});
+	return { endpoint: publication.endpoint, close: () => publication.close() };
 }
 
-type QueryResult<T> = { status: "ok"; value: T } | { status: "dead" } | { status: "skip"; error?: string };
-
-/** Query one endpoint: connect, authenticate, send one request, read one bounded response line. */
-function query(meta: DiscoveryMetadata, request: object, timeoutMs: number): Promise<QueryResult<unknown>> {
-	const { promise, resolve } = Promise.withResolvers<QueryResult<unknown>>();
-	let connection: IpcConnection | undefined;
-	let settled = false;
-	const finish = (result: QueryResult<unknown>): void => {
-		if (settled) return;
-		settled = true;
-		clearTimeout(timer);
-		connection?.destroy();
-		resolve(result);
-	};
-	const timer = setTimeout(() => finish({ status: "skip" }), timeoutMs);
-	const onLine = (line: string): void => {
-		let response: unknown;
-		try {
-			response = JSON.parse(line);
-		} catch {
-			finish({ status: "skip" });
-			return;
-		}
-		if (typeof response !== "object" || response === null) {
-			finish({ status: "skip" });
-			return;
-		}
-		const { ok, error } = response as Record<string, unknown>;
-		if (ok !== true) {
-			// Authentication failure or structured error: an unrelated endpoint
-			// cannot satisfy stale metadata without the matching token.
-			finish({ status: "skip", error: typeof error === "string" ? error : undefined });
-			return;
-		}
-		finish({ status: "ok", value: response });
-	};
-	// An oversized response (past `maxFrameBytes`) closes the connection without a frame: skip.
-	IpcConnection.connect(meta.endpoint, { framing: "lines", timeoutMs, maxFrameBytes: MAX_RESPONSE_BYTES }).then(
-		conn => {
-			if (settled) {
-				conn.destroy();
-				return;
-			}
-			connection = conn;
-			conn.start(onLine, () => finish({ status: "skip" }));
-			conn.send(JSON.stringify({ v: COLLAB_REGISTRY_VERSION, token: meta.token, ...request }));
-		},
-		(err: unknown) => {
-			// Endpoints die with their host process: a refused or missing socket
-			// means the host is gone. Any other error (EMFILE, EACCES, ETIMEDOUT, …)
-			// says nothing about liveness and must not prune a live host.
-			const code = isFsError(err) ? err.code : undefined;
-			finish({ status: code === "ENOENT" || code === "ECONNREFUSED" ? "dead" : "skip" });
-		},
+/** Query one host: authenticate with its token and send one request. */
+function query(
+	meta: DiscoveryMetadata,
+	request: object,
+	timeoutMs: number,
+): Promise<QueryResult<Record<string, unknown>>> {
+	return queryEndpoint(
+		meta.endpoint,
+		{ v: COLLAB_REGISTRY_VERSION, token: meta.token, ...request },
+		{ timeoutMs, maxResponseBytes: MAX_RESPONSE_BYTES },
 	);
-	return promise;
-}
-
-async function querySnapshot(meta: DiscoveryMetadata, timeoutMs: number): Promise<QueryResult<CollabHostSnapshot>> {
-	const result = await query(meta, { op: "snapshot" }, timeoutMs);
-	if (result.status !== "ok") return result;
-	const snapshot = parseSnapshot((result.value as Record<string, unknown>).snapshot);
-	return snapshot ? { status: "ok", value: snapshot } : { status: "skip" };
-}
-
-function pidAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Remove one stale entry. Artifact names are unique per publication, so the
- * metadata and endpoint observed dead can only belong to that publication;
- * a room that rotated meanwhile lives under different names and is untouched.
- */
-async function pruneEntry(dir: string, name: string, meta: DiscoveryMetadata | null): Promise<void> {
-	try {
-		await fs.promises.rm(path.join(dir, name), { force: true });
-		// Only unlink sockets this registry could have created: beside the
-		// metadata, or at the exact relocated endpoint this entry's publication
-		// derives (under the shared `/tmp/omp-<euid>/`, never another socket there).
-		const ownsEndpoint =
-			meta !== null &&
-			process.platform !== "win32" &&
-			(meta.endpoint.startsWith(dir + path.sep) || meta.endpoint === ipcEndpoint(dir, path.basename(name, ".json")));
-		if (ownsEndpoint) {
-			for (const file of endpointFiles(meta.endpoint)) await fs.promises.rm(file, { force: true });
-		}
-	} catch {
-		// Best-effort cleanup only (a missing file means someone else already pruned it).
-	}
 }
 
 interface LiveEntry {
@@ -601,54 +403,21 @@ interface LiveEntry {
 	snapshot: CollabHostSnapshot;
 }
 
-async function listEntry(dir: string, name: string, timeoutMs: number): Promise<LiveEntry | null> {
-	let text: string;
-	try {
-		text = await Bun.file(path.join(dir, name)).text();
-	} catch {
-		return null;
-	}
-	const meta = parseDiscoveryMetadata(text);
-	if (!meta) {
-		// Malformed metadata can never become listable; remove it.
-		await pruneEntry(dir, name, null);
-		return null;
-	}
-	if (meta.version !== COLLAB_REGISTRY_VERSION) {
-		// A different omp version owns this entry. Never show it; prune only
-		// once the owning process is gone so newer versions keep their state.
-		if (!pidAlive(meta.pid)) await pruneEntry(dir, name, meta);
-		return null;
-	}
-	const result = await querySnapshot(meta, timeoutMs);
-	if (result.status === "ok") return { meta, snapshot: result.value };
-	if (result.status === "dead") await pruneEntry(dir, name, meta);
-	return null;
-}
-
 async function listLiveEntries(options?: CollabListOptions): Promise<LiveEntry[]> {
-	const dir = options?.dir ?? collabHostsRuntimeDir();
 	const timeoutMs = options?.timeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
-	let names: string[];
-	try {
-		await assertPrivateDir(dir);
-		names = await fs.promises.readdir(dir);
-	} catch (err) {
-		if (isEnoent(err)) return [];
-		throw err;
-	}
-	const entries = names.filter(name => name.endsWith(".json")).sort();
-	const live: LiveEntry[] = [];
-	// Bounded worker pool: LIST_CONCURRENCY entries in flight at once.
-	let next = 0;
-	const worker = async (): Promise<void> => {
-		while (next < entries.length) {
-			const name = entries[next++];
-			const entry = await listEntry(dir, name, timeoutMs);
-			if (entry) live.push(entry);
-		}
-	};
-	await Promise.all(Array.from({ length: Math.min(LIST_CONCURRENCY, entries.length) }, worker));
+	const scanned = await scanPrivateRegistry({
+		dir: options?.dir ?? collabHostsRuntimeDir(),
+		label: LABEL,
+		version: COLLAB_REGISTRY_VERSION,
+		parse: parseDiscoveryMetadata,
+		probe: async (meta): Promise<QueryResult<CollabHostSnapshot>> => {
+			const result = await query(meta, { op: "snapshot" }, timeoutMs);
+			if (result.status !== "ok") return result;
+			const snapshot = parseSnapshot(result.value.snapshot);
+			return snapshot ? { status: "ok", value: snapshot } : { status: "skip" };
+		},
+	});
+	const live = scanned.map(({ meta, value }) => ({ meta, snapshot: value }));
 	live.sort(
 		(a, b) =>
 			a.snapshot.startedAt - b.snapshot.startedAt ||
