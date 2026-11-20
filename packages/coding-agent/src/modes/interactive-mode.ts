@@ -112,6 +112,8 @@ import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { GoalModeState } from "../goals/state";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
+import { InboxHost } from "../inbox/host";
+import { cfgInboxEnabled } from "../inbox/settings";
 import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
 import { hasNativeJudge } from "../judgment";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
@@ -2013,6 +2015,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	// Tool set from before `/spawn` opened its window; defined only while the
 	// window is open (see #beginSpawnWindow / #endSpawnWindow).
 	#spawnPreviousTools: string[] | undefined;
+	// The running session inbox; follows `inbox.enabled` live (see #syncSessionInbox).
+	#sessionInbox: InboxHost | undefined;
+	// Serializes inbox start/stop so a quick toggle never runs two hosts.
+	#sessionInboxSync: Promise<void> = Promise.resolve();
 	// The kickoff of the open /spawn window started, so its agent_end may close it.
 	#spawnKickoffSeen = false;
 	// The /spawn kickoff is on its way to the queue, so agent_end must not close the window.
@@ -3059,6 +3065,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setSpawnHandler(request => this.#handleSpawnRequest(request));
 		await logger.time("InteractiveMode.init:reconcileMode", () => this.#reconcileModeFromSession());
 		this.#modesRestored = true;
+		this.#eventBusUnsubscribers.push(
+			this.settings.onEffectiveChange([cfgInboxEnabled], () => this.#syncSessionInbox()),
+		);
+		this.#syncSessionInbox();
 
 		// Brand-new sessions optionally start in plan mode when the user has made it
 		// the startup default. "Brand-new" means the resolved branch carries no
@@ -4084,6 +4094,38 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (want === enabled.includes("spawn_session")) return;
 		await this.session.setActiveToolsByName(
 			want ? [...enabled, "spawn_session"] : enabled.filter(name => name !== "spawn_session"),
+		);
+	}
+
+	#syncSessionInbox(): void {
+		const want = cfgInboxEnabled.get(this.settings);
+		this.#sessionInboxSync = this.#sessionInboxSync.then(() => this.#applySessionInbox(want, true));
+	}
+
+	/** Start or stop the inbox; with `syncTool`, `session_inbox` is active exactly while it runs. */
+	async #applySessionInbox(want: boolean, syncTool: boolean): Promise<void> {
+		try {
+			if (want && !this.#sessionInbox) {
+				const host = new InboxHost(this.session);
+				await host.start();
+				this.#sessionInbox = host;
+				this.session.setSessionInbox(host);
+			} else if (!want && this.#sessionInbox) {
+				const host = this.#sessionInbox;
+				this.#sessionInbox = undefined;
+				this.session.setSessionInbox(null);
+				await host.stop();
+			}
+		} catch (error) {
+			logger.warn("session inbox failed to start", { error: String(error) });
+			this.showWarning(`Session inbox is off: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		if (!syncTool) return;
+		const running = this.#sessionInbox !== undefined;
+		const enabled = this.session.getEnabledToolNames();
+		if (running === enabled.includes("session_inbox")) return;
+		await this.session.setActiveToolsByName(
+			running ? [...enabled, "session_inbox"] : enabled.filter(name => name !== "session_inbox"),
 		);
 	}
 
@@ -10241,6 +10283,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			unsubscribe();
 		}
 		this.#eventBusUnsubscribers = [];
+		this.#sessionInboxSync = this.#sessionInboxSync.then(() => this.#applySessionInbox(false, false));
 		this.#observerRegistry.dispose();
 		this.#agentRegistryUnsubscribe?.();
 		this.#agentRegistryUnsubscribe = undefined;

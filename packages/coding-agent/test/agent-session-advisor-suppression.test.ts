@@ -1012,4 +1012,17 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(mock.calls.length).toBe(2);
 		expect(session.agent.state.messages.at(-1)?.role).toBe("assistant");
 	});
+
+	it("preserves an external inbox nit on an idle session with zero advisors instead of parking it", async () => {
+		const { session, mock } = await createParkedSession();
+		expect(session.isAdvisorActive()).toBe(false);
+
+		expect(session.routeInboxNote("peer-session", "heads up from a peer", "nit")).toBe("preserve");
+		await session.waitForIdle();
+
+		const cards = session.agent.state.messages.filter(isAdvisorCard);
+		expect(cards).toHaveLength(1);
+		expect(cards[0].content).toContain("heads up from a peer");
+		expect(mock.calls.length).toBe(0);
+	});
 });

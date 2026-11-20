@@ -1174,6 +1174,11 @@ export function getSessionOwnersDir(): string {
 	return dirs.baseRootSubdir(path.join("run", "session-owners"), "state");
 }
 
+/** Get the session inbox registry directory (~/.omp/run/session-inbox; XDG default: $XDG_STATE_HOME/omp/run/session-inbox). Shared across profiles so every local session is reachable. */
+export function getSessionInboxDir(): string {
+	return dirs.baseRootSubdir(path.join("run", "session-inbox"), "state");
+}
+
 /** Get the provider in-flight root directory (~/.omp/run/provider-inflight; XDG default: $XDG_STATE_HOME/omp/run/provider-inflight). */
 export function getProviderInFlightRoot(): string {
 	return dirs.rootSubdir(path.join("run", "provider-inflight"), "state");

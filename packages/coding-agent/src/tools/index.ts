@@ -20,6 +20,7 @@ import type { Skill, SkillRediscoveryHost } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
+import type { InboxHost } from "../inbox/host";
 import type { LocalProtocolOptions } from "../internal-urls";
 import type { DaemonCompletionNotification } from "../launch/protocol";
 import { LspTool } from "../lsp";
@@ -72,6 +73,7 @@ import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
 import { type LoopStartHandler, LoopTool } from "./loop";
+import { SessionInboxTool } from "./session-inbox";
 import { SecurityScanTool } from "./security-scan";
 import { type SpawnHandler, SpawnSessionTool } from "./spawn-session";
 import { supportsExternalThinking, ThinkTool } from "./think";
@@ -535,6 +537,8 @@ export interface ToolSession {
 	/** True while a `/spawn` window is open, which gates the `spawn_session` tool. */
 	isSpawnWindowOpen?(): boolean;
 	setSpawnWindowOpen?(open: boolean): void;
+	/** The session inbox; running only in a top-level interactive session with `inbox.enabled`. */
+	getSessionInbox?(): InboxHost | undefined;
 	/** Get active checkpoint state if any. */
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
@@ -624,6 +628,7 @@ export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
 	goal: s => new GoalTool(s),
 	loop: s => new LoopTool(s),
 	spawn_session: s => new SpawnSessionTool(s),
+	session_inbox: s => new SessionInboxTool(s),
 };
 
 export type ToolName = BuiltinToolName;
@@ -777,6 +782,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		}
 		if (name === "loop") return !restrictToolNames && session.peekLoopStartHandler?.() !== undefined;
 		if (name === "spawn_session") return !restrictToolNames && session.isSpawnWindowOpen?.() === true;
+		if (name === "session_inbox") return !restrictToolNames && session.getSessionInbox?.()?.started === true;
 		if (name === "lsp") return enableLsp && cfgLspEnabled.get(session.settings);
 		if (name === "bash") return cfgBashEnabled.get(session.settings);
 		if (name === "eval") return allowEval;

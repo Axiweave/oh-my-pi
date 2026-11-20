@@ -2779,6 +2779,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			setLoopStartHandler: handler => session.setLoopStartHandler(handler),
 			peekSpawnHandler: () => session.peekSpawnHandler(),
 			setSpawnHandler: handler => session.setSpawnHandler(handler),
+			// Tool planning runs before the session exists; there is no inbox then.
+			getSessionInbox: () => session?.getSessionInbox(),
 			isSpawnWindowOpen: () => session.isSpawnWindowOpen(),
 			setSpawnWindowOpen: open => session.setSpawnWindowOpen(open),
 			allocateOutputArtifact: async toolType => {
@@ -3928,6 +3930,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				nativeToolsByName.set(spawnTool.name, wrapped);
 			}
 		}
+		// Registered up front but inactive; InteractiveMode activates it while its inbox runs.
+		if (!restrictToolNames && !toolRegistry.has("session_inbox")) {
+			const inboxTool = await HIDDEN_TOOLS.session_inbox(toolSession);
+			if (inboxTool) {
+				const wrapped = wrapToolWithMetaNotice(inboxTool);
+				toolRegistry.set(inboxTool.name, wrapped);
+				builtInRegistryToolNames.add(inboxTool.name);
+				nativeToolsByName.set(inboxTool.name, wrapped);
+			}
+		}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
 			builtInRegistryToolNames.delete(tool.name);
@@ -4559,7 +4571,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}),
 		);
 		const requestedActiveToolNames = normalizedRequested.filter(
-			name => name !== "goal" && name !== "loop" && name !== "spawn_session",
+			name => name !== "goal" && name !== "loop" && name !== "spawn_session" && name !== "session_inbox",
 		);
 		const explicitlyRequestedToolNameSet = explicitlyRequestedToolNames
 			? new Set(explicitlyRequestedToolNames)

@@ -6,11 +6,14 @@ import * as nativePath from "@oh-my-pi/pi-natives/path";
 import {
 	__resetProjectDirCacheForTests,
 	directoryIsMissing,
+	getActiveProfile,
 	getLogPath,
 	getProjectDir,
 	localDay,
 	onProjectDirChanged,
 	relativePathWithinRoot,
+	getSessionInboxDir,
+	setProfile,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils/dirs";
 
@@ -19,6 +22,21 @@ const originalProjectDir = fs.realpathSync(process.cwd()).replace(/^\/private(?=
 afterEach(() => {
 	vi.restoreAllMocks();
 	setProjectDir(originalProjectDir);
+});
+
+describe("session inbox dir", () => {
+	it("is shared across profiles and ends with run/session-inbox", () => {
+		const prev = getActiveProfile();
+		try {
+			setProfile(undefined);
+			const base = getSessionInboxDir();
+			setProfile("inbox-test-profile");
+			expect(getSessionInboxDir()).toBe(base);
+			expect(base.endsWith(path.join("run", "session-inbox"))).toBe(true);
+		} finally {
+			setProfile(prev);
+		}
+	});
 });
 describe("project directory state", () => {
 	it("enters an accessible fallback when process.cwd fails", () => {

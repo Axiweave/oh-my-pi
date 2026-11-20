@@ -116,7 +116,8 @@ import { writeArchive } from "@oh-my-pi/pi-utils/ar";
 import { frameDataBytesBudget, readerIncludesThinking } from "@oh-my-pi/snapcompact";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
-import { loadAdvisorTranscriptCosts } from "../advisor";
+import { type AdvisorDeliveryChannel, type AdvisorSeverity, loadAdvisorTranscriptCosts } from "../advisor";
+import type { InboxHost } from "../inbox/host";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import type { JobWidgetRegistry } from "../job-widgets/types";
 import { classifyAutoPrewalk } from "../auto-prewalk/classifier";
@@ -423,6 +424,12 @@ import {
 	LAUNCH_COMPLETION_MESSAGE_TYPE,
 	type LaunchCompletionEntry,
 } from "./launch-completion";
+import {
+	buildInboxReplyBatchMessage,
+	INBOX_REPLY_MESSAGE_TYPE,
+	type InboxReply,
+	type InboxReplyEntry,
+} from "./inbox-reply";
 import { MASTER_MODE_CONTEXT_MESSAGE_TYPE, type MasterModeState, masterRefusal } from "./master-mode";
 import {
 	type BashExecutionMessage,
@@ -2680,6 +2687,10 @@ export class AgentSession implements SettingsScope {
 				this.#isDisposed || !isLaunchCompletionOwner(entry.owner, this.sessionManager.getSessionId()),
 			build: buildLaunchCompletionBatchMessage,
 		});
+		this.yieldQueue.register<InboxReplyEntry>(INBOX_REPLY_MESSAGE_TYPE, {
+			isStale: entry => this.#isDisposed || entry.sessionId !== this.sessionManager.getSessionId(),
+			build: buildInboxReplyBatchMessage,
+		});
 		// Background-job completions / late diagnostics are pulled into the run at
 		// each step boundary as non-interrupting asides. Peer IRCs share the aside
 		// injection boundary, but also expose a non-consuming interrupt peek so
@@ -3574,6 +3585,17 @@ export class AgentSession implements SettingsScope {
 	/** The handler can show a confirm dialog mid-turn, so it runs as a {@link waitForUser}. */
 	setSpawnHandler(handler: SpawnHandler | null): void {
 		this.#spawnHandler = handler ? request => this.waitForUser(() => handler(request)) : undefined;
+	}
+
+	/** Session inbox host serving this session; InteractiveMode sets it at startup. */
+	#sessionInbox: InboxHost | undefined;
+
+	setSessionInbox(inbox: InboxHost | null): void {
+		this.#sessionInbox = inbox ?? undefined;
+	}
+
+	getSessionInbox(): InboxHost | undefined {
+		return this.#sessionInbox;
 	}
 
 	isSpawnWindowOpen(): boolean {
@@ -7660,12 +7682,13 @@ export class AgentSession implements SettingsScope {
 		);
 	}
 
-	/** A tool snapshot taken during a `/guided-loop` interview or `/spawn` window must not revive its tool after it ends. Master mode keeps `spawn_session`. */
+	/** A tool snapshot taken during a `/guided-loop` interview or `/spawn` window must not revive its tool after it ends. Master mode keeps `spawn_session`; `session_inbox` follows its host. */
 	#withoutIdleLoopTool(toolNames: string[]): string[] {
 		return toolNames.filter(
 			name =>
 				(name !== "loop" || this.#loopStartHandler) &&
-				(name !== "spawn_session" || this.#spawnWindowOpen || this.#masterModeState?.enabled === true),
+				(name !== "spawn_session" || this.#spawnWindowOpen || this.#masterModeState?.enabled === true) &&
+				(name !== "session_inbox" || this.#sessionInbox?.started === true),
 		);
 	}
 
@@ -10487,6 +10510,22 @@ export class AgentSession implements SettingsScope {
 		);
 		this.yieldQueue.requestIdleFlush();
 		return delivered;
+	}
+
+	/** Deliver a peer's reply at the next boundary, waking an idle session; the receipt settles on injection. */
+	queueInboxReply(reply: InboxReply): Promise<void> {
+		if (this.#isDisposed) return Promise.reject(new Error("Session disposed before inbox reply delivery"));
+		const delivered = this.yieldQueue.enqueueWithReceipt<InboxReplyEntry>(INBOX_REPLY_MESSAGE_TYPE, {
+			...reply,
+			sessionId: this.sessionManager.getSessionId(),
+		});
+		this.yieldQueue.requestIdleFlush();
+		return delivered;
+	}
+
+	/** Route an inbox notification through the advisor delivery policy (aside, steer, or preserved card). */
+	routeInboxNote(source: string, note: string, severity: AdvisorSeverity): AdvisorDeliveryChannel {
+		return this.#advisors.routeExternalNote(source, note, severity);
 	}
 
 	#queueHiddenNextTurnMessage(message: CustomMessage, triggerTurn: boolean): void {
