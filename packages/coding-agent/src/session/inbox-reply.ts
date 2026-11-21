@@ -3,14 +3,16 @@ import type { CustomMessage } from "./messages";
 
 export const INBOX_REPLY_MESSAGE_TYPE = "inbox-reply";
 
-/** The answer a peer session sent back for one of this session's inbox requests. */
+/** A thread message to this session, in a thread that this session opened. */
 export interface InboxReply {
-	id: string;
+	thread: string;
 	from: { address: string; name: string };
-	outcome: "completed" | "aborted" | "error";
-	error?: string;
+	type: "message" | "progress" | "auto" | "failure";
 	text: string;
-	/** The peer cut `text` at the reply size cap. */
+	/** Only on `failure`. */
+	outcome?: "aborted" | "error";
+	error?: string;
+	/** The peer cut an `auto` text at the reply size cap. */
 	truncated?: boolean;
 }
 
@@ -37,13 +39,25 @@ export function buildInboxReplyBatchMessage(entries: InboxReplyEntry[]): CustomM
 	};
 }
 
+function kindWord(reply: InboxReply): string {
+	switch (reply.type) {
+		case "message":
+			return "reply";
+		case "progress":
+			return "progress (the answer follows later)";
+		case "auto":
+			return "automatic answer (no final reply)";
+		case "failure":
+			return `failure: ${reply.outcome}${reply.error === undefined ? "" : `: ${reply.error}`}`;
+	}
+}
+
 function formatReply(reply: InboxReply): string {
-	const error = reply.error === undefined ? "" : `: ${reply.error}`;
-	const header = `Reply from ${reply.from.address} ("${reply.from.name}") to your request ${reply.id}: ${reply.outcome}${error}`;
+	const header = `Thread ${reply.thread}, ${kindWord(reply)} from ${reply.from.address} ("${reply.from.name}"):`;
 	// Escape the joined body, not each field: a field ending in `<` followed by the
 	// newline and a next field starting with `irc` would otherwise form a tag.
 	const lines = ["<system-notice>", escapeHarnessTags(`${header}\n${reply.text}`)];
 	if (reply.truncated) lines.push("[cut at 16 KiB]");
-	lines.push("</system-notice>");
+	lines.push("Nothing goes back by itself. Reply only when they need an answer.", "</system-notice>");
 	return lines.join("\n");
 }

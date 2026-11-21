@@ -2,21 +2,21 @@ import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type InboxHost, type SendOutcome, utf8Bytes } from "../inbox/host";
+import { type InboxHost, type ReplyOutcome, type SendOutcome, utf8Bytes } from "../inbox/host";
 import { MAX_TEXT_BYTES, type ReachableSession } from "../inbox/registry";
 import sessionInboxDescription from "../prompts/tools/session-inbox.md" with { type: "text" };
 import type { ToolSession } from ".";
 
 const sessionInboxSchema = type({
-	op: type("'list' | 'send' | 'interrupt'").describe("list reachable sessions, send a message, or stop a turn"),
-	"to?": type("string").describe("target address from list; required for send and interrupt"),
-	"text?": type("string").describe("message text; required for send"),
-	"kind?": type("'request' | 'notification'").describe(
-		"send only; request (default) gets the target's answer back, notification is advice with no reply",
+	op: type("'list' | 'send' | 'reply' | 'interrupt'").describe(
+		"list reachable sessions, send a message, reply in a thread, or stop a turn",
 	),
-	"delivery?": type("'steer' | 'after_turn'").describe(
-		"request only; steer (default) enters the current turn, after_turn waits for it to end",
-	),
+	"to?": type("string").describe("address; required for send and interrupt"),
+	"thread?": type("string").describe("required for reply; refused on other ops"),
+	"text?": type("string").describe("required for send and reply"),
+	"kind?": type("'message' | 'notification'").describe("send only; default message"),
+	"progress?": type("boolean").describe("reply only; default false"),
+	"delivery?": type("'steer' | 'after_turn'").describe("message, or reply in a thread you opened; default steer"),
 	"level?": type("'nit' | 'concern' | 'blocker'").describe("notification only; default nit"),
 });
 
@@ -32,14 +32,14 @@ function listLine(session: ReachableSession, inbox: InboxHost): string {
 	return parts.join("  ");
 }
 
-function sendText(to: string, kind: "request" | "notification", outcome: SendOutcome): string {
+function sendText(to: string, kind: "message" | "notification", outcome: SendOutcome): string {
 	switch (outcome.status) {
 		case "delivered":
 		case "queued": {
 			const verb = outcome.status === "delivered" ? "Delivered to" : "Queued in";
 			let text = `${verb} ${to} (${outcome.conversationId}).`;
 			if (outcome.shown) text += " (shown, no turn started)";
-			if (kind === "request") text += " Its reply arrives by itself when its turn ends.";
+			if (kind === "message") text += ` Thread ${outcome.thread}. The answer comes in this thread.`;
 			return text;
 		}
 		case "not_delivered":
@@ -51,10 +51,25 @@ function sendText(to: string, kind: "request" | "notification", outcome: SendOut
 	}
 }
 
+function replyText(thread: string, outcome: Exclude<ReplyOutcome, { status: "unknown_thread" }>): string {
+	switch (outcome.status) {
+		case "delivered":
+			return `Replied in thread ${thread} to ${outcome.to}.`;
+		case "queued":
+			return `Queued in thread ${thread} for ${outcome.to}.`;
+		case "not_delivered":
+			return `Not delivered in thread ${thread}: ${outcome.reason}.`;
+		case "gone":
+			return `Not delivered in thread ${thread}: the session ended.`;
+		case "no_answer":
+			return `No answer from ${outcome.to} yet; the reply may still arrive.`;
+	}
+}
+
 /**
- * Talk to other local omp sessions of this user: list them, send a request
- * (its answer comes back by itself) or a notification (advice, no reply), or
- * interrupt a turn. Hidden; active in top-level interactive sessions.
+ * Talk to other local omp sessions of this user: list them, open a thread
+ * with a message or send a notification (advice, no reply), reply in a
+ * thread, or interrupt a turn. Hidden; active in top-level interactive sessions.
  */
 export class SessionInboxTool implements AgentTool<typeof sessionInboxSchema> {
 	readonly name = "session_inbox";
@@ -73,27 +88,40 @@ export class SessionInboxTool implements AgentTool<typeof sessionInboxSchema> {
 	async execute(_toolCallId: string, params: SessionInboxInput): Promise<AgentToolResult> {
 		const inbox = this.#session.getSessionInbox?.();
 		if (!inbox?.started) throw new ToolError("Session inbox is off.");
-		const { op, to, text, kind, delivery, level } = params;
+		const { op, to, thread, text, kind, progress, delivery, level } = params;
 		if (op === "list") {
-			if ([to, text, kind, delivery, level].some(value => value !== undefined)) {
+			if ([to, thread, text, kind, progress, delivery, level].some(value => value !== undefined)) {
 				throw new ToolError("op list takes no other fields.");
 			}
 			const sessions = await inbox.list();
 			const lines = sessions.map(session => listLine(session, inbox));
 			return { content: [{ type: "text", text: lines.join("\n") || "No other sessions are reachable." }] };
 		}
+		if (op !== "reply" && thread !== undefined) throw new ToolError("thread is only for op reply.");
+		if (op !== "reply" && progress !== undefined) throw new ToolError("progress is only for op reply.");
+		if (op === "send" || op === "reply") {
+			if (!text?.trim()) throw new ToolError(`op ${op} needs text.`);
+			if (utf8Bytes(text) > MAX_TEXT_BYTES) throw new ToolError(`text is over ${MAX_TEXT_BYTES / 1024} KiB.`);
+		}
+		if (op === "reply") {
+			if (!thread) throw new ToolError("op reply needs thread.");
+			if ([to, kind, level].some(value => value !== undefined)) {
+				throw new ToolError("op reply takes no to, kind, or level.");
+			}
+			const outcome = await inbox.reply(thread, { text: text as string, progress, delivery });
+			if (outcome.status === "unknown_thread") throw new ToolError(`Unknown thread ${thread}.`);
+			return { content: [{ type: "text", text: replyText(thread, outcome) }] };
+		}
 		if (!to) throw new ToolError(`op ${op} needs to.`);
 		if (to === inbox.address) throw new ToolError("That is this session's own address.");
 		if (op === "interrupt" && [text, kind, delivery, level].some(value => value !== undefined)) {
 			throw new ToolError("op interrupt takes only to.");
 		}
-		const sendKind = kind ?? "request";
+		const sendKind = kind ?? "message";
 		if (op === "send") {
-			if (!text?.trim()) throw new ToolError("op send needs text.");
-			if (sendKind === "request" && level !== undefined) throw new ToolError("level is only for a notification.");
+			if (sendKind === "message" && level !== undefined) throw new ToolError("level is only for a notification.");
 			if (sendKind === "notification" && delivery !== undefined)
-				throw new ToolError("delivery is only for a request.");
-			if (utf8Bytes(text) > MAX_TEXT_BYTES) throw new ToolError(`text is over ${MAX_TEXT_BYTES / 1024} KiB.`);
+				throw new ToolError("delivery is only for a message.");
 		}
 		const target = await inbox.lookup(to);
 		if (target.status === "none") throw new ToolError(`No reachable session ${to}. Use op "list".`);
@@ -112,7 +140,11 @@ export class SessionInboxTool implements AgentTool<typeof sessionInboxSchema> {
 			else result = `Could not interrupt ${to}: ${outcome.error}.`;
 			return { content: [{ type: "text", text: result }] };
 		}
-		const outcome = await inbox.send(entry, { kind: sendKind, text: text as string, delivery, level });
+		const message =
+			sendKind === "message"
+				? { kind: sendKind, text: text as string, delivery }
+				: { kind: sendKind, text: text as string, level };
+		const outcome = await inbox.send(entry, message);
 		return { content: [{ type: "text", text: sendText(to, sendKind, outcome) }] };
 	}
 }

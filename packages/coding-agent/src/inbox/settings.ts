@@ -15,6 +15,6 @@ export const cfgInboxEnabled = register({
 		group: "Session Inbox",
 		label: "Session Inbox",
 		description:
-			"Let other local omp sessions of this user list this session, send it requests or notifications, and interrupt it (session_inbox tool)",
+			"Let other local omp sessions of this user list this session, send it messages in threads or notifications, and interrupt it (session_inbox tool)",
 	},
 });

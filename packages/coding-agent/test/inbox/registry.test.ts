@@ -266,30 +266,37 @@ describe("inbox endpoint security", () => {
 		return { session, host, calls, replies, entry };
 	}
 
-	it("refuses a wrong-token send, interrupt and reply and leaves the target session unchanged", async () => {
+	it("refuses a wrong-token send, interrupt and thread message and leaves the target session unchanged", async () => {
 		const a = await peer("a");
 		const b = await peer("b", 400);
 		const abort = vi.spyOn(b.session, "abort");
-		const id = "00000000-0000-4000-8000-000000000001";
-		vi.spyOn(crypto, "randomUUID").mockReturnValueOnce(id);
-		// a's real request starts a turn in b; a now waits for the reply to `id`.
-		expect((await a.host.send(b.entry, { kind: "request", text: "ping" })).status).not.toBe("not_delivered");
+		// a's real message opens a thread and starts a turn in b; a now waits for b's answer in it.
+		const opened = await a.host.send(b.entry, { kind: "message", text: "ping" });
+		if (opened.status !== "delivered" || !opened.thread) throw new Error(`no thread: ${JSON.stringify(opened)}`);
+		const thread = opened.thread;
 		await until(() => b.calls.length === 1, "b's first model call");
 		expect(b.session.isStreaming).toBe(true);
 
-		const from = { address: "a", name: "a", entryId: a.entry.entryId };
+		const fromA = { address: "a", name: "a", entryId: a.entry.entryId };
+		const fromB = { address: "b", name: "b", entryId: b.entry.entryId };
 		const forged = (target: InboxEntry, request: Record<string, unknown>) =>
 			callInbox({ ...target, token: "f".repeat(64) }, request, 1000);
-		const message = { id: crypto.randomUUID(), from, kind: "request", text: "forged" };
 		const refused = { status: "skip", error: "authentication_failed" } as const;
-		expect(await forged(b.entry, { op: "send", message })).toEqual(refused);
-		expect(await forged(b.entry, { op: "interrupt", from })).toEqual(refused);
-		const reply = { id, from: { address: "b", name: "b" }, outcome: "completed", text: "forged" };
-		expect(await forged(a.entry, { op: "reply", reply })).toEqual(refused);
+		const base = { id: crypto.randomUUID(), kind: "thread", type: "message", text: "forged" };
+		for (const message of [
+			{ ...base, from: fromA, thread: "t-0badf00d", first: true },
+			{ ...base, from: fromA, thread },
+		]) {
+			expect(await forged(b.entry, { op: "send", message })).toEqual(refused);
+		}
+		expect(await forged(b.entry, { op: "interrupt", from: fromA })).toEqual(refused);
+		const auto = { ...base, from: fromB, thread, type: "auto" };
+		expect(await forged(a.entry, { op: "send", message: auto })).toEqual(refused);
 
-		// The real turn runs to its end and its answer is the only reply a gets.
-		await until(() => a.replies.length === 1, "real reply");
-		expect(a.replies[0]).toMatchObject({ id, outcome: "completed", text: "echo:[from a (a)] ping" });
+		// The real turn runs to its end and its answer is the only message a gets.
+		await until(() => a.replies.length === 1, "real answer");
+		expect(a.replies[0]).toMatchObject({ thread, from: { address: "b" }, type: "auto" });
+		expect(a.replies[0].text.startsWith(`echo:[thread ${thread} new from a (a)] ping`)).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
 		expect(b.calls).toHaveLength(1);
 		expect(JSON.stringify(b.session.messages)).not.toContain("forged");
